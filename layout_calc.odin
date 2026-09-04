@@ -5,12 +5,14 @@ import "core:mem"
 import "core:strings"
 
 Layout_Context :: struct {
-	allocator:    mem.Allocator,
-	text_width:   proc(text: string) -> f32,
-	text_height:  proc(text: string, max_width: f32) -> f32,
-	all_boxes:    [dynamic]^Box,
-	parent_stack: [dynamic]^Box,
-	draw_buffer:  [dynamic]^Box, // Sorted buffer by depth
+	allocator:     mem.Allocator,
+	screen_width:  f32,
+	screen_height: f32,
+	text_width:    proc(text: string) -> f32,
+	text_height:   proc(text: string, max_width: f32) -> f32,
+	all_boxes:     [dynamic]^Box,
+	parent_stack:  [dynamic]^Box,
+	draw_buffer:   [dynamic]^Box, // Sorted buffer by depth
 }
 
 Direction :: enum {
@@ -185,16 +187,16 @@ get_axis_border :: proc(border: [4]f32, dir: Direction) -> f32 {
 	return 0.0
 }
 
-resolve_bound :: proc(bound: Bound_Sizing, viewport_dim: f32, default_val: f32) -> f32 {
+resolve_bound :: proc(bound: Bound_Sizing, viewport_dim: f32) -> f32 {
 	switch v in bound {
 	case Fixed:
 		return v.value
 	case ViewPercent:
 		return (v.value / 100.0) * viewport_dim
-	case nil:
-		return default_val
+	case:
+		return -1
 	}
-	return default_val
+	return -1
 }
 
 // --- Tree Building ---
@@ -212,7 +214,53 @@ new_box_from_config :: proc(
 		box.id = Box_ID(strings.clone(loc_str, ctx.allocator))
 	}
 	box.children = make([dynamic]^Box, 0, 4, ctx.allocator)
+	box.computed_width = -1
+	box.computed_height = -1
 	return box
+}
+
+resolve_fixed_width :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) {
+	is_row := box.direction == .ROW || box.direction == .ROW_REVERSE
+
+	switch v in box.width {
+	case Fixed:
+		box.computed_width = v.value
+	case ViewPercent:
+		box.computed_width = (v.value / 100.0) * viewport_dim
+	case Percent:
+		if parent_is_fit || box.parent == nil {
+			box.computed_width = 0.0
+			// TODO: warn once here
+		} else do box.computed_width = (v.value / 100) * box.parent.computed_width
+	case Grow, Shrink:
+		box.computed_width = 0.0
+	case Fit:
+		sum: f32 = 0.0
+		for child in box.children {
+			resolve_fixed_width(child, viewport_dim, true)
+			if is_row {sum += child.computed_width} else {sum = max(sum, child.computed_width)}
+		}
+		gap_count := max(len(box.children) - 1, 0)
+		if is_row do sum += f32(gap_count) * box.gap
+		box.computed_width =
+			sum +
+			get_axis_padding(box.padding, box.direction) +
+			get_axis_border(box.border, box.direction)
+	case:
+		box.computed_width = 0
+	}
+
+	if min_w := resolve_bound(box.min_width, viewport_dim); min_w >= 0 do box.computed_width = max(box.computed_width, min_w)
+	if max_w := resolve_bound(box.max_width, viewport_dim); max_w >= 0 do box.computed_width = min(box.computed_width, max_w)
+
+	#partial switch _ in box.width {
+	case Fit:
+	// Already Handled
+	case:
+		for child in box.children {
+			resolve_fixed_width(child, viewport_dim, false)
+		}
+	}
 }
 
 box_open :: proc(ctx: ^Layout_Context, box_config: Box, loc := #caller_location) -> ^Box {
@@ -226,6 +274,7 @@ box_open :: proc(ctx: ^Layout_Context, box_config: Box, loc := #caller_location)
 
 	append(&ctx.all_boxes, box)
 	append(&ctx.parent_stack, box)
+
 	return box
 }
 
