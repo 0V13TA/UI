@@ -1,0 +1,67 @@
+for !rl.WindowShouldClose() {
+		// 1. Sync dimensions & clear arena
+		lc.layout_reset(layout_ctx)
+		layout_ctx.screen_width = f32(rl.GetScreenWidth())
+		layout_ctx.screen_height = f32(rl.GetScreenHeight())
+
+		// 2. Build Tree
+		lc.begin_layout(layout_ctx)
+
+		root := lc.box_open(
+			layout_ctx,
+			lc.Box {
+				width = lc.ViewPercent{100},
+				height = lc.ViewPercent{100},
+				direction = .COLUMN,
+				align_items = .CENTER,
+				justify_content = .CENTER,
+				gap = 20,
+			},
+		)
+
+		header := lc.box_open(
+			layout_ctx,
+			lc.Box {
+				width = lc.Fit(true),
+				text = "WYSIWYG Engine Active",
+				padding = {10, 20, 10, 20},
+			},
+		)
+		lc.box_close(layout_ctx)
+
+		grid := lc.box_open(
+			layout_ctx,
+			lc.Box {
+				direction = .ROW,
+				wrap = true,
+				width = lc.Fixed{400},
+				height = lc.Fit(true),
+				gap = 10,
+			},
+		)
+
+		// Generate flexible children
+		for i in 0 ..< 5 {
+			lc.box_open(
+				layout_ctx,
+				lc.Box{width = lc.Grow{1}, height = lc.Fixed{50}, min_width = lc.Fixed{100}},
+			)
+			lc.box_close(layout_ctx)
+		}
+
+		lc.box_close(layout_ctx) // Close grid
+		lc.box_close(layout_ctx) // Close root
+
+		// 3. Resolve Math
+		lc.end_layout(layout_ctx)
+
+		// 4. Render
+		rl.BeginDrawing()
+		rl.ClearBackground(rl.RAYWHITE)
+
+		for root_box in layout_ctx.root_boxes {
+			render_box(root_box)
+		}
+
+		rl.EndDrawing()
+	}

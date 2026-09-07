@@ -2,7 +2,7 @@ package main
 
 import "core:strings"
 import lc "layout_calc"
-import rl "vendor:raylib" // Adjust import path as needed
+import rl "vendor:raylib"
 
 // Global font for WYSIWYG typography
 app_font: rl.Font
@@ -34,11 +34,16 @@ render_box :: proc(box: ^lc.Box) {
 	rl.DrawRectangleRec(box_rect, rl.Fade(rl.SKYBLUE, 0.2))
 	rl.DrawRectangleLinesEx(box_rect, 1.0, rl.DARKBLUE)
 
+
 	// 3. Draw Text Content
 	if text, ok := box.text.?; ok {
 		c_str := strings.clone_to_cstring(text, context.temp_allocator)
-		// Offset slightly by padding if desired, currently using raw X/Y
-		rl.DrawTextEx(app_font, c_str, {box.x + 5, box.y + 5}, 20.0, 1.0, rl.BLACK)
+
+		// Offset the text by the top/left padding and border
+		text_x := box.x + box.padding[lc.Side.LEFT] + box.border[lc.Side.LEFT]
+		text_y := box.y + box.padding[lc.Side.TOP] + box.border[lc.Side.TOP]
+
+		rl.DrawTextEx(app_font, c_str, {text_x, text_y}, 20.0, 1.0, rl.BLACK)
 	}
 
 	// 4. Recurse into children (Z-order preserved by layout core)
@@ -65,41 +70,69 @@ main :: proc() {
 	defer lc.layout_context_destroy(layout_ctx)
 
 	for !rl.WindowShouldClose() {
-    lc.begin_layout(layout_ctx)
-    layout_ctx.screen_width = f32(rl.GetScreenWidth())
-    layout_ctx.screen_height = f32(rl.GetScreenWidth())
+		lc.begin_layout(layout_ctx)
+		layout_ctx.screen_width = f32(rl.GetScreenWidth())
+		layout_ctx.screen_height = f32(rl.GetScreenHeight())
 
-    lc.begin_layout(layout_ctx)
 
-    {
-      lc.box_open(layout_ctx,{
-        width = lc.ViewPercent{100},
-        height = lc.ViewPercent{100},
-        direction = .COLUMN,
-        align_items = .CENTER,
-        justify_content = .CENTER,
-        gap = 20.0
-      })
-      defer lc.box_close(layout_ctx)
+		{
+			lc.box_open(
+				layout_ctx,
+				{
+					width = lc.ViewPercent{100},
+					height = lc.ViewPercent{100},
+					direction = .COLUMN,
+					align_items = .CENTER,
+					justify_content = .CENTER,
+					gap = 20.0,
+				},
+			)
+			defer lc.box_close(layout_ctx)
 
-      {
-        lc.box_open(layout_ctx, {
-          width = lc.Fit(true),
-          text = "WYSIWYG Engine",
-          padding = {10, 20, 10, 20},
-          border = {0,0,0,0},
-        })
-        defer lc.box_close(layout_ctx)
-      }
-    }
+			{
+				lc.box_open(
+					layout_ctx,
+					{
+						width = lc.Fit(true),
+						text = "WYSIWYG Engine",
+						padding = {10, 20, 10, 20},
+						border = {0, 0, 0, 0},
+					},
+				)
+				lc.box_close(layout_ctx)
+			}
 
-    lc.end_layout(layout_ctx)
+			{
+				lc.box_open(
+					layout_ctx,
+					{
+						direction = .ROW,
+						wrap = true,
+						width = lc.Fixed{400},
+						height = lc.Fit(true),
+						padding = {10, 10, 10, 10},
+						gap = 10,
+					},
+				)
+				defer lc.box_close(layout_ctx)
 
-    rl.BeginDrawing()
-    rl.ClearBackground(rl.RAYWHITE)
+				for i in 0 ..< 6 {
+					lc.box_open(
+						layout_ctx,
+						{width = lc.Grow{1}, height = lc.Fixed{50}, min_width = lc.Fixed{100}},
+					)
+					lc.box_close(layout_ctx)
+				}
+			}
+		}
 
-    for root_box in layout_ctx.root_boxes do render_box(root_box)
+		lc.end_layout(layout_ctx)
 
-    rl.EndDrawing()
-  }
+		rl.BeginDrawing()
+		rl.ClearBackground(rl.RAYWHITE)
+
+		for root_box in layout_ctx.root_boxes do render_box(root_box)
+
+		rl.EndDrawing()
+	}
 }

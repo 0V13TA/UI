@@ -93,7 +93,6 @@ Rect :: struct {
 	x, y, width, height: f32,
 }
 
-
 Position :: enum {
 	STATIC,
 	STICKY,
@@ -140,6 +139,8 @@ Box :: struct {
 	text:                  Maybe(string),
 	text_height:           f32, // Explicitly track resolved text height
 	frozen:                bool, // For the iterative flex redistribution loop
+	font_size:             f32,
+	font_spacing:          f32,
 
 	// Scrolling
 	offset_x:              f32,
@@ -206,8 +207,8 @@ chained_arena_proc :: proc(
 ) {
 	ca := (^Layout_Chained_Arena)(allocator_data)
 
-	switch mode {
-	case .Alloc, .Alloc_Non_Zeroed:
+  switch mode {
+	case .Alloc, .Alloc_Non_Zeroed, .Resize, .Resize_Non_Zeroed:
 		arena_alloc := mem.arena_allocator(&ca.current.arena)
 		data, err := arena_alloc.procedure(
 			arena_alloc.data,
@@ -220,32 +221,37 @@ chained_arena_proc :: proc(
 		)
 
 		if err == .Out_Of_Memory {
-			ca.current.next = chained_arena_new_block(ca, size)
+			// Only allocate a new block if one doesn't already exist from a previous frame
+			if ca.current.next == nil {
+				ca.current.next = chained_arena_new_block(ca, size)
+			}
 			ca.current = ca.current.next
 
 			next_alloc := mem.arena_allocator(&ca.current.arena)
-			return next_alloc.procedure(
-				next_alloc.data,
-				mode,
-				size,
-				alignment,
-				old_memory,
-				old_size,
-				loc,
-			)
+			
+			// If resizing across blocks, allocate fresh memory and copy old data
+			if mode == .Resize || mode == .Resize_Non_Zeroed {
+				data, err = next_alloc.procedure(next_alloc.data, .Alloc, size, alignment, nil, 0, loc)
+				if err == nil && old_memory != nil {
+					mem.copy(raw_data(data), old_memory, min(old_size, size))
+				}
+			} else {
+				data, err = next_alloc.procedure(next_alloc.data, mode, size, alignment, old_memory, old_size, loc)
+			}
 		}
 		return data, err
 
 	case .Free_All:
 		for block := ca.first; block != nil; block = block.next {
-			block.arena.offset = 0 // reuse the buffer, don't release it
+			block.arena.offset = 0 
 		}
 		ca.current = ca.first
 		return nil, nil
 
-	case .Free, .Resize, .Resize_Non_Zeroed, .Query_Features, .Query_Info:
+	case .Free, .Query_Features, .Query_Info:
 		return nil, .Mode_Not_Implemented
 	}
+
 	return nil, .Mode_Not_Implemented
 }
 
@@ -275,56 +281,6 @@ clamp_value :: proc(min_bound, max_bound: Bound_Sizing, value: f32, viewport_dim
 	}
 
 	return result
-}
-
-get_main_axis :: proc(dir: Direction, width, height: f32) -> (main, cross: f32) {
-	switch dir {
-	case .ROW, .ROW_REVERSE:
-		return width, height
-	case .COLUMN, .COLUMN_REVERSE:
-		return height, width
-	}
-	return
-}
-
-set_main_axis :: proc(dir: Direction, main, cross: f32) -> (width, height: f32) {
-	switch dir {
-	case .ROW, .ROW_REVERSE:
-		return main, cross
-	case .COLUMN, .COLUMN_REVERSE:
-		return cross, main
-	}
-	return
-}
-
-get_axis_margins :: proc(margins: [4]f32, dir: Direction) -> f32 {
-	switch dir {
-	case .ROW, .ROW_REVERSE:
-		return margins[Side.LEFT] + margins[Side.RIGHT]
-	case .COLUMN, .COLUMN_REVERSE:
-		return margins[Side.TOP] + margins[Side.BOTTOM]
-	}
-	return 0.0
-}
-
-get_axis_padding :: proc(padding: [4]f32, dir: Direction) -> f32 {
-	switch dir {
-	case .ROW, .ROW_REVERSE:
-		return padding[Side.LEFT] + padding[Side.RIGHT]
-	case .COLUMN, .COLUMN_REVERSE:
-		return padding[Side.TOP] + padding[Side.BOTTOM]
-	}
-	return 0.0
-}
-
-get_axis_border :: proc(border: [4]f32, dir: Direction) -> f32 {
-	switch dir {
-	case .ROW, .ROW_REVERSE:
-		return border[Side.LEFT] + border[Side.RIGHT]
-	case .COLUMN, .COLUMN_REVERSE:
-		return border[Side.TOP] + border[Side.BOTTOM]
-	}
-	return 0.0
 }
 
 // Absolute spatial boundaries (Direction agnostic)
@@ -374,7 +330,12 @@ new_box_from_config :: proc(
 	return box
 }
 
-resolve_fixed_width :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) {
+resolve_fixed_width :: proc(
+	box: ^Box,
+	ctx: ^Layout_Context,
+	viewport_dim: f32,
+	parent_is_fit: bool,
+) {
 	if box.computed_width != -1 do return
 	is_row := box.direction == .ROW || box.direction == .ROW_REVERSE
 
@@ -402,16 +363,25 @@ resolve_fixed_width :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) {
 		box.computed_width = box.basis
 	case Fit:
 		sum: f32 = 0.0
+		if val, ok := box.text.?; ok do sum = ctx.text_width_func(val)
 		for child in box.children {
-			resolve_fixed_width(child, viewport_dim, true)
+			resolve_fixed_width(child, ctx, viewport_dim, true)
 			child_total := child.computed_width + get_horizontal(child.margin)
 			if is_row {sum += child_total} else {sum = max(sum, child_total)}
 		}
 		gap_count := max(len(box.children) - 1, 0)
 		if is_row do sum += f32(gap_count) * box.gap
 		box.computed_width = sum + get_horizontal(box.padding) + get_horizontal(box.border)
+
 	case:
-		box.computed_width = 0
+		// If width is unset, default to text width (if it exists) or 0
+		if text, ok := box.text.?; ok {
+			box.computed_width =
+				ctx.text_width_func(text) +
+				get_horizontal(box.padding) +
+				get_horizontal(box.border)
+		} else do box.computed_width = 0
+
 	}
 
 	if min_w := resolve_bound(box.min_width, viewport_dim); min_w >= 0 do box.computed_width = max(box.computed_width, min_w)
@@ -422,16 +392,16 @@ resolve_fixed_width :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) {
 	// Skip recursion here; children will be sized in grow_shrink_width
 	case:
 		for child in box.children {
-			resolve_fixed_width(child, viewport_dim, false)
+			resolve_fixed_width(child, ctx, viewport_dim, false)
 		}
 	}
 }
 
-grow_shrink_width :: proc(box: ^Box, viewport_dim: f32) {
+grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 	#partial switch _ in box.width {
 	case Grow, Shrink:
 		for child in box.children {
-			resolve_fixed_width(child, viewport_dim, false)
+			resolve_fixed_width(child, ctx, viewport_dim, false)
 		}
 	}
 
@@ -603,7 +573,7 @@ grow_shrink_width :: proc(box: ^Box, viewport_dim: f32) {
 	}
 
 	for child in box.children {
-		grow_shrink_width(child, viewport_dim)
+		grow_shrink_width(child, ctx, viewport_dim)
 	}
 }
 
@@ -1188,7 +1158,7 @@ layout_context_create :: proc(
 	ctx := new(Layout_Context, allocator)
 
 	// Initialize the internal chained arena
-	chained_arena_init(&ctx.arena, 1024 * 1024, allocator)
+	chained_arena_init(&ctx.arena, 4096 * 4096, allocator)
 
 	ctx.text_width_func = text_width
 	ctx.text_height_func = text_height
@@ -1237,8 +1207,8 @@ begin_layout :: proc(ctx: ^Layout_Context) {
 end_layout :: proc(ctx: ^Layout_Context) {
 	for root in ctx.root_boxes {
 		// --- Horizontal Width Passes ---
-		resolve_fixed_width(root, ctx.screen_width, false)
-		grow_shrink_width(root, ctx.screen_width)
+		resolve_fixed_width(root, ctx, ctx.screen_width, false)
+		grow_shrink_width(root, ctx, ctx.screen_width)
 
 		// --- Text Wrapping Pass ---
 		wrap_text(root, ctx)
