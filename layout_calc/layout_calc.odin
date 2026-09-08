@@ -21,8 +21,8 @@ Layout_Context :: struct {
 	arena:            Layout_Chained_Arena,
 	screen_width:     f32,
 	screen_height:    f32,
-	text_width_func:  proc(text: string) -> f32,
-	text_height_func: proc(text: string, max_width: f32) -> f32,
+	text_width_func:  proc(box: ^Box, text: string) -> f32,
+	text_height_func: proc(box: ^Box, text: string, max_width: f32) -> f32,
 	all_boxes:        map[Box_ID]^Box,
 	parent_stack:     [dynamic]^Box,
 	draw_buffer:      [dynamic]^Box, // Sorted buffer by depth
@@ -104,6 +104,7 @@ Position :: enum {
 Box_ID :: distinct string
 Box :: struct {
 	id:                    Box_ID,
+	user_data:             rawptr,
 	warned:                bool,
 
 	// Sizing Intent
@@ -207,7 +208,7 @@ chained_arena_proc :: proc(
 ) {
 	ca := (^Layout_Chained_Arena)(allocator_data)
 
-  switch mode {
+	switch mode {
 	case .Alloc, .Alloc_Non_Zeroed, .Resize, .Resize_Non_Zeroed:
 		arena_alloc := mem.arena_allocator(&ca.current.arena)
 		data, err := arena_alloc.procedure(
@@ -221,29 +222,49 @@ chained_arena_proc :: proc(
 		)
 
 		if err == .Out_Of_Memory {
-			// Only allocate a new block if one doesn't already exist from a previous frame
-			if ca.current.next == nil {
+			// Ensure the next block exists AND has enough capacity for this allocation
+			if ca.current.next != nil && len(ca.current.next.buffer) < size {
+				new_block := chained_arena_new_block(ca, size)
+				new_block.next = ca.current.next
+				ca.current.next = new_block
+			} else if ca.current.next == nil {
 				ca.current.next = chained_arena_new_block(ca, size)
 			}
 			ca.current = ca.current.next
 
 			next_alloc := mem.arena_allocator(&ca.current.arena)
-			
+
 			// If resizing across blocks, allocate fresh memory and copy old data
 			if mode == .Resize || mode == .Resize_Non_Zeroed {
-				data, err = next_alloc.procedure(next_alloc.data, .Alloc, size, alignment, nil, 0, loc)
+				data, err = next_alloc.procedure(
+					next_alloc.data,
+					.Alloc,
+					size,
+					alignment,
+					nil,
+					0,
+					loc,
+				)
 				if err == nil && old_memory != nil {
 					mem.copy(raw_data(data), old_memory, min(old_size, size))
 				}
 			} else {
-				data, err = next_alloc.procedure(next_alloc.data, mode, size, alignment, old_memory, old_size, loc)
+				data, err = next_alloc.procedure(
+					next_alloc.data,
+					mode,
+					size,
+					alignment,
+					old_memory,
+					old_size,
+					loc,
+				)
 			}
 		}
 		return data, err
 
 	case .Free_All:
 		for block := ca.first; block != nil; block = block.next {
-			block.arena.offset = 0 
+			block.arena.offset = 0
 		}
 		ca.current = ca.first
 		return nil, nil
@@ -363,7 +384,7 @@ resolve_fixed_width :: proc(
 		box.computed_width = box.basis
 	case Fit:
 		sum: f32 = 0.0
-		if val, ok := box.text.?; ok do sum = ctx.text_width_func(val)
+		if val, ok := box.text.?; ok do sum = ctx.text_width_func(box, val)
 		for child in box.children {
 			resolve_fixed_width(child, ctx, viewport_dim, true)
 			child_total := child.computed_width + get_horizontal(child.margin)
@@ -377,7 +398,7 @@ resolve_fixed_width :: proc(
 		// If width is unset, default to text width (if it exists) or 0
 		if text, ok := box.text.?; ok {
 			box.computed_width =
-				ctx.text_width_func(text) +
+				ctx.text_width_func(box, text) +
 				get_horizontal(box.padding) +
 				get_horizontal(box.border)
 		} else do box.computed_width = 0
@@ -405,12 +426,13 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 		}
 	}
 
+
 	switch box.direction {
 	case .ROW, .ROW_REVERSE:
 		parent_inner_width :=
 			box.computed_width - get_horizontal(box.padding) - get_horizontal(box.border)
-
 		start := 0
+
 		for start < len(box.children) {
 			end := start
 			line_sum: f32 = 0.0
@@ -422,7 +444,7 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 
 				if box.wrap && end > start {
 					if line_sum + box.gap + child_outer > parent_inner_width {
-						break // Wrap to next line
+						break
 					}
 				}
 
@@ -448,11 +470,13 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 					if total_grow_factor <= 0 do break
 
 					newly_frozen := false
+					round_space := remaining_space // SNAPSHOT
+
 					for child in line_children {
 						if child.frozen do continue
 						#partial switch v in child.width {
 						case Grow:
-							extra := remaining_space * (v.factor / total_grow_factor)
+							extra := round_space * (v.factor / total_grow_factor) // USE SNAPSHOT
 							target := child.computed_width + extra
 							clamped := clamp_value(
 								child.min_width,
@@ -461,7 +485,7 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 								viewport_dim,
 							)
 
-							if clamped != target { 	// Hit a constraint
+							if clamped != target {
 								child.frozen = true
 								newly_frozen = true
 								remaining_space -= (clamped - child.computed_width)
@@ -496,13 +520,15 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 					if total_shrink_factor <= 0 do break
 
 					newly_frozen := false
+					round_space := remaining_space // SNAPSHOT
+
 					for child in line_children {
 						if child.frozen do continue
 						#partial switch v in child.width {
 						case Shrink:
 							extra :=
-								remaining_space *
-								((v.factor * child.computed_width) / total_shrink_factor)
+								round_space *
+								((v.factor * child.computed_width) / total_shrink_factor) // USE SNAPSHOT
 							target := child.computed_width + extra
 							clamped := clamp_value(
 								child.min_width,
@@ -511,7 +537,7 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 								viewport_dim,
 							)
 
-							if clamped != target { 	// Hit a constraint
+							if clamped != target {
 								child.frozen = true
 								newly_frozen = true
 								remaining_space -= (clamped - child.computed_width)
@@ -543,18 +569,14 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 	case .COLUMN, .COLUMN_REVERSE:
 		parent_inner_width :=
 			box.computed_width - get_horizontal(box.padding) - get_horizontal(box.border)
-
 		for child in box.children {
 			should_stretch := false
 			#partial switch _ in child.width {
 			case Grow, Shrink:
-				// Grow and Shrink explicitly opt into filling available space
 				should_stretch = true
 			case Fit:
-				// Fit (auto) stretches only if the parent's align_items is STRETCH
 				should_stretch = box.align_items == .STRETCH
 			case:
-				// Catch nil/zero values if a Box{} literal leaves width unset
 				if child.width == nil {
 					should_stretch = box.align_items == .STRETCH
 				}
@@ -584,7 +606,7 @@ wrap_text :: proc(box: ^Box, ctx: ^Layout_Context) {
 			box.computed_width - get_horizontal(box.padding) - get_horizontal(box.border),
 			0.0,
 		)
-		box.text_height = ctx.text_height_func(text, inner_width)
+		box.text_height = ctx.text_height_func(box, text, inner_width)
 	}
 
 	for child in box.children {
@@ -709,6 +731,7 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 		}
 	}
 
+
 	switch box.direction {
 	case .COLUMN, .COLUMN_REVERSE:
 		sum := f32(max((len(box.children) - 1), 0)) * box.gap
@@ -731,11 +754,13 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 				if total_grow_factor <= 0 do break
 
 				newly_frozen := false
+				round_space := remaining_space // SNAPSHOT
+
 				for child in box.children {
 					if child.frozen do continue
 					#partial switch v in child.height {
 					case Grow:
-						extra := remaining_space * (v.factor / total_grow_factor)
+						extra := round_space * (v.factor / total_grow_factor) // USE SNAPSHOT
 						target := child.computed_height + extra
 						clamped := clamp_value(
 							child.min_height,
@@ -772,7 +797,6 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 				total_shrink_factor: f32 = 0
 				for child in box.children {
 					if !child.frozen {
-						// Parity Fix: Weight shrink by the base computed_height
 						#partial switch v in child.height {case Shrink:
 							total_shrink_factor += v.factor * child.computed_height}
 					}
@@ -780,13 +804,15 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 				if total_shrink_factor <= 0 do break
 
 				newly_frozen := false
+				round_space := remaining_space // SNAPSHOT
+
 				for child in box.children {
 					if child.frozen do continue
 					#partial switch v in child.height {
 					case Shrink:
 						extra :=
-							remaining_space *
-							((v.factor * child.computed_height) / total_shrink_factor)
+							round_space *
+							((v.factor * child.computed_height) / total_shrink_factor) // USE SNAPSHOT
 						target := child.computed_height + extra
 						clamped := clamp_value(
 							child.min_height,
@@ -825,8 +851,8 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 			box.computed_width - get_horizontal(box.padding) - get_horizontal(box.border),
 			0.0,
 		)
-
 		start := 0
+
 		for start < len(box.children) {
 			end := start
 			line_width: f32 = 0.0
@@ -837,7 +863,6 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 			for end < len(box.children) {
 				child := box.children[end]
 
-				// Out of flow elements do not affect line breaks or line height
 				if child.position == .ABSOLUTE || child.position == .FIXED {
 					end += 1
 					continue
@@ -853,15 +878,13 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 				if flow_count > 0 do line_width += box.gap
 				line_width += child_w
 				line_max_height = max(line_max_height, child_h)
-
 				flow_count += 1
 				end += 1
 			}
 
-			// 2. Stretch children vertically against the LINE'S max height, not the parent's
+			// 2. Stretch children vertically against the LINE'S max height
 			for i := start; i < end; i += 1 {
 				child := box.children[i]
-
 				if child.position == .ABSOLUTE || child.position == .FIXED do continue
 
 				should_stretch := false
@@ -877,7 +900,6 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 				}
 
 				if should_stretch {
-					// Stretch to fill the line_max_height instead of parent_inner_height
 					child.computed_height = line_max_height - get_vertical(child.margin)
 					child.computed_height = clamp_value(
 						child.min_height,
@@ -1150,8 +1172,8 @@ box_close :: proc(ctx: ^Layout_Context) {
 }
 
 layout_context_create :: proc(
-	text_width: proc(text: string) -> f32,
-	text_height: proc(text: string, max_width: f32) -> f32,
+	text_width: proc(box: ^Box, text: string) -> f32,
+	text_height: proc(box: ^Box, text: string, max_width: f32) -> f32,
 	scr_width, scr_height: f32,
 	allocator := context.allocator,
 ) -> ^Layout_Context {

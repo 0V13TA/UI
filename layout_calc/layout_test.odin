@@ -3,8 +3,8 @@ package layout_calc
 import "core:testing"
 
 // --- Dummy Text Procs for Testing ---
-dummy_text_width :: proc(text: string) -> f32 {return f32(len(text) * 10)}
-dummy_text_height :: proc(text: string, max_width: f32) -> f32 {
+dummy_text_width :: proc(box: ^Box, text: string) -> f32 {return f32(len(text) * 10)}
+dummy_text_height :: proc(box: ^Box, text: string, max_width: f32) -> f32 {
 	if max_width > 0 && max_width < 50 do return 40.0 // Simulate text wrap expanding height
 	return 20.0
 }
