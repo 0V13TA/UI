@@ -144,14 +144,10 @@ ui_end_frame :: proc(ctx: ^UI_Context) {
 	// Initialize the explicit state tracker
 	current_clip: Maybe(lc.Rect) = nil
 
-	for root_box in ctx.layout.root_boxes {
-		render_box(ctx, root_box, &current_clip)
-	}
+	for root_box in ctx.layout.root_boxes do render_box(ctx, root_box, &current_clip)
 
 	// Failsafe cleanup (though it should naturally unwind to nil)
-	if current_clip != nil {
-		rl.EndScissorMode()
-	}
+	if current_clip != nil do rl.EndScissorMode()
 
 	rl.EndDrawing()
 }
@@ -247,6 +243,8 @@ render_box :: proc(ui_ctx: ^UI_Context, box: ^lc.Box, current_clip: ^Maybe(lc.Re
 		line_height := rl.MeasureTextEx(el.resolved_font, "Wy", box.font_size, box.font_spacing).y
 		cursor_y := text_y
 
+		// TODO: Don't wrap only on newline, also wrap if wrap is set to
+		// true
 		explicit_lines := strings.split(text, "\n", context.temp_allocator)
 		for explicit_line in explicit_lines {
 			words := strings.split(explicit_line, " ", context.temp_allocator)

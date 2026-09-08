@@ -9,17 +9,12 @@ ui_text :: proc(
 	text: string,
 	classes: []string = nil,
 	style: Style = {},
+	box: lc.Box = {width = lc.Fit(true), height = lc.Fit(true)},
 	loc := #caller_location,
 ) {
-	element_open(
-		ctx,
-		Element {
-			box = {width = lc.Fit(true), height = lc.Fit(true), text = text},
-			classes = classes,
-			style = style,
-		},
-		loc,
-	)
+	el_box := box
+	el_box.text = text
+	element_open(ctx, Element{box = el_box, classes = classes, style = style}, loc)
 
 	element_close(ctx) // Immediately closed!
 }
