@@ -34,16 +34,18 @@ Class :: struct {
 }
 
 Element :: struct {
-	using box:           lc.Box,
-	classes:             []string,
-	style:               Style,
+	using box:             lc.Box,
+	classes:               []string,
+	style:                 Style,
 
 	// Resolved Visuals
-	resolved_bg:         rl.Color,
-	resolved_text:       rl.Color,
-	resolved_border:     rl.Color,
-	resolved_text_align: Text_Align,
-	resolved_font:       rl.Font,
+	resolved_bg:           rl.Color,
+	resolved_text:         rl.Color,
+	resolved_border:       rl.Color,
+	resolved_text_align:   Text_Align,
+	resolved_font:         rl.Font,
+	resolved_font_size:    f32,
+	resolved_font_spacing: f32,
 }
 
 UI_Context :: struct {
@@ -51,7 +53,28 @@ UI_Context :: struct {
 	stylesheet:   map[string]Class,
 	fonts:        map[string]rl.Font,
 	default_font: rl.Font,
+	sdf_shader:   rl.Shader,
 }
+
+SDF_FRAG_SHADER :: `
+#version 330
+in vec2 fragTexCoord;
+in vec4 fragColor;
+out vec4 finalColor;
+uniform sampler2D texture0;
+
+void main() {
+    // Fetch the distance field value from the alpha channel
+    float dist = texture(texture0, fragTexCoord).a;
+    
+    // Calculate the anti-aliasing blur width based on the current scale
+    float smoothing = fwidth(dist);
+    
+    // Crisp the edge
+    float alpha = smoothstep(0.5 - smoothing, 0.5 + smoothing, dist);
+    finalColor = vec4(fragColor.rgb, fragColor.a * alpha);
+}
+`
 
 // --- Internal Text Measurement ---
 
@@ -60,15 +83,20 @@ ui_text_width :: proc(box: ^lc.Box, text: string) -> f32 {
 	el := (^Element)(box.user_data)
 	if el == nil do return 0
 	c_str := strings.clone_to_cstring(text, context.temp_allocator)
-	return rl.MeasureTextEx(el.resolved_font, c_str, box.font_size, box.font_spacing).x
+	return(
+		rl.MeasureTextEx(el.resolved_font, c_str, el.resolved_font_size, el.resolved_font_spacing).x \
+	)
 }
 
 @(private)
 ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 	el := (^Element)(box.user_data)
 	if el == nil do return 0
-	space_width := rl.MeasureTextEx(el.resolved_font, " ", box.font_size, box.font_spacing).x
-	line_height := rl.MeasureTextEx(el.resolved_font, "Wy", box.font_size, box.font_spacing).y
+
+	space_width :=
+		rl.MeasureTextEx(el.resolved_font, " ", el.resolved_font_size, el.resolved_font_spacing).x
+	line_height :=
+		rl.MeasureTextEx(el.resolved_font, "Wy", el.resolved_font_size, el.resolved_font_spacing).y
 
 	total_lines: f32 = 0.0
 	explicit_lines := strings.split(text, "\n", context.temp_allocator)
@@ -81,9 +109,10 @@ ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 		for word in words {
 			c_word := strings.clone_to_cstring(word, context.temp_allocator)
 			word_width :=
-				rl.MeasureTextEx(el.resolved_font, c_word, box.font_size, box.font_spacing).x
+				rl.MeasureTextEx(el.resolved_font, c_word, el.resolved_font_size, el.resolved_font_spacing).x
 
-			if cursor_x + word_width > max_width && cursor_x > 0 {
+			// Added `box.wrap` condition here
+			if box.wrap && cursor_x + word_width > max_width && cursor_x > 0 {
 				cursor_x = 0
 				total_lines += 1.0
 			}
@@ -118,11 +147,15 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx.stylesheet = make(map[string]Class)
 	ctx.fonts = make(map[string]rl.Font)
 	ctx.default_font = rl.GetFontDefault()
+
+	ctx.sdf_shader = rl.LoadShaderFromMemory(nil, SDF_FRAG_SHADER)
+
 	return ctx
 }
 
 ui_context_destroy :: proc(ctx: ^UI_Context) {
 	lc.layout_context_destroy(ctx.layout)
+	rl.UnloadShader(ctx.sdf_shader)
 	delete(ctx.stylesheet)
 	delete(ctx.fonts)
 	free(ctx)
@@ -159,8 +192,8 @@ apply_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 	el.resolved_border = rl.BLANK
 	el.resolved_text_align = .LEFT
 	el.resolved_font = ctx.default_font
-	el.box.font_size = 20.0
-	el.box.font_spacing = 1.0
+	el.resolved_font_size = 20.0
+	el.resolved_font_spacing = 1.0
 
 	merge_style :: proc(el: ^Element, s: Style, ctx: ^UI_Context) {
 		if c, ok := s.bg_color.?; ok do el.resolved_bg = c
@@ -171,8 +204,8 @@ apply_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 		if fn, ok := s.font_name.?; ok {
 			if f, exists := ctx.fonts[fn]; exists do el.resolved_font = f
 		}
-		if fs, ok := s.font_size.?; ok do el.box.font_size = fs
-		if fsp, ok := s.font_spacing.?; ok do el.box.font_spacing = fsp
+		if fs, ok := s.font_size.?; ok do el.resolved_font_size = fs
+		if fsp, ok := s.font_spacing.?; ok do el.resolved_font_spacing = fsp
 
 		if p, ok := s.padding.?; ok do el.padding = p
 		if m, ok := s.margin.?; ok do el.margin = m
@@ -205,10 +238,53 @@ element_close :: proc(ctx: ^UI_Context) {
 	lc.box_close(ctx.layout)
 }
 
+load_smooth_font :: proc(path: cstring, base_size: i32 = 64) -> rl.Font {
+	// 1. Load the font at a high resolution (64px)
+	font := rl.LoadFontEx(path, base_size, nil, 0)
+
+	// 2. Generate Mipmaps so the GPU has clean, downscaled reference textures
+	// rl.GenTextureMipmaps(&font.texture)
+
+	// 3. Force the GPU to smooth the pixels when scaling down to 20px or 28px
+	rl.SetTextureFilter(font.texture, .TRILINEAR)
+
+	return font
+}
+
+load_sdf_font :: proc(path: cstring, base_size: i32 = 64) -> rl.Font {
+	file_size: i32
+	file_data := rl.LoadFileData(path, &file_size)
+	defer rl.UnloadFileData(file_data)
+
+	font: rl.Font
+	font.baseSize = base_size
+	font.glyphCount = 95 // Standard ASCII range
+
+	// Load explicitly as .SDF to generate distance fields instead of raw pixels
+	glyph_count: i32 = 95
+	font.glyphs = rl.LoadFontData(
+		file_data,
+		file_size,
+		base_size,
+		nil,
+		font.glyphCount,
+		.SDF,
+		&glyph_count,
+	)
+
+	// Pack the atlas (SDF handles its own padding internally)
+	atlas_image := rl.GenImageFontAtlas(font.glyphs, &font.recs, font.glyphCount, base_size, 0, 0)
+	font.texture = rl.LoadTextureFromImage(atlas_image)
+	rl.UnloadImage(atlas_image)
+
+	// Bilinear filtering is required so the shader can smoothly interpolate the distance values
+	rl.SetTextureFilter(font.texture, .BILINEAR)
+
+	return font
+}
+
 // --- Recursive Render Pass ---
 
-
-// Update the signature to take the tracked state
 render_box :: proc(ui_ctx: ^UI_Context, box: ^lc.Box, current_clip: ^Maybe(lc.Rect)) {
 	// 1. Snapshot the state we inherited from the caller
 	previous_clip := current_clip^
@@ -239,12 +315,12 @@ render_box :: proc(ui_ctx: ^UI_Context, box: ^lc.Box, current_clip: ^Maybe(lc.Re
 			0.0,
 		)
 
-		space_width := rl.MeasureTextEx(el.resolved_font, " ", box.font_size, box.font_spacing).x
-		line_height := rl.MeasureTextEx(el.resolved_font, "Wy", box.font_size, box.font_spacing).y
+		space_width :=
+			rl.MeasureTextEx(el.resolved_font, " ", el.resolved_font_size, el.resolved_font_spacing).x
+		line_height :=
+			rl.MeasureTextEx(el.resolved_font, "Wy", el.resolved_font_size, el.resolved_font_spacing).y
 		cursor_y := text_y
 
-		// TODO: Don't wrap only on newline, also wrap if wrap is set to
-		// true
 		explicit_lines := strings.split(text, "\n", context.temp_allocator)
 		for explicit_line in explicit_lines {
 			words := strings.split(explicit_line, " ", context.temp_allocator)
@@ -257,8 +333,8 @@ render_box :: proc(ui_ctx: ^UI_Context, box: ^lc.Box, current_clip: ^Maybe(lc.Re
 				for end_idx < len(words) {
 					c_word := strings.clone_to_cstring(words[end_idx], context.temp_allocator)
 					word_width :=
-						rl.MeasureTextEx(el.resolved_font, c_word, box.font_size, box.font_spacing).x
-					if end_idx > start_idx && line_width + word_width > inner_width do break
+						rl.MeasureTextEx(el.resolved_font, c_word, el.resolved_font_size, el.resolved_font_spacing).x
+					if box.wrap && end_idx > start_idx && line_width + word_width > inner_width do break
 					line_width += word_width + space_width
 					end_idx += 1
 				}
@@ -272,20 +348,24 @@ render_box :: proc(ui_ctx: ^UI_Context, box: ^lc.Box, current_clip: ^Maybe(lc.Re
 				}
 
 				cursor_x := start_x
+				rl.BeginShaderMode(ui_ctx.sdf_shader)
 				for i in start_idx ..< end_idx {
 					c_word := strings.clone_to_cstring(words[i], context.temp_allocator)
 					rl.DrawTextEx(
 						el.resolved_font,
 						c_word,
 						{cursor_x, cursor_y},
-						box.font_size,
-						box.font_spacing,
+						el.resolved_font_size,
+						el.resolved_font_spacing,
 						el.resolved_text,
 					)
 					cursor_x +=
-						rl.MeasureTextEx(el.resolved_font, c_word, box.font_size, box.font_spacing).x +
+						rl.MeasureTextEx(el.resolved_font, c_word, el.resolved_font_size, el.resolved_font_spacing).x +
 						space_width
 				}
+
+				rl.EndShaderMode()
+
 				cursor_y += line_height
 				start_idx = end_idx
 			}

@@ -140,8 +140,6 @@ Box :: struct {
 	text:                  Maybe(string),
 	text_height:           f32, // Explicitly track resolved text height
 	frozen:                bool, // For the iterative flex redistribution loop
-	font_size:             f32,
-	font_spacing:          f32,
 
 	// Scrolling
 	offset_x:              f32,

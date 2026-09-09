@@ -18,7 +18,28 @@ main :: proc() {
 	ui_ctx := ui_context_create(1024, 768)
 	defer ui_context_destroy(ui_ctx)
 
-	// --- Editor Loop ---
+	// 1. Load high-res, smoothed fonts
+	font_bold := load_sdf_font("font/CaacupeOne-Regular.ttf")
+	font_italic := load_sdf_font("font/SankofaDisplay-Regular.ttf")
+
+	// Pick fonts that actually contain English letters!
+	font_mono := load_sdf_font("font/CaacupeOne-Regular.ttf")
+	font_serif := load_sdf_font("font/Kablammo-Regular-VariableFont_MORF.ttf")
+
+	// Clean up Raylib resources on exit
+	defer {
+		rl.UnloadFont(font_bold)
+		rl.UnloadFont(font_italic)
+		rl.UnloadFont(font_mono)
+		rl.UnloadFont(font_serif)
+	}
+
+	// 2. Register them into your UI Engine
+	ui_ctx.fonts["bold"] = font_bold
+	ui_ctx.fonts["italic"] = font_italic
+	ui_ctx.fonts["mono"] = font_mono
+	ui_ctx.fonts["serif"] = font_serif
+
 	for !rl.WindowShouldClose() {
 		ui_begin_frame(ui_ctx, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
 		defer ui_end_frame(ui_ctx)
@@ -55,8 +76,32 @@ main :: proc() {
 				)
 				defer element_close(ui_ctx)
 
-				ui_text(ui_ctx, TITLE, nil, {text_color = rl.MAGENTA, text_align = .CENTER})
-				ui_text(ui_ctx, CONTENT, nil, {text_color = rl.GREEN})
+				ui_text(
+					ui_ctx,
+					TITLE,
+					true,
+					nil,
+					{
+						text_color = rl.MAGENTA,
+						text_align = .CENTER,
+						font_name = "italic",
+						font_size = 28.0,
+					},
+				)
+				ui_text(
+					ui_ctx,
+					CONTENT,
+					true,
+					nil,
+					{
+						text_color = rl.GREEN,
+						text_align = .CENTER,
+						font_name = "bold",
+						font_size = 28.0,
+					},
+				)
+				// In main.odin
+
 			}
 
 			{
@@ -75,25 +120,20 @@ main :: proc() {
 				defer element_close(ui_ctx)
 
 				for metric in metrics {
-					element_open(
+					ui_text(
 						ui_ctx,
-						Element {
-							box = {
-								width = lc.Grow{1},
-								min_width = lc.Fixed{200},
-								height = lc.Fit(true),
-								border = {1, 1, 1, 1},
-								text = metric,
-							},
-							classes = {"card"},
-							style = Style {
-								text_align = .CENTER,
-								border_color = rl.BLACK,
-								bg_color = rl.RAYWHITE,
-							},
+						metric,
+						true,
+						nil,
+						{
+							font_name = "serif",
+							font_size = 20.0,
+							text_align = .CENTER,
+							bg_color = rl.RAYWHITE,
+							text_color = rl.BLACK,
 						},
+						{width = lc.Grow{1}},
 					)
-					element_close(ui_ctx)
 				}
 			}
 		}
