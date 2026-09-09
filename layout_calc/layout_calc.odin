@@ -1,9 +1,9 @@
 package layout_calc
 
 import "core:fmt"
+import "core:hash"
 import "core:mem"
 import "core:slice"
-import "core:strings"
 
 Layout_Arena_Block :: struct {
 	arena:  mem.Arena,
@@ -101,7 +101,7 @@ Position :: enum {
 	FIXED,
 }
 
-Box_ID :: distinct string
+Box_ID :: distinct u32
 Box :: struct {
 	id:                    Box_ID,
 	user_data:             rawptr,
@@ -280,6 +280,10 @@ chained_arena_allocator :: proc(ca: ^Layout_Chained_Arena) -> mem.Allocator {
 
 // --- Helper Functions ---
 
+ID :: proc(id: string) -> Box_ID {
+	return Box_ID(hash.fnv32(transmute([]byte)id))
+}
+
 rect_intersect :: proc(a, b: Rect) -> Rect {
 	x1 := max(a.x, b.x)
 	y1 := max(a.y, b.y)
@@ -336,11 +340,9 @@ new_box_from_config :: proc(
 	if err != nil do panic("Failed to allocate memory")
 
 	box^ = box_config
-	if box_config.id == "" {
+	if box.id == 0 {
 		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
-		box.id = Box_ID(strings.clone(loc_str, arena_alloc))
-	} else {
-		box.id = Box_ID(strings.clone(string(box_config.id), arena_alloc))
+		box.id = Box_ID(hash.fnv32a(transmute([]byte)loc_str))
 	}
 
 	box.children = make([dynamic]^Box, 0, 4, arena_alloc)

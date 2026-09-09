@@ -2,6 +2,7 @@ package renderer
 
 import lc "../layout_calc"
 import "core:fmt"
+import "core:hash"
 import rl "vendor:raylib"
 
 ui_text :: proc(
@@ -26,46 +27,37 @@ ui_text :: proc(
 	element_close(ctx) // Immediately closed!
 }
 
-// Returns `true` the exact frame the user releases a click/touch over this box
 ui_button :: proc(
 	ctx: ^UI_Context,
 	text: string,
-	id: string = "",
+	id: lc.Box_ID = 0,
 	style: Style = {},
 	loc := #caller_location,
 ) -> bool {
-	// 1. Resolve a predictable ID for interaction tracking
-	target_id: lc.Box_ID
-	if id != "" {
-		target_id = lc.Box_ID(id)
-	} else {
+	target_id := id
+	if target_id == 0 {
 		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
-		target_id = lc.Box_ID(loc_str) // Temporary string, layout engine clones it
+		target_id = lc.Box_ID(hash.fnv32a(transmute([]byte)loc_str))
 	}
 
-	// 2. Query the interaction state to drive visual feedback
-	interaction := get_interaction(ctx, target_id)
+	is_hovered := (ctx.hovered_id == target_id) && (target_id != 0)
+	is_active := (ctx.active_id == target_id) && (target_id != 0)
+	clicked := is_hovered && is_active && (ctx.pointer.current_state == .RELEASED_THIS_FRAME)
 
 	dynamic_style := style
+	base_bg := style.bg_color.? or_else rl.Color{60, 130, 246, 255}
 
-	// Provide default fallback colors if none are set
-	base_bg := style.bg_color.? or_else rl.Color{60, 130, 246, 255} // Blue
-	hover_bg := rl.Color{96, 165, 250, 255} // Lighter Blue
-	active_bg := rl.Color{37, 99, 235, 255} // Darker Blue
-
-	// Apply state-driven styles
-	if interaction.is_active {
-		dynamic_style.bg_color = active_bg
-	} else if interaction.is_hovered {
-		dynamic_style.bg_color = hover_bg
-		rl.SetMouseCursor(.POINTING_HAND) // Web/Desktop UX
+	if is_active {
+		dynamic_style.bg_color = rl.Color{37, 99, 235, 255}
+	} else if is_hovered {
+		dynamic_style.bg_color = rl.Color{96, 165, 250, 255}
+		rl.SetMouseCursor(.POINTING_HAND)
 	} else {
 		dynamic_style.bg_color = base_bg
 	}
 
-	// 3. Define the structural box
 	el_box := lc.Box {
-		id              = target_id,
+		id              = lc.Box_ID(target_id),
 		width           = style.width.? or_else lc.Fit(true),
 		height          = style.height.? or_else lc.Fit(true),
 		padding         = style.padding.? or_else [4]f32{12, 24, 12, 24},
@@ -74,14 +66,10 @@ ui_button :: proc(
 		align_items     = .CENTER,
 	}
 
-	// 4. Render the container and text
 	element_open(ctx, Element{box = el_box, style = dynamic_style}, loc)
-
 	text_col := style.text_color.? or_else rl.WHITE
 	ui_text(ctx, text, false, nil, Style{text_color = text_col, text_align = .CENTER})
-
 	element_close(ctx)
 
-	// 5. Fire the onClick handler
-	return interaction.clicked
+	return clicked
 }

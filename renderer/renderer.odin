@@ -2,6 +2,7 @@ package renderer
 
 import lc "../layout_calc"
 import "core:fmt"
+import "core:hash"
 import "core:strings"
 import rl "vendor:raylib"
 
@@ -70,6 +71,7 @@ UI_Context :: struct {
 	_next_hovered_id: lc.Box_ID, // Used internally during the end_frame hit-test
 	pointer:          Pointer_State,
 	scroll_state:     map[lc.Box_ID]Scroll_State,
+	boxes:            map[lc.Box_ID]rl.Rectangle,
 }
 
 SDF_FRAG_SHADER :: `
@@ -151,6 +153,40 @@ set_clip :: proc(current: ^Maybe(lc.Rect), target: Maybe(lc.Rect)) {
 }
 
 @(private)
+ui_set_pointer_state :: proc(ctx: ^UI_Context, pos: rl.Vector2, is_down: bool) {
+	ctx.pointer.pos = pos
+
+	// 1. Advance state machine
+	if is_down {
+		if ctx.pointer.current_state == .PRESSED_THIS_FRAME {
+			ctx.pointer.current_state = .HELD
+		} else if ctx.pointer.current_state != .HELD {
+			ctx.pointer.current_state = .PRESSED_THIS_FRAME
+		}
+	} else {
+		if ctx.pointer.current_state == .RELEASED_THIS_FRAME {
+			ctx.pointer.current_state = .IDLE
+		} else if ctx.pointer.current_state != .IDLE {
+			ctx.pointer.current_state = .RELEASED_THIS_FRAME
+		}
+	}
+
+	// 2. Hit-test against last frame's computed rectangles
+	ctx.hovered_id = 0
+	for id, rect in ctx.boxes {
+		if rl.CheckCollisionPointRec(pos, rect) {
+			ctx.hovered_id = id
+			// If handling hierarchy/z-index, pick the deepest/highest layer
+		}
+	}
+
+	// 3. Track active item (drag / click-down capture)
+	if ctx.pointer.current_state == .PRESSED_THIS_FRAME {
+		ctx.active_id = ctx.hovered_id
+	}
+}
+
+@(private)
 hit_test_tree :: proc(ctx: ^UI_Context, box: ^lc.Box, mouse_pos: rl.Vector2) -> bool {
 	// 1. CULLING: Reject if mouse is outside the visible clipped area
 	if clip, ok := box.clip_rect.?; ok {
@@ -208,8 +244,6 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 	lc.layout_context_destroy(ctx.layout)
 	rl.UnloadShader(ctx.sdf_shader)
 
-	if len(string(ctx.active_id)) > 0 do delete(string(ctx.active_id))
-	if len(string(ctx.focused_id)) > 0 do delete(string(ctx.focused_id))
 
 	delete(ctx.stylesheet)
 	delete(ctx.fonts)
@@ -218,15 +252,12 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 }
 
 ui_begin_frame :: proc(ctx: ^UI_Context, screen_width, screen_height: f32) {
+	ui_set_pointer_state(ctx, rl.GetMousePosition(), rl.IsMouseButtonDown(.LEFT))
 	// Swap hovered state from the previous frame's hit test
-	if len(string(ctx._next_hovered_id)) > 0 {
-		ctx.hovered_id = lc.Box_ID(
-			strings.clone(string(ctx._next_hovered_id), context.temp_allocator),
-		)
-	} else {
-		ctx.hovered_id = ""
+	if ctx._next_hovered_id > 0 {
+		ctx.hovered_id = ctx._next_hovered_id
 	}
-	ctx._next_hovered_id = ""
+	ctx._next_hovered_id = 0
 
 	// Poll Unified Input (Mouse & Primary Touch)
 	ctx.pointer.pos = rl.GetMousePosition()
@@ -245,16 +276,14 @@ ui_begin_frame :: proc(ctx: ^UI_Context, screen_width, screen_height: f32) {
 	rl.SetMouseCursor(.DEFAULT)
 	if ctx.pointer.pressed {
 		// Free old persistent IDs to prevent memory leaks
-		if len(string(ctx.active_id)) > 0 do delete(string(ctx.active_id))
-		if len(string(ctx.focused_id)) > 0 do delete(string(ctx.focused_id))
 
 		// Clone new IDs using the default allocator so they survive across frames
-		if len(string(ctx.hovered_id)) > 0 {
-			ctx.active_id = lc.Box_ID(strings.clone(string(ctx.hovered_id)))
-			ctx.focused_id = lc.Box_ID(strings.clone(string(ctx.hovered_id)))
+		if ctx.hovered_id > 0 {
+			ctx.active_id = ctx.hovered_id
+			ctx.focused_id = ctx.hovered_id
 		} else {
-			ctx.active_id = ""
-			ctx.focused_id = ""
+			ctx.active_id = 0
+			ctx.focused_id = 0
 		}
 	}
 
@@ -262,7 +291,7 @@ ui_begin_frame :: proc(ctx: ^UI_Context, screen_width, screen_height: f32) {
 	if dt == 0 do dt = 0.016
 
 	// --- SCROLL BUBBLING (Mouse Wheel) ---
-	if (ctx.pointer.scroll.y != 0 || ctx.pointer.scroll.x != 0) && ctx.hovered_id != "" {
+	if (ctx.pointer.scroll.y != 0 || ctx.pointer.scroll.x != 0) && ctx.hovered_id != 0 {
 		target := ctx.layout.all_boxes[ctx.hovered_id]
 		for target != nil && target.overflow_y != .SCROLL && target.overflow_x != .SCROLL {
 			target = target.parent
@@ -280,7 +309,7 @@ ui_begin_frame :: proc(ctx: ^UI_Context, screen_width, screen_height: f32) {
 	}
 
 	// --- DRAG BUBBLING (Mobile Swipe / Click-and-Drag) ---
-	if (ctx.pointer.delta.y != 0 || ctx.pointer.delta.x != 0) && ctx.active_id != "" {
+	if (ctx.pointer.delta.y != 0 || ctx.pointer.delta.x != 0) && ctx.active_id != 0 {
 		target := ctx.layout.all_boxes[ctx.active_id]
 		for target != nil && target.overflow_y != .SCROLL && target.overflow_x != .SCROLL {
 			target = target.parent
@@ -315,10 +344,11 @@ ui_begin_frame :: proc(ctx: ^UI_Context, screen_width, screen_height: f32) {
 ui_end_frame :: proc(ctx: ^UI_Context) {
 	lc.end_layout(ctx.layout)
 
-	if ctx.pointer.released {
-		if len(string(ctx.active_id)) > 0 do delete(string(ctx.active_id))
-		ctx.active_id = ""
+	clear(&ctx.boxes)
+	for id, box in ctx.layout.all_boxes {
+		ctx.boxes[id] = rl.Rectangle{box.x, box.y, box.computed_width, box.computed_height}
 	}
+
 
 	mouse_pos := rl.GetMousePosition()
 	for i := len(ctx.layout.root_boxes) - 1; i >= 0; i -= 1 {
@@ -441,9 +471,9 @@ element_open :: proc(
 	el := new(Element, context.temp_allocator)
 	el^ = el_val
 
-	if el.box.id == "" {
+	if el.box.id == 0 {
 		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
-		el.box.id = lc.Box_ID(strings.clone(loc_str, context.temp_allocator))
+		el.box.id = lc.Box_ID(hash.fnv32(transmute([]byte)loc_str))
 	}
 
 	apply_styles(el, ctx)

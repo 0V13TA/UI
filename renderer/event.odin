@@ -6,14 +6,20 @@ import rl "vendor:raylib"
 MAX_TOUCHES :: 10
 
 Pointer_State :: struct {
-	pos:         rl.Vector2,
-	delta:       rl.Vector2, // Tracks swipe speed / drag distance
-	scroll:      rl.Vector2, // Tracks hardware scroll wheel
-	is_down:     bool,
-	pressed:     bool,
-	released:    bool,
-	touch_count: i32,
-	touches:     [MAX_TOUCHES]rl.Vector2,
+	pos:           rl.Vector2,
+	delta:         rl.Vector2, // Tracks swipe speed / drag distance
+	scroll:        rl.Vector2, // Tracks hardware scroll wheel
+	is_down:       bool,
+	pressed:       bool,
+	released:      bool,
+	touch_count:   i32,
+	touches:       [MAX_TOUCHES]rl.Vector2,
+	current_state: enum {
+		IDLE,
+		PRESSED_THIS_FRAME,
+		HELD,
+		RELEASED_THIS_FRAME,
+	},
 }
 
 Interaction_State :: struct {

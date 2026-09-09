@@ -119,19 +119,19 @@ test_z_index_sorting :: proc(t: ^testing.T) {
 
 	root := box_open(ctx, Box{width = Fixed{100}, height = Fixed{100}})
 
-	box_open(ctx, Box{id = "mid", z_index = 5})
+	box_open(ctx, Box{id = ID("mid"), z_index = 5})
 	box_close(ctx)
-	box_open(ctx, Box{id = "back", z_index = 0})
+	box_open(ctx, Box{id = ID("back"), z_index = 0})
 	box_close(ctx)
-	box_open(ctx, Box{id = "front", z_index = 10})
+	box_open(ctx, Box{id = ID("front"), z_index = 10})
 	box_close(ctx)
 
 	box_close(ctx)
 	end_layout(ctx)
 
-	testing.expect_value(t, root.children[0].id, Box_ID("back"))
-	testing.expect_value(t, root.children[1].id, Box_ID("mid"))
-	testing.expect_value(t, root.children[2].id, Box_ID("front"))
+	testing.expect_value(t, root.children[0].id, ID("back"))
+	testing.expect_value(t, root.children[1].id, ID("mid"))
+	testing.expect_value(t, root.children[2].id, ID("front"))
 }
 
 @(test)
