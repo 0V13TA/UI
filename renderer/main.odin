@@ -1,6 +1,7 @@
 package renderer
 
 import lc "../layout_calc"
+import "core:fmt"
 import rl "vendor:raylib"
 
 TITLE :: "This is a hero card showcasing dynamic word wrapping."
@@ -40,6 +41,11 @@ main :: proc() {
 	ui_ctx.fonts["mono"] = font_mono
 	ui_ctx.fonts["serif"] = font_serif
 
+	// Inside your main file, before the loop:
+	counter := 0
+	bg_color := rl.RAYWHITE
+
+	// Inside your main loop:
 	for !rl.WindowShouldClose() {
 		ui_begin_frame(ui_ctx, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
 		defer ui_end_frame(ui_ctx)
@@ -48,93 +54,35 @@ main :: proc() {
 			element_open(
 				ui_ctx,
 				{
-					box = {
-						width = lc.ViewPercent{100},
-						height = lc.ViewPercent{100},
-						direction = .COLUMN,
-						justify_content = .CENTER,
-						align_items = .CENTER,
-					},
-					style = {bg_color = rl.RAYWHITE},
+					direction = .COLUMN,
+					justify_content = .CENTER,
+					align_items = .CENTER,
+					width = lc.ViewPercent{100},
+					height = lc.ViewPercent{100},
+					border = {10, 10, 10, 10},
+					style = {bg_color = rl.BLACK, border_color = rl.WHITE},
 				},
 			)
 			defer element_close(ui_ctx)
 
-			{
-				element_open(
-					ui_ctx,
-					{
-						box = {
-							wrap = true,
-							width = lc.ViewPercent{50},
-							height = lc.Fit(true),
-							direction = .COLUMN,
-							justify_content = .CENTER,
-							align_items = .CENTER,
-						},
-					},
-				)
-				defer element_close(ui_ctx)
-
-				ui_text(
-					ui_ctx,
-					TITLE,
-					true,
-					nil,
-					{
-						text_color = rl.MAGENTA,
-						text_align = .CENTER,
-						font_name = "italic",
-						font_size = 28.0,
-					},
-				)
-				ui_text(
-					ui_ctx,
-					CONTENT,
-					true,
-					nil,
-					{
-						text_color = rl.GREEN,
-						text_align = .CENTER,
-						font_name = "bold",
-						font_size = 28.0,
-					},
-				)
-				// In main.odin
-
-			}
+			ui_text(ui_ctx, fmt.tprint(counter), style = {text_color = rl.WHITE})
 
 			{
 				element_open(
 					ui_ctx,
 					{
-						width = lc.ViewPercent{60},
+						direction = .ROW,
+						width = lc.Fit(true),
 						height = lc.Fit(true),
-						wrap = true,
-						gap = 15,
-						border = {3, 3, 3, 3},
-						padding = {10, 10, 10, 10},
-						style = {border_color = rl.DARKBROWN, bg_color = rl.PINK},
+						border = {2, 2, 2, 2},
+						gap = 10,
+						style = {border_color = rl.WHITE},
 					},
 				)
 				defer element_close(ui_ctx)
 
-				for metric in metrics {
-					ui_text(
-						ui_ctx,
-						metric,
-						true,
-						nil,
-						{
-							font_name = "serif",
-							font_size = 20.0,
-							text_align = .CENTER,
-							bg_color = rl.RAYWHITE,
-							text_color = rl.BLACK,
-						},
-						{width = lc.Grow{1}},
-					)
-				}
+				if ui_button(ui_ctx, "Increment") do counter += 1
+				if ui_button(ui_ctx, "Decrement") do counter -= 1
 			}
 		}
 	}

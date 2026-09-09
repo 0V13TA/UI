@@ -11,21 +11,26 @@ Text_Align :: enum {
 	RIGHT,
 }
 
+Pointer_Events :: enum {
+	AUTO,
+	NONE,
+}
 Style :: struct {
-	bg_color:     Maybe(rl.Color),
-	border_color: Maybe(rl.Color),
-	text_color:   Maybe(rl.Color),
-	text_align:   Maybe(Text_Align),
+	bg_color:       Maybe(rl.Color),
+	border_color:   Maybe(rl.Color),
+	text_color:     Maybe(rl.Color),
+	text_align:     Maybe(Text_Align),
 
 	// Typography
-	font_name:    Maybe(string),
-	font_size:    Maybe(f32),
-	font_spacing: Maybe(f32),
-	padding:      Maybe([4]f32),
-	margin:       Maybe([4]f32),
-	gap:          Maybe(f32),
-	width:        Maybe(lc.Sizing),
-	height:       Maybe(lc.Sizing),
+	font_name:      Maybe(string),
+	font_size:      Maybe(f32),
+	font_spacing:   Maybe(f32),
+	padding:        Maybe([4]f32),
+	margin:         Maybe([4]f32),
+	gap:            Maybe(f32),
+	width:          Maybe(lc.Sizing),
+	height:         Maybe(lc.Sizing),
+	pointer_events: Maybe(Pointer_Events),
 }
 
 Class :: struct {
@@ -48,12 +53,23 @@ Element :: struct {
 	resolved_font_spacing: f32,
 }
 
+Scroll_State :: struct {
+	pos: rl.Vector2,
+	vel: rl.Vector2,
+}
+
 UI_Context :: struct {
-	layout:       ^lc.Layout_Context,
-	stylesheet:   map[string]Class,
-	fonts:        map[string]rl.Font,
-	default_font: rl.Font,
-	sdf_shader:   rl.Shader,
+	layout:           ^lc.Layout_Context,
+	stylesheet:       map[string]Class,
+	fonts:            map[string]rl.Font,
+	default_font:     rl.Font,
+	sdf_shader:       rl.Shader,
+	hovered_id:       lc.Box_ID,
+	active_id:        lc.Box_ID,
+	focused_id:       lc.Box_ID,
+	_next_hovered_id: lc.Box_ID, // Used internally during the end_frame hit-test
+	pointer:          Pointer_State,
+	scroll_state:     map[lc.Box_ID]Scroll_State,
 }
 
 SDF_FRAG_SHADER :: `
@@ -134,6 +150,41 @@ set_clip :: proc(current: ^Maybe(lc.Rect), target: Maybe(lc.Rect)) {
 	current^ = target
 }
 
+@(private)
+hit_test_tree :: proc(ctx: ^UI_Context, box: ^lc.Box, mouse_pos: rl.Vector2) -> bool {
+	// 1. CULLING: Reject if mouse is outside the visible clipped area
+	if clip, ok := box.clip_rect.?; ok {
+		if mouse_pos.x < clip.x ||
+		   mouse_pos.x > clip.x + clip.width ||
+		   mouse_pos.y < clip.y ||
+		   mouse_pos.y > clip.y + clip.height {
+			return false
+		}
+	}
+
+	// 2. OVERLAPS: Check children first in reverse-draw order (front-to-back)
+	for i := len(box.children) - 1; i >= 0; i -= 1 {
+		if hit_test_tree(ctx, box.children[i], mouse_pos) do return true
+	}
+
+	// 3. ACTUAL HIT: Bounding box check
+	if mouse_pos.x >= box.x &&
+	   mouse_pos.x <= box.x + box.computed_width &&
+	   mouse_pos.y >= box.y &&
+	   mouse_pos.y <= box.y + box.computed_height {
+		if box.user_data != nil {
+			el := (^Element)(box.user_data)
+			pe := el.style.pointer_events.? or_else .AUTO
+
+			// Ignore this element if pointer events are disabled
+			if pe != .NONE {
+				ctx._next_hovered_id = box.id
+				return true
+			}
+		}
+	}
+	return false
+}
 // --- Public API ---
 
 ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
@@ -147,21 +198,114 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx.stylesheet = make(map[string]Class)
 	ctx.fonts = make(map[string]rl.Font)
 	ctx.default_font = rl.GetFontDefault()
-
 	ctx.sdf_shader = rl.LoadShaderFromMemory(nil, SDF_FRAG_SHADER)
 
+	ctx.scroll_state = make(map[lc.Box_ID]Scroll_State)
 	return ctx
 }
 
 ui_context_destroy :: proc(ctx: ^UI_Context) {
 	lc.layout_context_destroy(ctx.layout)
 	rl.UnloadShader(ctx.sdf_shader)
+
+	if len(string(ctx.active_id)) > 0 do delete(string(ctx.active_id))
+	if len(string(ctx.focused_id)) > 0 do delete(string(ctx.focused_id))
+
 	delete(ctx.stylesheet)
 	delete(ctx.fonts)
+	delete(ctx.scroll_state)
 	free(ctx)
 }
 
 ui_begin_frame :: proc(ctx: ^UI_Context, screen_width, screen_height: f32) {
+	// Swap hovered state from the previous frame's hit test
+	if len(string(ctx._next_hovered_id)) > 0 {
+		ctx.hovered_id = lc.Box_ID(
+			strings.clone(string(ctx._next_hovered_id), context.temp_allocator),
+		)
+	} else {
+		ctx.hovered_id = ""
+	}
+	ctx._next_hovered_id = ""
+
+	// Poll Unified Input (Mouse & Primary Touch)
+	ctx.pointer.pos = rl.GetMousePosition()
+	ctx.pointer.delta = rl.GetMouseDelta()
+	ctx.pointer.scroll = rl.GetMouseWheelMoveV()
+	ctx.pointer.pressed = rl.IsMouseButtonPressed(.LEFT)
+	ctx.pointer.released = rl.IsMouseButtonReleased(.LEFT)
+	ctx.pointer.is_down = rl.IsMouseButtonDown(.LEFT)
+
+	// Poll Multi-Touch Input (For advanced mobile gestures)
+	ctx.pointer.touch_count = rl.GetTouchPointCount()
+	for i in 0 ..< min(ctx.pointer.touch_count, MAX_TOUCHES) {
+		ctx.pointer.touches[i] = rl.GetTouchPosition(i32(i))
+	}
+
+	rl.SetMouseCursor(.DEFAULT)
+	if ctx.pointer.pressed {
+		// Free old persistent IDs to prevent memory leaks
+		if len(string(ctx.active_id)) > 0 do delete(string(ctx.active_id))
+		if len(string(ctx.focused_id)) > 0 do delete(string(ctx.focused_id))
+
+		// Clone new IDs using the default allocator so they survive across frames
+		if len(string(ctx.hovered_id)) > 0 {
+			ctx.active_id = lc.Box_ID(strings.clone(string(ctx.hovered_id)))
+			ctx.focused_id = lc.Box_ID(strings.clone(string(ctx.hovered_id)))
+		} else {
+			ctx.active_id = ""
+			ctx.focused_id = ""
+		}
+	}
+
+	dt := rl.GetFrameTime()
+	if dt == 0 do dt = 0.016
+
+	// --- SCROLL BUBBLING (Mouse Wheel) ---
+	if (ctx.pointer.scroll.y != 0 || ctx.pointer.scroll.x != 0) && ctx.hovered_id != "" {
+		target := ctx.layout.all_boxes[ctx.hovered_id]
+		for target != nil && target.overflow_y != .SCROLL && target.overflow_x != .SCROLL {
+			target = target.parent
+		}
+		if target != nil {
+			state := ctx.scroll_state[target.id]
+			if target.overflow_y == .SCROLL {
+				state.vel.y -= ctx.pointer.scroll.y * 2000.0 // Add velocity impulse
+			}
+			if target.overflow_x == .SCROLL {
+				state.vel.x -= ctx.pointer.scroll.x * 2000.0
+			}
+			ctx.scroll_state[target.id] = state
+		}
+	}
+
+	// --- DRAG BUBBLING (Mobile Swipe / Click-and-Drag) ---
+	if (ctx.pointer.delta.y != 0 || ctx.pointer.delta.x != 0) && ctx.active_id != "" {
+		target := ctx.layout.all_boxes[ctx.active_id]
+		for target != nil && target.overflow_y != .SCROLL && target.overflow_x != .SCROLL {
+			target = target.parent
+		}
+		if target != nil {
+			state := ctx.scroll_state[target.id]
+			if target.overflow_y == .SCROLL {
+				delta_y := ctx.pointer.delta.y
+				max_y := max(target.scroll_height - target.computed_height, 0.0)
+				if state.pos.y < 0.0 || state.pos.y > max_y do delta_y *= 0.3 // Resist dragging out of bounds
+				state.pos.y -= delta_y
+				state.vel.y = -ctx.pointer.delta.y / dt // Track exact release velocity
+			}
+			if target.overflow_x == .SCROLL {
+				delta_x := ctx.pointer.delta.x
+				max_x := max(target.scroll_width - target.computed_width, 0.0)
+				if state.pos.x < 0.0 || state.pos.x > max_x do delta_x *= 0.3
+				state.pos.x -= delta_x
+				state.vel.x = -ctx.pointer.delta.x / dt
+			}
+			ctx.scroll_state[target.id] = state
+		}
+	}
+
+	// Reset layout arena for the new frame
 	lc.layout_reset(ctx.layout)
 	ctx.layout.screen_width = screen_width
 	ctx.layout.screen_height = screen_height
@@ -171,17 +315,86 @@ ui_begin_frame :: proc(ctx: ^UI_Context, screen_width, screen_height: f32) {
 ui_end_frame :: proc(ctx: ^UI_Context) {
 	lc.end_layout(ctx.layout)
 
+	if ctx.pointer.released {
+		if len(string(ctx.active_id)) > 0 do delete(string(ctx.active_id))
+		ctx.active_id = ""
+	}
+
+	mouse_pos := rl.GetMousePosition()
+	for i := len(ctx.layout.root_boxes) - 1; i >= 0; i -= 1 {
+		if hit_test_tree(ctx, ctx.layout.root_boxes[i], mouse_pos) do break
+	}
+
+	dt := rl.GetFrameTime()
+	if dt == 0 do dt = 0.016
+
+	// --- INERTIA & RUBBER-BAND PHYSICS ---
+	for id, state in ctx.scroll_state {
+		box := ctx.layout.all_boxes[id]
+		if box == nil do continue
+
+		spring_stiffness: f32 = 300.0
+		damping: f32 = 30.0 // Friction when springing back
+		drag_damping: f32 = 5.0 // Friction when free-scrolling
+
+		new_state := state
+
+		if box.overflow_y == .SCROLL {
+			max_y := max(box.scroll_height - box.computed_height, 0.0)
+
+			// Only apply physics if the user isn't actively dragging this box
+			if ctx.active_id != id {
+				if new_state.pos.y < 0.0 {
+					new_state.vel.y += (0.0 - new_state.pos.y) * spring_stiffness * dt
+					new_state.vel.y -= new_state.vel.y * damping * dt
+				} else if new_state.pos.y > max_y {
+					new_state.vel.y += (max_y - new_state.pos.y) * spring_stiffness * dt
+					new_state.vel.y -= new_state.vel.y * damping * dt
+				} else do new_state.vel.y -= new_state.vel.y * drag_damping * dt
+
+
+				// 1. Unconditionally apply velocity to position
+				new_state.pos.y += new_state.vel.y * dt
+
+				// 2. Clamp velocity to 0 when resting within bounds
+				if abs(new_state.vel.y) < 1.0 &&
+				   new_state.pos.y >= 0.0 &&
+				   new_state.pos.y <= max_y {
+					new_state.vel.y = 0
+				}
+			}
+		}
+
+		if box.overflow_x == .SCROLL {
+			max_x := max(box.scroll_width - box.computed_width, 0.0)
+
+			if ctx.active_id != id {
+				if new_state.pos.x < 0.0 {
+					new_state.vel.x += (0.0 - new_state.pos.x) * spring_stiffness * dt
+					new_state.vel.x -= new_state.vel.x * damping * dt
+				} else if new_state.pos.x > max_x {
+					new_state.vel.x += (max_x - new_state.pos.x) * spring_stiffness * dt
+					new_state.vel.x -= new_state.vel.x * damping * dt
+				} else {
+					new_state.vel.x -= new_state.vel.x * drag_damping * dt
+				}
+
+				new_state.pos.x += new_state.vel.x * dt
+				if abs(new_state.vel.x) < 1.0 && new_state.pos.x >= 0.0 && new_state.pos.x <= max_x do new_state.vel.x = 0
+			}
+		}
+
+		ctx.scroll_state[id] = new_state
+	}
+
+
 	rl.BeginDrawing()
 	rl.ClearBackground(rl.RAYWHITE)
 
-	// Initialize the explicit state tracker
 	current_clip: Maybe(lc.Rect) = nil
-
 	for root_box in ctx.layout.root_boxes do render_box(ctx, root_box, &current_clip)
 
-	// Failsafe cleanup (though it should naturally unwind to nil)
 	if current_clip != nil do rl.EndScissorMode()
-
 	rl.EndDrawing()
 }
 
@@ -220,7 +433,11 @@ apply_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 	merge_style(el, el.style, ctx)
 }
 
-element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) {
+element_open :: proc(
+	ctx: ^UI_Context,
+	el_val: Element,
+	loc := #caller_location,
+) -> Interaction_State {
 	el := new(Element, context.temp_allocator)
 	el^ = el_val
 
@@ -230,8 +447,16 @@ element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location)
 	}
 
 	apply_styles(el, ctx)
+
+	// --- AUTO-INJECT SCROLL STATE ---
+	if scroll, ok := ctx.scroll_state[el.box.id]; ok {
+		el.box.offset_x = scroll.pos.x
+		el.box.offset_y = scroll.pos.y
+	}
+
 	el.box.user_data = el
 	lc.box_open(ctx.layout, el.box, loc)
+	return get_interaction(ctx, el.box.id)
 }
 
 element_close :: proc(ctx: ^UI_Context) {

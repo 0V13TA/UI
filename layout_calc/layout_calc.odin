@@ -1112,25 +1112,47 @@ layout_position_pass :: proc(
 		start = end
 	}
 
-	max_child_x: f32 = 0.0
-	max_child_y: f32 = 0.0
+	// --- Replace the bottom of layout_position_pass with this: ---
+
+	// 1. Define the inner origin (top-left of usable content area, UNSCROLLED)
+	inner_origin_x := box.x + box.padding[Side.LEFT] + box.border[Side.LEFT]
+	inner_origin_y := box.y + box.padding[Side.TOP] + box.border[Side.TOP]
+
+	furthest_content_x := inner_origin_x
+	furthest_content_y := inner_origin_y
 
 	for child in box.children {
-		// Skip out-of-flow elements so they don't stretch scrollbars
-		if child.position == .ABSOLUTE || child.position == .FIXED {
-			continue
-		}
+		// Out-of-flow elements don't stretch the scroll canvas
+		if child.position == .ABSOLUTE || child.position == .FIXED do continue
 
-		child_right := child.x + child.computed_width + child.margin[Side.RIGHT]
-		child_bottom := child.y + child.computed_height + child.margin[Side.BOTTOM]
+		// 2. Bring the child's bounding box back to UNSCROLLED container space
+		unscrolled_child_x := child.x + box.offset_x
+		unscrolled_child_y := child.y + box.offset_y
 
-		max_child_x = max(max_child_x, child_right)
-		max_child_y = max(max_child_y, child_bottom)
+		child_right := unscrolled_child_x + child.computed_width + child.margin[Side.RIGHT]
+		child_bottom := unscrolled_child_y + child.computed_height + child.margin[Side.BOTTOM]
+
+		if child_right > furthest_content_x do furthest_content_x = child_right
+		if child_bottom > furthest_content_y do furthest_content_y = child_bottom
 	}
 
-	// Store the total scrollable area (only if it exceeds the box's own bounds)
-	box.scroll_width = max(max_child_x - box.x, box.computed_width)
-	box.scroll_height = max(max_child_y - box.y, box.computed_height)
+	// 3. Find the raw span of the inner content
+	inner_content_w := furthest_content_x - inner_origin_x
+	inner_content_h := furthest_content_y - inner_origin_y
+
+	// 4. Add the container's trailing padding & border
+	total_inner_w := inner_content_w + box.padding[Side.RIGHT] + box.border[Side.RIGHT]
+	total_inner_h := inner_content_h + box.padding[Side.BOTTOM] + box.border[Side.BOTTOM]
+
+	// 5. Final dimensions live in the outer box's coordinate space (add leading padding & border)
+	box.scroll_width = max(
+		total_inner_w + box.padding[Side.LEFT] + box.border[Side.LEFT],
+		box.computed_width,
+	)
+	box.scroll_height = max(
+		total_inner_h + box.padding[Side.TOP] + box.border[Side.TOP],
+		box.computed_height,
+	)
 }
 
 // Sorts children locally by z_index
