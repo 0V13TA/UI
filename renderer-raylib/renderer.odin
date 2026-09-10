@@ -10,7 +10,7 @@ Text_Align :: enum {
 	LEFT,
 	CENTER,
 	RIGHT,
-}
+} // Puerile
 
 Pointer_Events :: enum {
 	AUTO,
