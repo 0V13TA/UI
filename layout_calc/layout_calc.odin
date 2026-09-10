@@ -52,8 +52,8 @@ Side :: enum {
 }
 
 Overflow :: enum {
-	HIDDEN, // No scrollbar hides content that overflows
 	VISIBLE, // Overflows, does not resize anything and draws over parent
+	HIDDEN, // No scrollbar hides content that overflows
 	SCROLL, // Scrollbar and whatnot
 }
 
@@ -369,14 +369,25 @@ resolve_fixed_width :: proc(
 		if parent_is_fit || box.parent == nil {
 			box.computed_width = 0.0
 			if !box.warned {
+				// Prevent nil pointer crash if root element somehow uses Percent
+				parent_id := box.parent != nil ? box.parent.id : 0
 				fmt.printfln(
-					"Box: %s is dependent on parent: %s, which is Fit-sized",
+					"Box: %d is dependent on parent: %d, which is Fit-sized",
 					box.id,
-					box.parent.id,
+					parent_id,
 				)
 				box.warned = true
 			}
-		} else do box.computed_width = (v.value / 100.0) * box.parent.computed_width
+		} else {
+			// Calculate percentage against the parent's inner content width
+			parent_inner_width := max(
+				box.parent.computed_width -
+				get_horizontal(box.parent.padding) -
+				get_horizontal(box.parent.border),
+				0.0,
+			)
+			box.computed_width = (v.value / 100.0) * parent_inner_width
+		}
 	case Grow:
 		box.computed_width = 0.0
 	case Shrink:
@@ -459,7 +470,20 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 
 			if remaining_space > 0 {
 				for child in line_children do child.frozen = false
+				iteration := 0
 				for {
+					iteration += 1
+					if iteration > 100 {
+						if !box.warned {
+							fmt.printfln(
+								"WARNING: Infinite flex-grow (height) loop on Box %d. Breaking.",
+								box.id,
+							)
+							box.warned = true
+						}
+						break
+					}
+
 					total_grow_factor: f32 = 0
 					for child in line_children {
 						if !child.frozen {
@@ -509,7 +533,20 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 				}
 			} else if remaining_space < 0 {
 				for child in line_children do child.frozen = false
+				iteration := 0
 				for {
+					iteration += 1
+					if iteration > 100 {
+						if !box.warned {
+							fmt.printfln(
+								"WARNING: Infinite flex-shrink (height) loop on Box %d. Breaking.",
+								box.id,
+							)
+							box.warned = true
+						}
+						break
+					}
+
 					total_shrink_factor: f32 = 0
 					for child in line_children {
 						if !child.frozen {
@@ -628,14 +665,24 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 		if parent_is_fit || box.parent == nil {
 			box.computed_height = 0.0
 			if !box.warned {
+				parent_id := box.parent != nil ? box.parent.id : 0
 				fmt.printfln(
-					"Box: %s is dependent on parent: %s, which is Fit-sized",
+					"Box: %d is dependent on parent: %d, which is Fit-sized",
 					box.id,
-					box.parent.id,
+					parent_id,
 				)
 				box.warned = true
 			}
-		} else do box.computed_height = (v.value / 100.0) * box.parent.computed_height
+		} else {
+			// Calculate percentage against the parent's inner content height
+			parent_inner_height := max(
+				box.parent.computed_height -
+				get_vertical(box.parent.padding) -
+				get_vertical(box.parent.border),
+				0.0,
+			)
+			box.computed_height = (v.value / 100.0) * parent_inner_height
+		}
 	case Grow:
 		box.computed_height = 0.0
 	case Shrink:

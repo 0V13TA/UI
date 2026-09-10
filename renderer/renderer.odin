@@ -1,6 +1,7 @@
 package renderer
 
 import lc "../layout_calc"
+import "core:fmt"
 import "core:hash"
 import "core:math"
 import "core:strings"
@@ -11,6 +12,11 @@ Text_Align :: enum {
 	LEFT,
 	RIGHT,
 	CENTER,
+}
+Cached_Texture :: struct {
+	texture: ^sdl.Texture,
+	width:   i32,
+	height:  i32,
 }
 
 Color :: distinct [4]f32
@@ -64,12 +70,17 @@ Style :: struct {
 	//
 	width:           Maybe(lc.Sizing),
 	height:          Maybe(lc.Sizing),
+	min_width:       Maybe(lc.Bound_Sizing),
+	max_width:       Maybe(lc.Bound_Sizing),
+	min_height:      Maybe(lc.Bound_Sizing),
+	max_height:      Maybe(lc.Bound_Sizing),
 }
 
+
 Element :: struct {
-	using _box:             lc.Box,
 	classes:                []Class,
 	style:                  Style,
+	using _box:             lc.Box,
 
 	// Anything not in Box
 	// Font
@@ -94,6 +105,7 @@ UI_Context :: struct {
 	layout:     ^lc.Layout_Context,
 	fonts:      map[u32]^ttf.Font, // Hash Font name + Cache name
 	stylesheet: map[Class]Style,
+	word_cache: map[u64]Cached_Texture,
 }
 
 
@@ -133,6 +145,13 @@ set_render_color :: proc(renderer: ^sdl.Renderer, c: Color) {
 	sdl.SetRenderDrawColor(renderer, r, g, b, a)
 }
 
+clear_texture_cache :: proc(ctx: ^UI_Context) {
+	for _, cached in ctx.word_cache {
+		sdl.DestroyTexture(cached.texture)
+	}
+	clear(&ctx.word_cache)
+}
+
 // --- Master Box Drawing Proc ---
 // border: [Top, Right, Bottom, Left]
 // radii:  [TopLeft, TopRight, BottomRight, BottomLeft]
@@ -169,6 +188,37 @@ draw_ui_box :: proc(
 		set_render_color(renderer, bg_color)
 		fill_rounded_rect(renderer, inner_bounds, inner_radii)
 	}
+}
+
+get_word_texture :: proc(
+	ctx: ^UI_Context,
+	renderer: ^sdl.Renderer,
+	word: string,
+	font: ^ttf.Font,
+	color: Color,
+) -> Cached_Texture {
+	// Hash the combination of the text, font, and color
+	hash_str := fmt.tprintf("%s_%p_%v", word, font, color)
+	key := hash.fnv64a(transmute([]byte)hash_str)
+
+	if cached, exists := ctx.word_cache[key]; exists {
+		return cached
+	}
+
+	// Cache miss: Rasterize on the CPU, upload to the GPU
+	r, g, b, a := to_sdl_color(color)
+	sdl_color := sdl.Color{r, g, b, a}
+	c_word := strings.clone_to_cstring(word, context.temp_allocator)
+
+	surface := ttf.RenderUTF8_Blended(font, c_word, sdl_color)
+	if surface == nil do return Cached_Texture{}
+
+	texture := sdl.CreateTextureFromSurface(renderer, surface)
+	cached := Cached_Texture{texture, surface.w, surface.h}
+
+	sdl.FreeSurface(surface)
+	ctx.word_cache[key] = cached
+	return cached
 }
 
 // --- Mathematical Scanline Rasterizer ---
@@ -228,7 +278,7 @@ ui_text_width :: proc(box: ^lc.Box, text: string) -> f32 {
 	el := (^Element)(box.user_data)
 	if el == nil || el.resolved_font == nil do return 0
 
-	c_str := strings.clone_to_cstring(text, context.temp_allocator)
+	c_str := fmt.ctprintf("%s", text)
 	w, h: i32
 	ttf.SizeUTF8(el.resolved_font, c_str, &w, &h)
 
@@ -259,12 +309,14 @@ ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 
 		words := strings.split(explicit_line, " ", context.temp_allocator)
 		for word in words {
-			c_word := strings.clone_to_cstring(word, context.temp_allocator)
-			w, h: i32
-			ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
-			word_width := f32(w)
+			word_width: f32 = 0.0
+			if len(word) > 0 {
+				c_word := fmt.ctprintf("%s", word)
+				w, h: i32
+				ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
+				word_width = f32(w)
+			}
 
-			// Wrap to the next line if the word exceeds constraints
 			if box.wrap && cursor_x + word_width > max_width && cursor_x > 0 {
 				cursor_x = 0
 				total_lines += 1.0
@@ -311,36 +363,9 @@ default_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 		el.resolved_font_spacing = 1.0
 		el.resolved_font_style = {}
 
-		// If you have a designated default font in ctx.fonts,
-		// resolve it here. Otherwise leave the zero font and let
-		// your font setup provide the default.
-		//
-		// el.resolved_font = ctx.fonts[DEFAULT_FONT_HASH]
+		DEFAULT_FONT_HASH := hash.fnv32(transmute([]byte)string("default_font"))
+		el.resolved_font = ctx.fonts[DEFAULT_FONT_HASH]
 	}
-
-	// ------------------------------------------------------------
-	// Box/layout defaults
-	// ------------------------------------------------------------
-
-	// These should only be assigned here if Box itself doesn't
-	// already establish sensible defaults.
-	el._box.gap = 0
-	el._box.padding = {0, 0, 0, 0}
-	el._box.margin = {0, 0, 0, 0}
-	el._box.border = {0, 0, 0, 0}
-
-	el._box.direction = .ROW
-	el._box.align_items = .START
-	el._box.justify_content = .START
-
-	el._box.wrap = false
-
-	el._box.position = .STATIC
-
-	el._box.overflow_x = .VISIBLE
-	el._box.overflow_y = .VISIBLE
-
-	el._box.z_index = 0
 }
 
 @(private)
@@ -485,6 +510,22 @@ apply_style_block :: proc(el: ^Element, s: Style, ctx: ^UI_Context) {
 		el._box.height = v
 	}
 
+	if v, ok := s.min_width.?; ok {
+		el._box.min_width = v
+	}
+
+	if v, ok := s.max_width.?; ok {
+		el._box.max_width = v
+	}
+
+	if v, ok := s.min_height.?; ok {
+		el._box.min_height = v
+	}
+
+	if v, ok := s.max_height.?; ok {
+		el._box.max_height = v
+	}
+
 	// ------------------------------------------------------------
 	// Stacking
 	// ------------------------------------------------------------
@@ -505,4 +546,226 @@ apply_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 	}
 
 	apply_style_block(el, el.style, ctx)
+}
+
+@(private)
+set_clip :: proc(renderer: ^sdl.Renderer, current: ^Maybe(lc.Rect), target: Maybe(lc.Rect)) {
+	if current^ == target do return
+
+	if t, ok := target.?; ok {
+		clip_rect := sdl.Rect{i32(t.x), i32(t.y), i32(t.width), i32(t.height)}
+		sdl.RenderSetClipRect(renderer, &clip_rect)
+	} else {
+		sdl.RenderSetClipRect(renderer, nil) // Removes the clip
+	}
+	current^ = target
+}
+
+render_box :: proc(
+	ui_ctx: ^UI_Context,
+	renderer: ^sdl.Renderer,
+	box: ^lc.Box,
+	current_clip: ^Maybe(lc.Rect),
+) {
+	// 1. Snapshot the state we inherited from the caller
+	previous_clip := current_clip^
+
+	// 2. Apply this box's required clip (pass the renderer!)
+	set_clip(renderer, current_clip, box.clip_rect)
+
+	if box.user_data == nil do return
+	el := (^Element)(box.user_data)
+
+	// 3. Draw Background and Borders using our SDL2 helper
+	bounds := sdl.Rect{i32(box.x), i32(box.y), i32(box.computed_width), i32(box.computed_height)}
+	sdl.SetRenderDrawBlendMode(renderer, .BLEND) // Ensure alpha blending is active
+
+	draw_ui_box(
+		renderer,
+		bounds,
+		el.resolved_bg_color,
+		el.resolved_border_color,
+		box.border,
+		el.resolved_border_radius,
+	)
+
+	// 4. Draw Cached Text
+	if text, ok := box.text.?; ok {
+		if el.resolved_font != nil { 	// Prevent Segfault if font is missing!
+
+			text_x := box.x + box.padding[lc.Side.LEFT] + box.border[lc.Side.LEFT]
+			text_y := box.y + box.padding[lc.Side.TOP] + box.border[lc.Side.TOP]
+
+			inner_width := max(
+				box.computed_width -
+				lc.get_horizontal(box.padding) -
+				lc.get_horizontal(box.border),
+				0.0,
+			)
+
+			space_w, space_h: i32
+			ttf.SizeUTF8(el.resolved_font, " ", &space_w, &space_h)
+			space_width := f32(space_w)
+			line_height := f32(ttf.FontHeight(el.resolved_font))
+
+			cursor_y := text_y
+			explicit_lines := strings.split(text, "\n", context.temp_allocator)
+
+			for explicit_line in explicit_lines {
+				words := strings.split(explicit_line, " ", context.temp_allocator)
+				start_idx := 0
+
+				for start_idx < len(words) {
+					end_idx := start_idx
+					line_width: f32 = 0.0
+
+					// Measure how many words fit on this line
+					for end_idx < len(words) {
+						word_width: f32 = 0.0
+
+						// Skip measurement for empty strings caused by double spaces
+						if len(words[end_idx]) > 0 {
+							c_word := fmt.ctprintf("%s", words[end_idx])
+							w, h: i32
+							ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
+							word_width = f32(w)
+						}
+
+						if box.wrap &&
+						   end_idx > start_idx &&
+						   line_width + word_width > inner_width {
+							break
+						}
+						line_width += word_width + space_width
+						end_idx += 1
+					}
+
+					if end_idx > start_idx do line_width -= space_width
+
+					// Align the line horizontally
+					start_x := text_x
+					if el.resolved_text_align == .CENTER {
+						start_x += max((inner_width - line_width) / 2.0, 0.0)
+					} else if el.resolved_text_align == .RIGHT {
+						start_x += max(inner_width - line_width, 0.0)
+					}
+					cursor_x := start_x
+
+					// Draw the cached words
+					for i in start_idx ..< end_idx {
+						if len(words[i]) > 0 {
+							cached := get_word_texture(
+								ui_ctx,
+								renderer,
+								words[i],
+								el.resolved_font,
+								el.resolved_text_color,
+							)
+
+							if cached.texture != nil {
+								dest := sdl.Rect {
+									i32(cursor_x),
+									i32(cursor_y),
+									cached.width,
+									cached.height,
+								}
+								sdl.RenderCopy(renderer, cached.texture, nil, &dest)
+							}
+							cursor_x += f32(cached.width)
+						}
+						cursor_x += space_width
+					}
+
+					cursor_y += line_height
+					start_idx = end_idx
+				}
+			}
+		}
+	}
+
+	for child in box.children {
+		render_box(ui_ctx, renderer, child, current_clip)
+	}
+
+	// 5. RESTORE the caller's clip state before returning
+	set_clip(renderer, current_clip, previous_clip)
+}
+
+ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
+	ctx := new(UI_Context)
+
+	// Pass the new SDL text measurement functions to the layout core
+	ctx.layout = lc.layout_context_create(
+		ui_text_width,
+		ui_text_height,
+		screen_width,
+		screen_height,
+	)
+
+	ctx.stylesheet = make(map[Class]Style)
+	ctx.fonts = make(map[u32]^ttf.Font)
+	ctx.word_cache = make(map[u64]Cached_Texture) // Your new VRAM cache
+
+	return ctx
+}
+
+ui_context_destroy :: proc(ctx: ^UI_Context) {
+	lc.layout_context_destroy(ctx.layout)
+
+	// Purge GPU textures before destroying the map
+	clear_texture_cache(ctx)
+	delete(ctx.word_cache)
+
+	delete(ctx.stylesheet)
+	delete(ctx.fonts)
+	free(ctx)
+}
+
+ui_begin_frame :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, screen_w, screen_h: i32) {
+	// Note: Event processing and pointer state updates will go here next
+
+	lc.layout_reset(ctx.layout)
+	ctx.layout.screen_width = f32(screen_w)
+	ctx.layout.screen_height = f32(screen_h)
+	lc.begin_layout(ctx.layout)
+}
+
+ui_end_frame :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer) {
+	lc.end_layout(ctx.layout)
+
+	// 1. Initialize an empty clip state for the root
+	current_clip: Maybe(lc.Rect) = nil
+
+	// 2. Recursively render the tree
+	for root_box in ctx.layout.root_boxes {
+		render_box(ctx, renderer, root_box, &current_clip)
+	}
+
+	// 3. Clear any lingering hardware clip masks before the next frame
+	if current_clip != nil {
+		sdl.RenderSetClipRect(renderer, nil)
+	}
+}
+element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) {
+	// Allocate the element for this frame
+	el := new(Element, context.temp_allocator)
+	el^ = el_val
+
+	// Auto-generate an ID based on the call site if one wasn't provided
+	if el._box.id == 0 {
+		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
+		el._box.id = lc.Box_ID(hash.fnv32(transmute([]byte)loc_str))
+	}
+
+	// Resolve cascading styles
+	apply_styles(el, ctx)
+
+	// Bind the styled element to the layout box
+	el._box.user_data = el
+
+	lc.box_open(ctx.layout, el._box, loc)
+}
+
+element_close :: proc(ctx: ^UI_Context) {
+	lc.box_close(ctx.layout)
 }

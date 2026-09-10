@@ -1,188 +1,122 @@
-	for !rl.WindowShouldClose() {
-		free_all(context.temp_allocator)
+  	// --- BUILD UI TREE ---
+		ui_begin_frame(ui_ctx, renderer, win_w, win_h)
 
-		// Begin UI frame (handles layout_reset and screen size sync internally)
-		ui_begin_frame(ui_ctx, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
-
-		// =========================================================
-		// ROOT CONTAINER (Row)
-		// =========================================================
+		// ROOT: Row Layout
 		element_open(
 			ui_ctx,
 			Element {
-				box = {
-					width = lc.ViewPercent{100},
-					height = lc.ViewPercent{100},
+				style = {
+					width     = lc.ViewPercent{100},
+					height    = lc.ViewPercent{100},
 					direction = .ROW,
+					bg_color  = Color{0.95, 0.95, 0.97, 1.0}, // Off-white background
 				},
-				style = Style{bg_color = rl.Color{240, 242, 245, 255}},
 			},
 		)
 
-		// ---------------------------------------------------------
-		// 1. SIDEBAR
-		// ---------------------------------------------------------
-		{
+		// 1. SIDEBAR (Fixed Width)
+		element_open(
+			ui_ctx,
+			Element {
+				style = {
+					width      = lc.Fixed{260},
+					height     = lc.Percent{100},
+					direction  = .COLUMN,
+					padding    = space(20),
+					gap        = 15,
+					bg_color   = Color{0.1, 0.12, 0.15, 1.0}, // Dark sidebar
+					text_color = Color{0.8, 0.8, 0.8, 1.0},
+				},
+			},
+		)
+		element_open(
+			ui_ctx,
+			Element {
+				text = "DASHBOARD",
+				style = {
+					font_size = 24,
+					text_color = Color{1, 1, 1, 1},
+					margin = space(0, 0, 30, 0),
+				},
+			},
+		)
+		element_close(ui_ctx)
+		element_open(ui_ctx, Element{text = "Overview"})
+		element_close(ui_ctx)
+		element_open(ui_ctx, Element{text = "Analytics"})
+		element_close(ui_ctx)
+		element_open(ui_ctx, Element{text = "Settings"})
+		element_close(ui_ctx)
+		element_close(ui_ctx) // Close Sidebar
+
+		// 2. MAIN CONTENT AREA (Grow 1)
+		element_open(
+			ui_ctx,
+			Element {
+				style = {
+					width     = lc.Grow{1}, // Take remaining space
+					height    = lc.Percent{100},
+					direction = .COLUMN,
+					padding   = space(40),
+					gap       = 30,
+				},
+			},
+		)
+
+		// Header Title
+		element_open(
+			ui_ctx,
+			Element {
+				text = "Weekly Analytics",
+				style = {font_size = 32, text_color = Color{0.1, 0.1, 0.1, 1.0}},
+			},
+		)
+		element_close(ui_ctx)
+
+		// 3. STATS GRID (Wrapping Row)
+		element_open(
+			ui_ctx,
+			Element {
+				style = {
+					width = lc.Percent{100},
+					height = lc.Fit(true),
+					direction = .ROW,
+					wrap = true,
+					gap = 20,
+				},
+			},
+		)
+
+		metrics := []string {
+			"Total Views\n14,092",
+			"Active Users\n1,042",
+			"Conversion\n4.2%",
+			"Revenue\n$8,430",
+		}
+
+		for metric in metrics {
 			element_open(
 				ui_ctx,
 				Element {
-					box = {
-						width     = lc.Fixed{240},
-						height    = lc.ViewPercent{100},
-						direction = .COLUMN,
-						border    = {0, 4, 0, 0}, // 4px Right Border only
-						padding   = {20, 20, 20, 20},
-						gap       = 15,
+					text = metric,
+					style = {
+						width         = lc.Grow{1}, // Stretch to fill row
+						min_width     = lc.Fixed{200}, // Force wrap if squeezed
+						height        = lc.Fixed{120},
+						padding       = space(25),
+						bg_color      = Color{1, 1, 1, 1},
+						border_radius = space(12),
+						border        = space(1),
+						border_color  = Color{0.85, 0.85, 0.85, 1.0},
+						text_color    = Color{0.2, 0.2, 0.2, 1.0},
+						font_size     = 20,
 					},
-					classes = {"sidebar"},
 				},
 			)
-
-			// Sidebar Title (Using the ui_text component)
-			ui_text(
-				ui_ctx,
-				"WYSIWYG\nDashboard",
-				nil,
-				Style {
-					width = lc.ViewPercent{100},
-					padding = [4]f32{0, 0, 20, 0},
-					text_align = .CENTER,
-				},
-			)
-
-			// Nav Items
-			nav_labels := []string{"Home", "Analytics", "Settings", "Profile"}
-			for label in nav_labels {
-				ui_text(ui_ctx, label, {"nav_item"}, Style{width = lc.ViewPercent{100}})
-			}
-
-			element_close(ui_ctx) // Close Sidebar
+			element_close(ui_ctx)
 		}
+		element_close(ui_ctx) // Close Grid
 
-		// ---------------------------------------------------------
-		// 2. MAIN CONTENT AREA
-		// ---------------------------------------------------------
-		{
-			element_open(
-				ui_ctx,
-				Element {
-					box = {width = lc.Grow{1}, height = lc.ViewPercent{100}, direction = .COLUMN},
-				},
-			)
+		element_close(ui_ctx) // Close Main Content
+		element_close(ui_ctx) // Close Root
 
-			// TOP BAR
-			{
-				element_open(
-					ui_ctx,
-					Element {
-						box = {
-							width           = lc.ViewPercent{100},
-							height          = lc.Fixed{60},
-							direction       = .ROW,
-							align_items     = .CENTER,
-							justify_content = .SPACE_BETWEEN,
-							border          = {0, 0, 2, 0}, // 2px Bottom Border only
-							padding         = {0, 30, 0, 30},
-						},
-						classes = {"topbar"},
-					},
-				)
-
-				ui_text(ui_ctx, "Overview", nil, Style{text_color = rl.DARKGRAY})
-				ui_text(
-					ui_ctx,
-					"Welcome, Admin",
-					nil,
-					Style{text_color = rl.GRAY, text_align = .RIGHT},
-				)
-
-				element_close(ui_ctx) // Close Top Bar
-			}
-
-			// DASHBOARD CONTENT AREA (Column)
-			{
-				element_open(
-					ui_ctx,
-					Element {
-						box = {
-							width = lc.ViewPercent{100},
-							height = lc.Grow{1},
-							direction = .COLUMN,
-							padding = {30, 30, 30, 30},
-							gap = 20,
-						},
-					},
-				)
-
-				// Hero Card (Uses raw element_open because it dynamically Grows/Shrinks)
-				element_open(
-					ui_ctx,
-					Element {
-						box = {
-							width  = lc.Percent{100},
-							height = lc.Fit(true), // Dynamically shrinks/grows to fit the screen
-							border = {2, 2, 2, 2},
-							wrap   = true,
-							// overflow_y = .HIDDEN, // Safely clips text if the screen is too small
-							text   = "This is a hero card showcasing dynamic word wrapping.\n\nThe layout core automatically calculates the height of this text block based on the parent's width constraints. Because this card uses `lc.ViewPercent{100}`, resizing the window will seamlessly reflow this text and expand or contract the card's height.",
-						},
-						classes = {"card"},
-						style = Style{text_color = rl.DARKGRAY, text_align = .LEFT},
-					},
-				)
-				element_close(ui_ctx)
-
-				// Metrics Grid (Wraps)
-				element_open(
-					ui_ctx,
-					Element {
-						box = {
-							width     = lc.Percent{100},
-							height    = lc.Fit(true), // Fits tightly around the wrapping cards
-							direction = .ROW,
-							wrap      = true,
-							gap       = 20,
-						},
-					},
-				)
-
-				// Flexible Metric Cards
-				metrics := []string {
-					"Total Views\n\n14,092",
-					"Active Users\n\n1,042",
-					"Conversion\n\n4.2%",
-				}
-
-				for metric in metrics {
-					element_open(
-						ui_ctx,
-						Element {
-							box = {
-								width = lc.Grow{1},
-								min_width = lc.Fixed{200},
-								height = lc.Fit(true),
-								border = {1, 1, 1, 1},
-								text = metric,
-							},
-							classes = {"card"},
-							style = Style {
-								text_align = .CENTER,
-								border_color = rl.Color{200, 200, 200, 255},
-							},
-						},
-					)
-					element_close(ui_ctx)
-				}
-
-				element_close(ui_ctx) // Close Metrics Grid
-				element_close(ui_ctx) // Close Dashboard Content Area
-			}
-
-			element_close(ui_ctx) // Close Main Content Area
-		}
-
-		element_close(ui_ctx) // Close Root Container
-
-		// Resolves the math and draws the frame
-		ui_end_frame(ui_ctx)
-	}
