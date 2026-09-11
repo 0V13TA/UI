@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:hash"
 import "core:math"
 import "core:strings"
+import "core:unicode/utf8"
 import sdl "vendor:sdl2"
 import "vendor:sdl2/ttf"
 
@@ -12,6 +13,11 @@ Text_Align :: enum {
 	LEFT,
 	RIGHT,
 	CENTER,
+}
+Text_Wrap :: enum {
+	NONE,
+	WORD,
+	LETTER,
 }
 Cached_Texture :: struct {
 	texture: ^sdl.Texture,
@@ -25,9 +31,11 @@ Class :: distinct u32
 
 Style :: struct {
 	bg_color:        Maybe(Color),
+	opacity:         Maybe(f32),
 
 	//
 	text_color:      Maybe(Color),
+	text_wrap:       Maybe(Text_Wrap),
 	text_align:      Maybe(Text_Align),
 
 	// Typography
@@ -90,10 +98,12 @@ Element :: struct {
 	resolved_font_style:    ttf.StyleFlag,
 
 	// Text
+	resolved_text_wrap:     Text_Wrap,
 	resolved_text_color:    Color,
 	resolved_text_align:    Text_Align,
 
 	// Border
+	resolved_opacity:       f32,
 	resolved_border_color:  Color,
 	resolved_border_radius: [4]f32,
 
@@ -278,14 +288,19 @@ ui_text_width :: proc(box: ^lc.Box, text: string) -> f32 {
 	el := (^Element)(box.user_data)
 	if el == nil || el.resolved_font == nil do return 0
 
-	c_str := fmt.ctprintf("%s", text)
-	w, h: i32
-	ttf.SizeUTF8(el.resolved_font, c_str, &w, &h)
+	max_w: f32 = 0.0
+	explicit_lines := strings.split(text, "\n", context.temp_allocator)
 
-	// Optional: Add custom letter spacing if your UI demands it
-	// spacing := f32(max(len(text) - 1, 0)) * el.resolved_font_spacing
+	for line in explicit_lines {
+		if len(line) == 0 do continue
+		c_str := fmt.ctprintf("%s", line)
+		w, h: i32
+		ttf.SizeUTF8(el.resolved_font, c_str, &w, &h)
 
-	return f32(w)
+		if f32(w) > max_w do max_w = f32(w)
+	}
+
+	return max_w
 }
 
 @(private)
@@ -307,21 +322,43 @@ ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 		total_lines += 1.0
 		cursor_x: f32 = 0.0
 
-		words := strings.split(explicit_line, " ", context.temp_allocator)
-		for word in words {
-			word_width: f32 = 0.0
-			if len(word) > 0 {
-				c_word := fmt.ctprintf("%s", word)
-				w, h: i32
-				ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
-				word_width = f32(w)
-			}
+		if el.resolved_text_wrap == .LETTER {
+			runes := utf8.string_to_runes(explicit_line, context.temp_allocator)
+			for r in runes {
+				buf: [5]u8
+				bytes, n := utf8.encode_rune(r)
+				for j in 0 ..< n do buf[j] = bytes[j]
+				buf[n] = 0
 
-			if box.wrap && cursor_x + word_width > max_width && cursor_x > 0 {
-				cursor_x = 0
-				total_lines += 1.0
+				w, h: i32
+				ttf.SizeUTF8(el.resolved_font, cstring(&buf[0]), &w, &h)
+				rune_width := f32(w)
+
+				if cursor_x + rune_width > max_width && cursor_x > 0 {
+					cursor_x = 0
+					total_lines += 1.0
+				}
+				cursor_x += rune_width
 			}
-			cursor_x += word_width + space_width
+		} else {
+			words := strings.split(explicit_line, " ", context.temp_allocator)
+			for word in words {
+				word_width: f32 = 0.0
+				if len(word) > 0 {
+					c_word := fmt.ctprintf("%s", word)
+					w, h: i32
+					ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
+					word_width = f32(w)
+
+					if el.resolved_text_wrap == .WORD &&
+					   cursor_x + word_width > max_width &&
+					   cursor_x > 0 {
+						cursor_x = 0
+						total_lines += 1.0
+					}
+				}
+				cursor_x += word_width + space_width
+			}
 		}
 	}
 
@@ -350,6 +387,9 @@ default_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 		el.resolved_text_color = parent.resolved_text_color
 		el.resolved_text_align = parent.resolved_text_align
 
+		el.resolved_text_wrap = parent.resolved_text_wrap
+		el.resolved_opacity = parent.resolved_opacity
+
 		el.resolved_font_size = parent.resolved_font_size
 		el.resolved_font_spacing = parent.resolved_font_spacing
 		el.resolved_font = parent.resolved_font
@@ -362,6 +402,9 @@ default_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 		el.resolved_font_size = 16.0
 		el.resolved_font_spacing = 1.0
 		el.resolved_font_style = {}
+
+		el.resolved_text_wrap = .WORD
+		el.resolved_opacity = 1.0
 
 		DEFAULT_FONT_HASH := hash.fnv32(transmute([]byte)string("default_font"))
 		el.resolved_font = ctx.fonts[DEFAULT_FONT_HASH]
@@ -386,9 +429,17 @@ apply_style_block :: proc(el: ^Element, s: Style, ctx: ^UI_Context) {
 		el.resolved_border_radius = v
 	}
 
+	if v, ok := s.opacity.?; ok {
+		el.resolved_opacity = v
+	}
+
 	// ------------------------------------------------------------
 	// Typography
 	// ------------------------------------------------------------
+
+	if v, ok := s.text_wrap.?; ok {
+		el.resolved_text_wrap = v
+	}
 
 	if v, ok := s.text_color.?; ok {
 		el.resolved_text_color = v
@@ -567,27 +618,23 @@ render_box :: proc(
 	box: ^lc.Box,
 	current_clip: ^Maybe(lc.Rect),
 ) {
-	// 1. Snapshot the state we inherited from the caller
 	previous_clip := current_clip^
 
-	// 2. Apply this box's required clip (pass the renderer!)
 	set_clip(renderer, current_clip, box.clip_rect)
 
 	if box.user_data == nil do return
 	el := (^Element)(box.user_data)
 
-	// 3. Draw Background and Borders using our SDL2 helper
+	bg_color := el.resolved_bg_color
+	bg_color[3] *= el.resolved_opacity
+
+	border_color := el.resolved_border_color
+	border_color[3] *= el.resolved_opacity
+
 	bounds := sdl.Rect{i32(box.x), i32(box.y), i32(box.computed_width), i32(box.computed_height)}
 	sdl.SetRenderDrawBlendMode(renderer, .BLEND) // Ensure alpha blending is active
 
-	draw_ui_box(
-		renderer,
-		bounds,
-		el.resolved_bg_color,
-		el.resolved_border_color,
-		box.border,
-		el.resolved_border_radius,
-	)
+	draw_ui_box(renderer, bounds, bg_color, border_color, box.border, el.resolved_border_radius)
 
 	// 4. Draw Cached Text
 	if text, ok := box.text.?; ok {
@@ -612,56 +659,55 @@ render_box :: proc(
 			explicit_lines := strings.split(text, "\n", context.temp_allocator)
 
 			for explicit_line in explicit_lines {
-				words := strings.split(explicit_line, " ", context.temp_allocator)
-				start_idx := 0
+				if el.resolved_text_wrap == .LETTER {
+					runes := utf8.string_to_runes(explicit_line, context.temp_allocator)
+					start_idx := 0
+					for start_idx < len(runes) {
+						end_idx := start_idx
+						line_width: f32 = 0.0
 
-				for start_idx < len(words) {
-					end_idx := start_idx
-					line_width: f32 = 0.0
+						// 1. Measure how many runes fit on this line
+						for end_idx < len(runes) {
+							buf: [5]u8
+							bytes, n := utf8.encode_rune(runes[end_idx])
+							for j in 0 ..< n do buf[j] = bytes[j]
+							buf[n] = 0
 
-					// Measure how many words fit on this line
-					for end_idx < len(words) {
-						word_width: f32 = 0.0
-
-						// Skip measurement for empty strings caused by double spaces
-						if len(words[end_idx]) > 0 {
-							c_word := fmt.ctprintf("%s", words[end_idx])
 							w, h: i32
-							ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
-							word_width = f32(w)
+							ttf.SizeUTF8(el.resolved_font, cstring(&buf[0]), &w, &h)
+							rune_width := f32(w)
+
+							if line_width + rune_width > inner_width && end_idx > start_idx {
+								break
+							}
+							line_width += rune_width
+							end_idx += 1
 						}
 
-						if box.wrap &&
-						   end_idx > start_idx &&
-						   line_width + word_width > inner_width {
-							break
+						// 2. Align the line horizontally
+						start_x := text_x
+						if el.resolved_text_align == .CENTER {
+							start_x += max((inner_width - line_width) / 2.0, 0.0)
+						} else if el.resolved_text_align == .RIGHT {
+							start_x += max(inner_width - line_width, 0.0)
 						}
-						line_width += word_width + space_width
-						end_idx += 1
-					}
+						cursor_x := start_x
 
-					if end_idx > start_idx do line_width -= space_width
+						// 3. Draw the cached runes
+						for i in start_idx ..< end_idx {
+							buf: [5]u8
+							bytes, n := utf8.encode_rune(runes[i])
+							for j in 0 ..< n do buf[j] = bytes[j]
+							buf[n] = 0
+							rune_str := string(buf[:n])
 
-					// Align the line horizontally
-					start_x := text_x
-					if el.resolved_text_align == .CENTER {
-						start_x += max((inner_width - line_width) / 2.0, 0.0)
-					} else if el.resolved_text_align == .RIGHT {
-						start_x += max(inner_width - line_width, 0.0)
-					}
-					cursor_x := start_x
-
-					// Draw the cached words
-					for i in start_idx ..< end_idx {
-						if len(words[i]) > 0 {
 							cached := get_word_texture(
 								ui_ctx,
 								renderer,
-								words[i],
+								rune_str,
 								el.resolved_font,
 								el.resolved_text_color,
 							)
-
 							if cached.texture != nil {
 								dest := sdl.Rect {
 									i32(cursor_x),
@@ -669,15 +715,83 @@ render_box :: proc(
 									cached.width,
 									cached.height,
 								}
+								sdl.SetTextureAlphaMod(
+									cached.texture,
+									u8(el.resolved_opacity * 255.0),
+								)
 								sdl.RenderCopy(renderer, cached.texture, nil, &dest)
+								cursor_x += f32(cached.width)
 							}
-							cursor_x += f32(cached.width)
 						}
-						cursor_x += space_width
+						cursor_y += line_height
+						start_idx = end_idx
 					}
+				} else {
+					words := strings.split(explicit_line, " ", context.temp_allocator)
+					start_idx := 0
+					for start_idx < len(words) {
+						end_idx := start_idx
+						line_width: f32 = 0.0
 
-					cursor_y += line_height
-					start_idx = end_idx
+						// Measure how many words fit on this line
+						for end_idx < len(words) {
+							word_width: f32 = 0.0
+							if len(words[end_idx]) > 0 {
+								c_word := fmt.ctprintf("%s", words[end_idx])
+								w, h: i32
+								ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
+								word_width = f32(w)
+							}
+							if el.resolved_text_wrap == .WORD &&
+							   end_idx > start_idx &&
+							   line_width + word_width > inner_width {
+								break
+							}
+							line_width += word_width + space_width
+							end_idx += 1
+						}
+
+						if end_idx > start_idx do line_width -= space_width
+
+						// Align the line horizontally
+						start_x := text_x
+						if el.resolved_text_align == .CENTER {
+							start_x += max((inner_width - line_width) / 2.0, 0.0)
+						} else if el.resolved_text_align == .RIGHT {
+							start_x += max(inner_width - line_width, 0.0)
+						}
+						cursor_x := start_x
+
+						// Draw the cached words
+						for i in start_idx ..< end_idx {
+							if len(words[i]) > 0 {
+								cached := get_word_texture(
+									ui_ctx,
+									renderer,
+									words[i],
+									el.resolved_font,
+									el.resolved_text_color,
+								)
+								if cached.texture != nil {
+									dest := sdl.Rect {
+										i32(cursor_x),
+										i32(cursor_y),
+										cached.width,
+										cached.height,
+									}
+									sdl.SetTextureAlphaMod(
+										cached.texture,
+										u8(el.resolved_opacity * 255.0),
+									)
+									sdl.RenderCopy(renderer, cached.texture, nil, &dest)
+									cursor_x += f32(cached.width)
+								}
+							}
+							cursor_x += space_width
+						}
+						cursor_y += line_height
+						start_idx = end_idx
+					}
 				}
 			}
 		}

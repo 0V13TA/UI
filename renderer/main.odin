@@ -1,5 +1,6 @@
 package renderer
 
+import "../events"
 import lc "../layout_calc"
 import "core:fmt"
 import "core:hash"
@@ -39,7 +40,7 @@ main :: proc() {
 	defer sdl.DestroyRenderer(renderer)
 
 	// 2. Setup the UI Context
-	font := ttf.OpenFont("../font/CaacupeOne-Regular.ttf", 32)
+	font := ttf.OpenFont("../font/Wallpoet-Regular.ttf", 32)
 	if font == nil {
 		fmt.printfln("Failed to load font: %s", ttf.GetError())
 		return
@@ -49,6 +50,16 @@ main :: proc() {
 	ui_ctx := ui_context_create(800, 600)
 	defer ui_context_destroy(ui_ctx)
 
+	ev_ctx := events.Event_Context {
+		layout             = ui_ctx.layout,
+		listeners          = make(map[lc.Box_ID]events.Event_Callbacks),
+		clicked_this_frame = make(map[lc.Box_ID]bool),
+	}
+	defer {
+		delete(ev_ctx.listeners)
+		delete(ev_ctx.clicked_this_frame)
+	}
+
 	// FIX 1: Explicitly cast the untyped string literal to 'string' before transmuting
 	font_hash := hash.fnv32(transmute([]byte)(string("default_font")))
 	ui_ctx.fonts[font_hash] = font
@@ -56,10 +67,12 @@ main :: proc() {
 	running := true
 	for running {
 		free_all(context.temp_allocator)
+		events.begin_frame(&ev_ctx) // Clear the click map
 
 		// Drain OS Event Queue
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
+			events.pump_events(&ev_ctx, &event)
 			#partial switch event.type {
 			case .QUIT:
 				running = false
@@ -107,11 +120,14 @@ main :: proc() {
 					element_open(
 						ui_ctx,
 						{
-							text = "DASHBOARD",
+							text = "DASHBOARD is like fis fl",
 							style = {
 								font_size = 24,
-								text_color = Color{1, 1, 1, 1},
-								margin = space(0, 0, 30, 0),
+								text_wrap = .LETTER,
+								padding = space(30),
+								width = lc.Percent{100},
+								text_color = Color{1, 0, 1, 1},
+								bg_color = Color{1, 1, 1, 1.0},
 							},
 						},
 					)
@@ -144,7 +160,11 @@ main :: proc() {
 						ui_ctx,
 						{
 							text = "Weekly Analytics",
-							style = {font_size = 32, text_color = Color{0.1, 0.1, 0.1, 1.0}},
+							style = {
+								width = lc.Fit(true),
+								font_size = 32,
+								text_color = Color{0.1, 0.1, 0.1, 1.0},
+							},
 						},
 					)
 					defer element_close(ui_ctx)
@@ -171,10 +191,11 @@ main :: proc() {
 							{
 								text = metric,
 								style = {
+									text_wrap     = .LETTER,
 									width         = lc.Grow{1}, // Stretch to fill row
 									min_width     = lc.Fixed{200}, // Force wrap if squeezed
-									height        = lc.Fixed{120},
-									padding       = space(25),
+									height        = lc.Fit(true),
+									padding       = space(15),
 									bg_color      = Color{1, 1, 1, 1},
 									border_radius = space(12),
 									border        = space(1),
@@ -188,11 +209,18 @@ main :: proc() {
 					}
 
 				}
+
+				if button(ui_ctx, &ev_ctx, "Save Settings") {
+					fmt.println("Writing to disk!")
+					// Run your save logic here directly!
+				}
+
 			}
 		}
 
+		sdl.SetRenderDrawColor(renderer, 20, 20, 20, 255)
+		sdl.RenderClear(renderer)
 		ui_end_frame(ui_ctx, renderer)
-
 		sdl.RenderPresent(renderer)
 	}
 }
