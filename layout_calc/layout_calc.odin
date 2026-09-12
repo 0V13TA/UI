@@ -18,15 +18,18 @@ Layout_Chained_Arena :: struct {
 }
 
 Layout_Context :: struct {
-	arena:            Layout_Chained_Arena,
+	arenas:           [2]Layout_Chained_Arena,
+	active_idx:       u8, // Toggles between 0 and 1
 	screen_width:     f32,
 	screen_height:    f32,
 	text_width_func:  proc(box: ^Box, text: string) -> f32,
 	text_height_func: proc(box: ^Box, text: string, max_width: f32) -> f32,
-	all_boxes:        map[Box_ID]^Box,
 	parent_stack:     [dynamic]^Box,
 	draw_buffer:      [dynamic]^Box, // Sorted buffer by depth
+	all_boxes:        map[Box_ID]^Box,
 	root_boxes:       [dynamic]^Box, // Need this because defer is block scope
+	prev_all_boxes:   map[Box_ID]^Box,
+	prev_root_boxes:  [dynamic]^Box,
 }
 
 Direction :: enum {
@@ -328,14 +331,12 @@ resolve_bound :: proc(bound: Bound_Sizing, viewport_dim: f32) -> f32 {
 }
 
 // --- Tree Building ---
-
 new_box_from_config :: proc(
 	ctx: ^Layout_Context,
 	box_config: Box,
 	loc := #caller_location,
 ) -> ^Box {
-	arena_alloc := chained_arena_allocator(&ctx.arena)
-
+	arena_alloc := chained_arena_allocator(&ctx.arenas[ctx.active_idx])
 	box, err := new(Box, arena_alloc)
 	if err != nil do panic("Failed to allocate memory")
 
@@ -344,7 +345,6 @@ new_box_from_config :: proc(
 		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
 		box.id = Box_ID(hash.fnv32a(transmute([]byte)loc_str))
 	}
-
 	box.children = make([dynamic]^Box, 0, 4, arena_alloc)
 	box.computed_width = -1
 	box.computed_height = -1
@@ -1256,47 +1256,60 @@ layout_context_create :: proc(
 	allocator := context.allocator,
 ) -> ^Layout_Context {
 	ctx := new(Layout_Context, allocator)
-
-	// Initialize the internal chained arena
-	chained_arena_init(&ctx.arena, 4096 * 4096, allocator)
-
 	ctx.text_width_func = text_width
 	ctx.text_height_func = text_height
 	ctx.screen_width = scr_width
 	ctx.screen_height = scr_height
 
-	// Persistent arrays and maps use the context's backing allocator
-	// to avoid being completely destroyed every frame
+	for i in 0 ..< 2 {
+		chained_arena_init(&ctx.arenas[i], 4096 * 4096, allocator)
+	}
+
 	ctx.all_boxes = make(map[Box_ID]^Box, allocator)
+	ctx.prev_all_boxes = make(map[Box_ID]^Box, allocator)
+	ctx.root_boxes = make([dynamic]^Box, allocator)
+	ctx.prev_root_boxes = make([dynamic]^Box, allocator)
+
 	ctx.parent_stack = make([dynamic]^Box, allocator)
 	ctx.draw_buffer = make([dynamic]^Box, allocator)
-	ctx.root_boxes = make([dynamic]^Box, allocator)
-
 	return ctx
 }
 
 layout_context_destroy :: proc(ctx: ^Layout_Context) {
 	if ctx == nil do return
+	backing_alloc := ctx.arenas[0].backing_allocator
 
-	chained_arena_destroy(&ctx.arena)
-
-	backing_alloc := ctx.arena.backing_allocator
+	chained_arena_destroy(&ctx.arenas[0])
+	chained_arena_destroy(&ctx.arenas[1])
 	delete(ctx.all_boxes)
+	delete(ctx.prev_all_boxes)
+	delete(ctx.root_boxes)
+	delete(ctx.prev_root_boxes)
 	delete(ctx.parent_stack)
 	delete(ctx.draw_buffer)
-	delete(ctx.root_boxes)
-
 	free(ctx, backing_alloc)
 }
 
 layout_reset :: proc(ctx: ^Layout_Context) {
-	arena_alloc := chained_arena_allocator(&ctx.arena)
+	// 1. Swap Arenas
+	ctx.active_idx = 1 - ctx.active_idx
+	arena_alloc := chained_arena_allocator(&ctx.arenas[ctx.active_idx])
 	free_all(arena_alloc)
 
+	// 2. Swap Maps & Arrays
+	tmp_map := ctx.all_boxes
+	ctx.all_boxes = ctx.prev_all_boxes
+	ctx.prev_all_boxes = tmp_map
 	clear(&ctx.all_boxes)
+
+	tmp_roots := ctx.root_boxes
+	ctx.root_boxes = ctx.prev_root_boxes
+	ctx.prev_root_boxes = tmp_roots
+	clear(&ctx.root_boxes)
+
+	// 3. Clear Transient State
 	clear(&ctx.parent_stack)
 	clear(&ctx.draw_buffer)
-	clear(&ctx.root_boxes)
 }
 
 begin_layout :: proc(ctx: ^Layout_Context) {

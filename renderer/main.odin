@@ -1,5 +1,6 @@
 package renderer
 
+import anim "../animations"
 import "../events"
 import lc "../layout_calc"
 import "core:fmt"
@@ -14,6 +15,8 @@ metrics := []string {
 	"Conversion\n4.2%",
 	"Revenue\n$8,430",
 }
+printed := false
+
 
 main :: proc() {
 	// 1. Initialize SDL & TTF
@@ -40,12 +43,26 @@ main :: proc() {
 	defer sdl.DestroyRenderer(renderer)
 
 	// 2. Setup the UI Context
-	font := ttf.OpenFont("../font/Wallpoet-Regular.ttf", 32)
+	font := ttf.OpenFont("font/Wallpoet-Regular.ttf", 32)
 	if font == nil {
 		fmt.printfln("Failed to load font: %s", ttf.GetError())
 		return
 	}
 	defer ttf.CloseFont(font)
+
+	anim_ctx := anim.Context {
+		states = make(map[lc.Box_ID]^anim.Retained_State),
+	}
+	defer {
+		for _, s in anim_ctx.states do free(s)
+		delete(anim_ctx.states)
+		delete(anim_ctx.engine.tweens)
+	}
+
+	// ADD THIS: Define the target class
+	METRIC_CARD_CLASS := Class_Name("metric_card")
+	DASHBOARD_ID := lc.ID("dashboard")
+	WEEKLY_ANALYTICS := lc.ID("Weekly Analytics")
 
 	ui_ctx := ui_context_create(800, 600)
 	defer ui_context_destroy(ui_ctx)
@@ -83,6 +100,8 @@ main :: proc() {
 		win_w, win_h: i32
 		sdl.GetWindowSize(window, &win_w, &win_h)
 
+		// Create the timeline
+		tl := timeline(ui_ctx, &anim_ctx)
 		ui_begin_frame(ui_ctx, renderer, win_w, win_h)
 
 		{
@@ -121,6 +140,7 @@ main :: proc() {
 						ui_ctx,
 						{
 							text = "DASHBOARD is like fis fl",
+							id = DASHBOARD_ID,
 							style = {
 								font_size = 24,
 								text_wrap = .LETTER,
@@ -150,6 +170,7 @@ main :: proc() {
 							direction = .COLUMN,
 							padding = space(40),
 							gap = 30,
+							overflow_y = .SCROLL,
 						},
 					},
 				)
@@ -159,6 +180,7 @@ main :: proc() {
 					element_open(
 						ui_ctx,
 						{
+							id = WEEKLY_ANALYTICS,
 							text = "Weekly Analytics",
 							style = {
 								width = lc.Fit(true),
@@ -168,6 +190,43 @@ main :: proc() {
 						},
 					)
 					defer element_close(ui_ctx)
+				}
+
+				{
+					element_open(
+						ui_ctx,
+						{
+							text = "Recent Transactions",
+							style = {
+								font_size = 24,
+								text_color = Color{0.1, 0.1, 0.1, 1.0},
+								margin = space_4(20, 0, 10, 0),
+							},
+						},
+					)
+					defer element_close(ui_ctx)
+				}
+
+				for i in 1 ..= 15 {
+					item_text := fmt.tprintf("Transaction #%04d - Payment Processed", i)
+					element_open(
+						ui_ctx,
+						{
+							text = item_text,
+							style = {
+								width = lc.Percent{100},
+								height = lc.Fit(true),
+								padding = space(20),
+								bg_color = Color{1, 1, 1, 1},
+								border_radius = space(8),
+								border = space(1),
+								border_color = Color{0.85, 0.85, 0.85, 1.0},
+								text_color = Color{0.3, 0.3, 0.3, 1.0},
+								font_size = 18,
+							},
+						},
+					)
+					element_close(ui_ctx)
 				}
 
 				{
@@ -186,10 +245,13 @@ main :: proc() {
 					defer element_close(ui_ctx)
 
 					for metric in metrics {
+						unique_id := lc.Box_ID(hash.fnv32(transmute([]byte)metric))
 						element_open(
 							ui_ctx,
 							{
+								classes = {METRIC_CARD_CLASS},
 								text = metric,
+								id = unique_id,
 								style = {
 									text_wrap     = .LETTER,
 									width         = lc.Grow{1}, // Stretch to fill row
@@ -202,6 +264,7 @@ main :: proc() {
 									border_color  = Color{0.85, 0.85, 0.85, 1.0},
 									text_color    = Color{0.2, 0.2, 0.2, 1.0},
 									font_size     = 20,
+									opacity       = 1,
 								},
 							},
 						)
@@ -211,16 +274,49 @@ main :: proc() {
 				}
 
 				if button(ui_ctx, &ev_ctx, "Save Settings") {
-					fmt.println("Writing to disk!")
-					// Run your save logic here directly!
+					fmt.println("Playing Timeline Sequence!")
+
+
+					// 1. Fade the dashboard title out
+					tl_to(&tl, DASHBOARD_ID, {duration = 0.3, opacity = 0.0})
+
+					// 2. Stagger the metric cards out (Starts 0.1s BEFORE the title finishes fading)
+					tl_to(
+						&tl,
+						METRIC_CARD_CLASS,
+						{duration = 0.4, stagger = 0.1, opacity = 0.0},
+						.SEQUENCE,
+						-0.1,
+					)
+
+					// 3. Fade the "Weekly Analytics" text out (Starts at the EXACT same time the cards started)
+					tl_to(&tl, WEEKLY_ANALYTICS, {duration = 0.4, opacity = 0.0}, .WITH_PREV)
 				}
 
 			}
 		}
+		uncomputed_roots := ui_end_frame(ui_ctx)
+		tl_play(&tl)
+
+		anim.update(&anim_ctx.engine, 0.016) // Assuming 60fps dt
+		anim.process_lifecycles(&anim_ctx, ui_ctx.layout)
+
+		visual :: proc(user_data: rawptr, state: ^anim.Retained_State) {
+			el := (^Element)(user_data)
+			if el == nil do return
+			el.resolved_opacity = state.opacity
+		}
+
+		for root in uncomputed_roots {
+			anim.apply_structural(&anim_ctx, root)
+			anim.apply_visual(&anim_ctx, root, visual)
+		}
 
 		sdl.SetRenderDrawColor(renderer, 20, 20, 20, 255)
 		sdl.RenderClear(renderer)
-		ui_end_frame(ui_ctx, renderer)
+
+		render_tree(ui_ctx, renderer, uncomputed_roots)
+
 		sdl.RenderPresent(renderer)
 	}
 }

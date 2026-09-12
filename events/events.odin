@@ -62,7 +62,6 @@ UI_Event :: struct {
 }
 
 begin_frame :: proc(ctx: ^Event_Context) {
-	clear(&ctx.listeners)
 	clear(&ctx.clicked_this_frame)
 }
 

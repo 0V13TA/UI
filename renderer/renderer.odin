@@ -805,6 +805,21 @@ render_box :: proc(
 	set_clip(renderer, current_clip, previous_clip)
 }
 
+render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^lc.Box) {
+	lc.end_layout(ctx.layout)
+
+
+	current_clip: Maybe(lc.Rect) = nil
+	for root_box in root_boxes {
+		render_box(ctx, renderer, root_box, &current_clip)
+	}
+
+	if current_clip != nil {
+		sdl.RenderSetClipRect(renderer, nil)
+	}
+}
+
+
 ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx := new(UI_Context)
 
@@ -844,22 +859,11 @@ ui_begin_frame :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, screen_w, scre
 	lc.begin_layout(ctx.layout)
 }
 
-ui_end_frame :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer) {
-	lc.end_layout(ctx.layout)
-
-	// 1. Initialize an empty clip state for the root
-	current_clip: Maybe(lc.Rect) = nil
-
-	// 2. Recursively render the tree
-	for root_box in ctx.layout.root_boxes {
-		render_box(ctx, renderer, root_box, &current_clip)
-	}
-
-	// 3. Clear any lingering hardware clip masks before the next frame
-	if current_clip != nil {
-		sdl.RenderSetClipRect(renderer, nil)
-	}
+ui_end_frame :: proc(ctx: ^UI_Context) -> []^lc.Box {
+	return ctx.layout.root_boxes[:] // Return the built tree for animations to use
 }
+
+
 element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) {
 	// Allocate the element for this frame
 	el := new(Element, context.temp_allocator)
