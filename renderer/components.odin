@@ -44,3 +44,36 @@ button :: proc(
 
 	return is_clicked
 }
+
+scroll_begin :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	id: lc.Box_ID = 0,
+	user_style := Style{},
+	salt := "",
+	loc := #caller_location,
+) {
+	// Generate a stable ID if an explicit one wasn't provided
+	final_id := id
+	if final_id == 0 {
+		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+		final_id = lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+	}
+
+	// Force vertical scrolling on the style
+	final_style := user_style
+	final_style.overflow_y = .SCROLL
+
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = final_id, offset_y = ev_ctx.scroll_offsets[final_id]},
+			style = final_style,
+		},
+		loc,
+	)
+}
+
+scroll_end :: proc(ctx: ^UI_Context) {
+	element_close(ctx)
+}

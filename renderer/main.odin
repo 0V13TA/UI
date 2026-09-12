@@ -63,6 +63,7 @@ main :: proc() {
 	METRIC_CARD_CLASS := Class_Name("metric_card")
 	DASHBOARD_ID := lc.ID("dashboard")
 	WEEKLY_ANALYTICS := lc.ID("Weekly Analytics")
+	SCROLL_CONTAINER_ID := lc.ID("main_scroll_container")
 
 	ui_ctx := ui_context_create(800, 600)
 	defer ui_context_destroy(ui_ctx)
@@ -71,10 +72,12 @@ main :: proc() {
 		layout             = ui_ctx.layout,
 		listeners          = make(map[lc.Box_ID]events.Event_Callbacks),
 		clicked_this_frame = make(map[lc.Box_ID]bool),
+		scroll_offsets     = make(map[lc.Box_ID]f32), // Init table
 	}
 	defer {
 		delete(ev_ctx.listeners)
 		delete(ev_ctx.clicked_this_frame)
+		delete(ev_ctx.scroll_offsets) // Clean up
 	}
 
 	// FIX 1: Explicitly cast the untyped string literal to 'string' before transmuting
@@ -161,20 +164,19 @@ main :: proc() {
 			}
 
 			{
-				element_open(
+				scroll_begin(
 					ui_ctx,
-					{
-						style = {
-							width = lc.Grow{1},
-							height = lc.Percent{100},
-							direction = .COLUMN,
-							padding = space(40),
-							gap = 30,
-							overflow_y = .SCROLL,
-						},
+					&ev_ctx,
+					id = SCROLL_CONTAINER_ID,
+					user_style = {
+						width = lc.Grow{1},
+						height = lc.Percent{100},
+						direction = .COLUMN,
+						padding = space(40),
+						gap = 30,
 					},
 				)
-				defer element_close(ui_ctx)
+				defer scroll_end(ui_ctx)
 
 				{
 					element_open(
@@ -207,11 +209,13 @@ main :: proc() {
 					defer element_close(ui_ctx)
 				}
 
-				for i in 1 ..= 15 {
+				for i in 1 ..= 20 {
 					item_text := fmt.tprintf("Transaction #%04d - Payment Processed", i)
+					unique_id := lc.Box_ID(hash.fnv32(transmute([]byte)item_text))
 					element_open(
 						ui_ctx,
 						{
+							id = unique_id,
 							text = item_text,
 							style = {
 								width = lc.Percent{100},

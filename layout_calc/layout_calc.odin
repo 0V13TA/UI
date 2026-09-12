@@ -345,6 +345,12 @@ new_box_from_config :: proc(
 		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
 		box.id = Box_ID(hash.fnv32a(transmute([]byte)loc_str))
 	}
+
+	if prev_box, ok := ctx.prev_all_boxes[box.id]; ok {
+		box.offset_x = prev_box.offset_x
+		box.offset_y = prev_box.offset_y
+	}
+
 	box.children = make([dynamic]^Box, 0, 4, arena_alloc)
 	box.computed_width = -1
 	box.computed_height = -1

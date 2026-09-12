@@ -1,6 +1,7 @@
 package events
 
 import lc "../layout_calc"
+import "core:fmt"
 import "core:strings"
 import sdl "vendor:sdl2"
 
@@ -39,6 +40,7 @@ Event_Context :: struct {
 	pressed_id:         lc.Box_ID, // element that received pointer-down
 	focused_id:         lc.Box_ID, // element receiving keyboard input
 	clicked_this_frame: map[lc.Box_ID]bool,
+	scroll_offsets:     map[lc.Box_ID]f32, // Add persistent side table
 }
 
 UI_Event :: struct {
@@ -187,12 +189,21 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 
 	case .MOUSEWHEEL:
 		if hovered_box != nil {
+			dx := f32(e.wheel.x)
+			dy := f32(e.wheel.y)
+
+			// Handle OS-level inverted scrolling (e.g. macOS "Natural" scrolling)
+			if e.wheel.direction == u32(sdl.MouseWheelDirection.FLIPPED) {
+				dx *= -1.0
+				dy *= -1.0
+			}
+
 			ui_ev := UI_Event {
 				target    = current_hovered_id,
 				mouse_x   = f32(mx),
 				mouse_y   = f32(my),
-				scroll_dx = f32(e.wheel.x),
-				scroll_dy = f32(e.wheel.y),
+				scroll_dx = dx,
+				scroll_dy = dy,
 			}
 			bubble_event(ctx, hovered_box, .Scroll, &ui_ev)
 		}
@@ -240,16 +251,19 @@ bubble_event :: proc(
 		// 1. Native Scroll Interception (Smart Nested Scrolling)
 		if event_type == .Scroll && current.overflow_y == .SCROLL {
 			max_scroll := max(current.scroll_height - current.computed_height, 0.0)
+
 			old_offset := current.offset_y
+			new_offset := clamp(current.offset_y - (e.scroll_dy * 50.0), 0.0, max_scroll)
 
-			current.offset_y -= e.scroll_dy * 20.0
-			current.offset_y = clamp(current.offset_y, 0.0, max_scroll)
+			// Persist into the event context
+			ctx.scroll_offsets[current.id] = new_offset
+			current.offset_y = new_offset
 
-			// Only consume if the scroll actually moved this container!
-			if current.offset_y != old_offset {
+			if new_offset != old_offset {
 				e.stop_propagation = true
 			}
 		}
+
 		if event_type == .Click {
 			ctx.clicked_this_frame[current.id] = true
 		}
