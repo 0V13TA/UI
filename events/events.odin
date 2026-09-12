@@ -1,7 +1,6 @@
 package events
 
 import lc "../layout_calc"
-import "core:fmt"
 import "core:strings"
 import sdl "vendor:sdl2"
 
@@ -34,13 +33,20 @@ Event_Callbacks :: struct {
 }
 
 Event_Context :: struct {
-	layout:             ^lc.Layout_Context,
-	listeners:          map[lc.Box_ID]Event_Callbacks,
-	hovered_id:         lc.Box_ID, // element currently underneath pointer
-	pressed_id:         lc.Box_ID, // element that received pointer-down
-	focused_id:         lc.Box_ID, // element receiving keyboard input
-	clicked_this_frame: map[lc.Box_ID]bool,
-	scroll_offsets:     map[lc.Box_ID]f32, // Add persistent side table
+	layout:               ^lc.Layout_Context,
+	listeners:            map[lc.Box_ID]Event_Callbacks,
+	hovered_id:           lc.Box_ID,
+	pressed_id:           lc.Box_ID,
+	prev_pressed_id:      lc.Box_ID,
+	focused_id:           lc.Box_ID,
+	clicked_this_frame:   map[lc.Box_ID]bool,
+	scroll_offsets_x:     map[lc.Box_ID]f32,
+	scroll_offsets_y:     map[lc.Box_ID]f32,
+	text_cursors:         map[lc.Box_ID]int,
+	text_selection:       map[lc.Box_ID]int,
+	cursor_blink_start:   map[lc.Box_ID]u64,
+	cursor_last_position: map[lc.Box_ID]int,
+	focused_buffer:       ^[dynamic]u8,
 }
 
 UI_Event :: struct {
@@ -65,6 +71,7 @@ UI_Event :: struct {
 
 begin_frame :: proc(ctx: ^Event_Context) {
 	clear(&ctx.clicked_this_frame)
+	ctx.prev_pressed_id = ctx.pressed_id
 }
 
 register :: proc(ctx: ^Event_Context, id: lc.Box_ID, callbacks: Event_Callbacks) {
@@ -249,18 +256,24 @@ bubble_event :: proc(
 		e.current_target = current.id
 
 		// 1. Native Scroll Interception (Smart Nested Scrolling)
-		if event_type == .Scroll && current.overflow_y == .SCROLL {
-			max_scroll := max(current.scroll_height - current.computed_height, 0.0)
+		if event_type == .Scroll {
+			if current.overflow_y == .SCROLL && e.scroll_dy != 0 {
+				max_scroll := max(current.scroll_height - current.computed_height, 0.0)
+				old_offset := current.offset_y
+				new_offset := clamp(current.offset_y - (e.scroll_dy * 50.0), 0.0, max_scroll)
 
-			old_offset := current.offset_y
-			new_offset := clamp(current.offset_y - (e.scroll_dy * 50.0), 0.0, max_scroll)
+				ctx.scroll_offsets_y[current.id] = new_offset
+				current.offset_y = new_offset
+				if new_offset != old_offset do e.stop_propagation = true
+			}
+			if current.overflow_x == .SCROLL && e.scroll_dx != 0 {
+				max_scroll := max(current.scroll_width - current.computed_width, 0.0)
+				old_offset := current.offset_x
+				new_offset := clamp(current.offset_x - (e.scroll_dx * 50.0), 0.0, max_scroll)
 
-			// Persist into the event context
-			ctx.scroll_offsets[current.id] = new_offset
-			current.offset_y = new_offset
-
-			if new_offset != old_offset {
-				e.stop_propagation = true
+				ctx.scroll_offsets_x[current.id] = new_offset
+				current.offset_x = new_offset
+				if new_offset != old_offset do e.stop_propagation = true
 			}
 		}
 

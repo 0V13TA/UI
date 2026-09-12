@@ -4,6 +4,7 @@ import "../events"
 import lc "../layout_calc"
 import "core:fmt"
 import "core:hash"
+import sdl "vendor:sdl2"
 
 button :: proc(
 	ui_ctx: ^UI_Context,
@@ -49,6 +50,8 @@ scroll_begin :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
 	id: lc.Box_ID = 0,
+	scroll_y: bool = true,
+	scroll_x: bool = false,
 	user_style := Style{},
 	salt := "",
 	loc := #caller_location,
@@ -60,14 +63,19 @@ scroll_begin :: proc(
 		final_id = lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
 	}
 
-	// Force vertical scrolling on the style
+	// Apply scroll overflow styles conditionally
 	final_style := user_style
-	final_style.overflow_y = .SCROLL
+	if scroll_y do final_style.overflow_y = .SCROLL
+	if scroll_x do final_style.overflow_x = .SCROLL
 
 	element_open(
 		ui_ctx,
 		Element {
-			_box = {id = final_id, offset_y = ev_ctx.scroll_offsets[final_id]},
+			_box = {
+				id = final_id,
+				offset_y = scroll_y ? ev_ctx.scroll_offsets_y[final_id] : 0,
+				offset_x = scroll_x ? ev_ctx.scroll_offsets_x[final_id] : 0,
+			},
 			style = final_style,
 		},
 		loc,
@@ -76,4 +84,705 @@ scroll_begin :: proc(
 
 scroll_end :: proc(ctx: ^UI_Context) {
 	element_close(ctx)
+}
+
+// --- CHECKBOX ---
+checkbox :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	label: string,
+	state: ^bool,
+	salt := "",
+	loc := #caller_location,
+) -> bool {
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+
+	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
+	if ev_ctx.clicked_this_frame[id] or_else false do state^ = !state^
+
+	// Robust spatial hover check that ignores children blocking the raycast
+	is_hovered := false
+	if prev, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+		mx, my: i32
+		sdl.GetMouseState(&mx, &my)
+		f_mx, f_my := f32(mx), f32(my)
+		is_hovered =
+			f_mx >= prev.x &&
+			f_mx <= prev.x + prev.computed_width &&
+			f_my >= prev.y &&
+			f_my <= prev.y + prev.computed_height
+	}
+
+	// STRICT ELEMENT INIT: Pass ID into the internal _box
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = id},
+			style = {
+				width         = lc.Fit(true),
+				height        = lc.Fit(true), // Prevents squishing
+				direction     = .ROW,
+				align_items   = .CENTER,
+				gap           = 12,
+				padding       = space_2(8, 12),
+				border_radius = space(6),
+				bg_color      = is_hovered ? Color{0.9, 0.9, 0.92, 1.0} : Color{0, 0, 0, 0},
+			},
+		},
+		loc,
+	)
+
+	box_bg := state^ ? Color{0.15, 0.4, 0.8, 1.0} : Color{1, 1, 1, 1}
+	element_open(
+		ui_ctx,
+		Element {
+			style = {
+				width = lc.Fixed{24},
+				height = lc.Fixed{24},
+				border_radius = space(6),
+				border = space(2),
+				border_color = Color{0.8, 0.8, 0.8, 1},
+				bg_color = box_bg,
+			},
+		},
+	)
+	element_close(ui_ctx)
+
+	element_open(
+		ui_ctx,
+		Element{text = label, style = {font_size = 18, text_color = Color{0.2, 0.2, 0.2, 1}}},
+	)
+	element_close(ui_ctx)
+	element_close(ui_ctx)
+
+	return ev_ctx.clicked_this_frame[id] or_else false
+}
+
+// --- RADIO BUTTON ---
+radio :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	label: string,
+	state: ^$T,
+	value: T,
+	salt := "",
+	loc := #caller_location,
+) -> bool {
+	hash_input := fmt.tprintf("%s:%d:%s:%v", loc.file_path, loc.line, salt, value)
+	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+
+	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
+	if ev_ctx.clicked_this_frame[id] or_else false do state^ = value
+	is_active := state^ == value
+
+	is_hovered := false
+	if prev, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+		mx, my: i32
+		sdl.GetMouseState(&mx, &my)
+		f_mx, f_my := f32(mx), f32(my)
+		is_hovered =
+			f_mx >= prev.x &&
+			f_mx <= prev.x + prev.computed_width &&
+			f_my >= prev.y &&
+			f_my <= prev.y + prev.computed_height
+	}
+
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = id},
+			style = {
+				width         = lc.Fit(true),
+				height        = lc.Fit(true), // Prevents overlapping text
+				direction     = .ROW,
+				align_items   = .CENTER,
+				gap           = 12,
+				padding       = space_2(8, 12),
+				border_radius = space(6),
+				bg_color      = is_hovered ? Color{0.9, 0.9, 0.92, 1.0} : Color{0, 0, 0, 0},
+			},
+		},
+		loc,
+	)
+
+	border_col := is_active ? Color{0.15, 0.4, 0.8, 1.0} : Color{0.8, 0.8, 0.8, 1.0}
+	element_open(
+		ui_ctx,
+		Element {
+			style = {
+				width = lc.Fixed{24},
+				height = lc.Fixed{24},
+				border_radius = space(12),
+				border = space(is_active ? 7 : 2),
+				border_color = border_col,
+				bg_color = Color{1, 1, 1, 1},
+			},
+		},
+	)
+	element_close(ui_ctx)
+
+	element_open(
+		ui_ctx,
+		Element{text = label, style = {font_size = 18, text_color = Color{0.2, 0.2, 0.2, 1}}},
+	)
+	element_close(ui_ctx)
+	element_close(ui_ctx)
+
+	return ev_ctx.clicked_this_frame[id] or_else false
+}
+
+// --- SLIDER ---
+slider :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	value: ^f32,
+	min_val, max_val: f32,
+	salt := "",
+	loc := #caller_location,
+) -> bool {
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+	events.register(ev_ctx, id, events.Event_Callbacks{})
+
+	changed := false
+	if ev_ctx.pressed_id == id {
+		if prev_box, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+			mx, my: i32
+			sdl.GetMouseState(&mx, &my) // Fix: Pass pointers to extract actual X coordinates
+
+			local_x := f32(mx) - prev_box.x
+			percent := clamp(local_x / prev_box.computed_width, 0.0, 1.0)
+			new_val := min_val + (max_val - min_val) * percent
+			if new_val != value^ {
+				value^ = new_val
+				changed = true
+			}
+		}
+	}
+
+	fill_percent := clamp((value^ - min_val) / (max_val - min_val), 0.0, 1.0)
+
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = id},
+			style = {
+				width = lc.Percent{100},
+				height = lc.Fixed{30},
+				justify_content = .START,
+				align_items = .CENTER,
+			},
+		},
+		loc,
+	)
+
+	element_open(
+		ui_ctx,
+		Element {
+			style = {
+				width = lc.Percent{100},
+				height = lc.Fixed{8},
+				bg_color = Color{0.85, 0.85, 0.85, 1},
+				border_radius = space(4),
+			},
+		},
+	)
+	element_open(
+		ui_ctx,
+		Element {
+			style = {
+				width = lc.Percent{fill_percent * 100.0},
+				height = lc.Percent{100},
+				bg_color = Color{0.15, 0.4, 0.8, 1.0},
+				border_radius = space(4),
+			},
+		},
+	)
+	element_close(ui_ctx)
+	element_close(ui_ctx)
+
+	thumb_x: f32 = 0.0
+	if prev, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+		thumb_x = (fill_percent * prev.computed_width) - 10.0
+	}
+
+	element_open(
+		ui_ctx,
+		Element {
+			style = {
+				position      = .ABSOLUTE,
+				left          = thumb_x,
+				top           = 5.0, // Fix: Centered vertically (30px track - 20px thumb / 2)
+				width         = lc.Fixed{20},
+				height        = lc.Fixed{20},
+				bg_color      = Color{1, 1, 1, 1},
+				border_radius = space(10),
+				border        = space(2),
+				border_color  = Color{0.15, 0.4, 0.8, 1.0},
+			},
+		},
+	)
+	element_close(ui_ctx)
+	element_close(ui_ctx)
+	return changed
+}
+
+// --- TEXT INPUT ---
+@(private)
+_delete_selection :: proc(
+	buf: ^[dynamic]u8,
+	ev_ctx: ^events.Event_Context,
+	id: lc.Box_ID,
+) -> bool {
+	cursor := ev_ctx.text_cursors[id]
+	anchor := ev_ctx.text_selection[id]
+	if cursor == anchor do return false
+
+	start_idx := min(cursor, anchor)
+	end_idx := max(cursor, anchor)
+
+	for _ in 0 ..< (end_idx - start_idx) {
+		ordered_remove(buf, start_idx)
+	}
+
+	ev_ctx.text_cursors[id] = start_idx
+	ev_ctx.text_selection[id] = start_idx
+	return true
+}
+
+@(private)
+_text_input_cb :: proc(e: ^events.UI_Event, data: rawptr) {
+	ev_ctx := (^events.Event_Context)(data)
+	if ev_ctx.focused_buffer == nil do return
+
+	// Clear highlighted text before inserting new characters
+	_delete_selection(ev_ctx.focused_buffer, ev_ctx, e.current_target)
+
+	buf := ev_ctx.focused_buffer
+	cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, len(buf^))
+
+	for i in 0 ..< len(e.text) {
+		inject_at(buf, cursor + i, e.text[i])
+	}
+	ev_ctx.text_cursors[e.current_target] = cursor + len(e.text)
+	ev_ctx.text_selection[e.current_target] = ev_ctx.text_cursors[e.current_target]
+}
+
+@(private)
+_key_down_cb :: proc(e: ^events.UI_Event, data: rawptr) {
+	ev_ctx := (^events.Event_Context)(data)
+	if ev_ctx.focused_buffer == nil do return
+
+	buf := ev_ctx.focused_buffer
+	cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, len(buf^))
+	anchor := ev_ctx.text_selection[e.current_target]
+
+	has_selection := cursor != anchor
+
+	// Safely check for LSHIFT/RSHIFT (0x0003) and LCTRL/RCTRL (0x00C0)
+	has_shift := (transmute(u16)e.key_mod & 0x0003) != 0
+	has_ctrl := (transmute(u16)e.key_mod & 0x00C0) != 0
+
+	#partial switch e.keycode {
+	case .a:
+		if has_ctrl {
+			ev_ctx.text_selection[e.current_target] = 0
+			ev_ctx.text_cursors[e.current_target] = len(buf^)
+		}
+	case .c:
+		if has_ctrl && has_selection {
+			start_idx := min(cursor, anchor)
+			end_idx := max(cursor, anchor)
+
+			// Temp allocate a cstring to pass to SDL
+			clipboard_cstr := fmt.ctprintf("%s", string(buf[start_idx:end_idx]))
+			sdl.SetClipboardText(clipboard_cstr)
+		}
+
+	case .HOME:
+		ev_ctx.text_cursors[e.current_target] = 0
+		if !has_shift {
+			ev_ctx.text_selection[e.current_target] = 0
+		}
+
+	case .END:
+		ev_ctx.text_cursors[e.current_target] = len(buf^)
+		if !has_shift {
+			ev_ctx.text_selection[e.current_target] = len(buf^)
+		}
+
+	case .x:
+		if has_ctrl && has_selection {
+			start_idx := min(cursor, anchor)
+			end_idx := max(cursor, anchor)
+
+			clipboard_cstr := fmt.ctprintf("%s", string(buf[start_idx:end_idx]))
+			sdl.SetClipboardText(clipboard_cstr)
+
+			_delete_selection(buf, ev_ctx, e.current_target)
+		}
+
+	case .v:
+		if has_ctrl && sdl.HasClipboardText() {
+			clipboard_cstr := sdl.GetClipboardText()
+			if clipboard_cstr != nil {
+				// SDL allocates this string; we own it now and must free it.
+				defer sdl.free(rawptr(clipboard_cstr))
+
+				// Clear anything currently highlighted
+				_delete_selection(buf, ev_ctx, e.current_target)
+
+				// Grab the fresh cursor position after the potential deletion
+				active_cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, len(buf^))
+				pasted_str := string(clipboard_cstr)
+
+				// Iterate raw bytes to safely preserve UTF-8 encoding
+				for i in 0 ..< len(pasted_str) {
+					b := pasted_str[i]
+					if b != '\n' && b != '\r' {
+						inject_at(buf, active_cursor, b)
+						active_cursor += 1
+					}
+				}
+
+				ev_ctx.text_cursors[e.current_target] = active_cursor
+				ev_ctx.text_selection[e.current_target] = active_cursor
+			}
+		}
+	case .ESCAPE:
+		if has_selection {
+			ev_ctx.text_selection[e.current_target] = cursor
+		}
+	case .BACKSPACE:
+		if !_delete_selection(buf, ev_ctx, e.current_target) {
+			if cursor > 0 {
+				ordered_remove(buf, cursor - 1)
+				ev_ctx.text_cursors[e.current_target] -= 1
+				ev_ctx.text_selection[e.current_target] -= 1
+			}
+		}
+	case .DELETE:
+		if !_delete_selection(buf, ev_ctx, e.current_target) {
+			if cursor < len(buf^) {
+				ordered_remove(buf, cursor)
+			}
+		}
+	case .LEFT:
+		if has_shift {
+			if cursor > 0 do ev_ctx.text_cursors[e.current_target] -= 1
+		} else {
+			if has_selection {
+				ev_ctx.text_cursors[e.current_target] = min(cursor, anchor)
+			} else if cursor > 0 {
+				ev_ctx.text_cursors[e.current_target] -= 1
+			}
+			ev_ctx.text_selection[e.current_target] = ev_ctx.text_cursors[e.current_target]
+		}
+	case .RIGHT:
+		if has_shift {
+			if cursor < len(buf^) do ev_ctx.text_cursors[e.current_target] += 1
+		} else {
+			if has_selection {
+				ev_ctx.text_cursors[e.current_target] = max(cursor, anchor)
+			} else if cursor < len(buf^) {
+				ev_ctx.text_cursors[e.current_target] += 1
+			}
+			ev_ctx.text_selection[e.current_target] = ev_ctx.text_cursors[e.current_target]
+		}
+	}
+}
+
+text_input :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	buffer: ^[dynamic]u8,
+	placeholder := "",
+	salt := "",
+	loc := #caller_location,
+) -> bool {
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+
+	string_id_str := fmt.tprintf("%s:%d:%s1", loc.file_path, loc.line, salt)
+	string_id := lc.ID(string_id_str)
+
+	events.register(
+		ev_ctx,
+		id,
+		events.Event_Callbacks {
+			focusable = true,
+			user_data = ev_ctx,
+			on_text_input = _text_input_cb,
+			on_key_down = _key_down_cb,
+		},
+	)
+
+	is_focused := ev_ctx.focused_id == id
+
+	if is_focused {
+		sdl.StartTextInput()
+		ev_ctx.focused_buffer = buffer
+
+		if id not_in ev_ctx.text_cursors {
+			ev_ctx.text_cursors[id] = len(buffer)
+		}
+
+		// Start/restart the blink timer when focus is gained.
+		if id not_in ev_ctx.cursor_blink_start {
+			ev_ctx.cursor_blink_start[id] = u64(sdl.GetTicks())
+		}
+	} else if ev_ctx.focused_buffer == buffer {
+		sdl.StopTextInput()
+		ev_ctx.focused_buffer = nil
+	}
+
+	cursor := clamp(ev_ctx.text_cursors[id], 0, len(buffer))
+
+	// Dummy element used to measure text.
+	dummy_el := Element {
+		resolved_font = ui_ctx.fonts[hash.fnv32(transmute([]byte)string("default_font"))],
+	}
+
+	dummy_box := lc.Box {
+		user_data = &dummy_el,
+	}
+
+	// ------------------------------------------------------------
+	// Mouse click & Drag -> cursor position
+	// ------------------------------------------------------------
+	// Check both the outer container and the inner text string
+	is_pressed := (ev_ctx.pressed_id == id) || (ev_ctx.pressed_id == string_id)
+	was_pressed := (ev_ctx.prev_pressed_id == id) || (ev_ctx.prev_pressed_id == string_id)
+	just_pressed := is_pressed && !was_pressed
+
+	if is_pressed {
+		if prev_inner, ok := ui_ctx.layout.prev_all_boxes[string_id]; ok {
+			mx, my: i32
+			sdl.GetMouseState(&mx, &my)
+			local_x := f32(mx) - prev_inner.x
+
+			best_cursor := 0
+			for i in 0 ..= len(buffer) {
+				x := ui_text_width(&dummy_box, string(buffer[:i]))
+				if i == len(buffer) {best_cursor = i; break}
+
+				next_x := ui_text_width(&dummy_box, string(buffer[:i + 1]))
+				if local_x < (x + next_x) * 0.5 {best_cursor = i; break}
+			}
+
+			ev_ctx.text_cursors[id] = best_cursor
+			cursor = best_cursor
+
+			// Lock the anchor ONLY on the exact frame the mouse goes down
+			if just_pressed {
+				ev_ctx.text_selection[id] = best_cursor
+			}
+			ev_ctx.cursor_blink_start[id] = u64(sdl.GetTicks())
+		}
+	}
+
+	anchor := ev_ctx.text_selection[id]
+
+	// ------------------------------------------------------------
+	// Detect keyboard/text changes and restart blinking
+	// ------------------------------------------------------------
+
+	if is_focused {
+		// The callbacks have already modified the cursor by the
+		// time this function is called again. If the cursor changed
+		// this frame, restart blinking.
+		//
+		// Store the last known cursor position in the same map.
+		if id not_in ev_ctx.cursor_last_position {
+			ev_ctx.cursor_last_position[id] = cursor
+		}
+
+		if ev_ctx.cursor_last_position[id] != cursor {
+			ev_ctx.cursor_last_position[id] = cursor
+			ev_ctx.cursor_blink_start[id] = u64(sdl.GetTicks())
+		}
+	}
+
+	// Re-read it because a callback may have changed it.
+	cursor = clamp(ev_ctx.text_cursors[id], 0, len(buffer))
+
+	// ------------------------------------------------------------
+	// Calculate cursor position
+	// ------------------------------------------------------------
+
+	cursor_px := ui_text_width(&dummy_box, string(buffer[:cursor]))
+
+
+	// ------------------------------------------------------------
+	// Auto-scroll so cursor stays visible
+	// ------------------------------------------------------------
+	if is_focused {
+		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+			scroll_x := ev_ctx.scroll_offsets_x[id]
+
+			padding_left := prev_outer.padding[3]
+			border_left := prev_outer.border[3]
+
+			// The usable horizontal viewport.
+			viewport_left := padding_left + border_left
+			viewport_right :=
+				prev_outer.computed_width - prev_outer.padding[1] - prev_outer.border[1]
+			viewport_width := max(viewport_right - viewport_left, 1.0)
+
+			// Cursor position in the text's unscrolled coordinate space.
+			cursor_px := ui_text_width(&dummy_box, string(buffer[:cursor]))
+
+			// Small amount of space around the cursor.
+			margin: f32 = 5.0
+			cursor_left := cursor_px
+			cursor_right := cursor_px + 2.0
+
+			// Cursor has gone past the left side.
+			if cursor_left < scroll_x + margin {
+				ev_ctx.scroll_offsets_x[id] = max(cursor_left - margin, 0)
+			} else if cursor_right > scroll_x + viewport_width - margin {
+				ev_ctx.scroll_offsets_x[id] = cursor_right - viewport_width + margin
+			}
+
+			// CLAMP SCROLL: Prevent the text from floating away from the right edge
+			// when characters are deleted and the total text width shrinks.
+			total_text_width := ui_text_width(&dummy_box, string(buffer[:]))
+			max_scroll := max(total_text_width + 15.0 - viewport_width, 0.0)
+
+			ev_ctx.scroll_offsets_x[id] = clamp(ev_ctx.scroll_offsets_x[id], 0.0, max_scroll)
+
+			// Mutate the previous frame's box so the layout engine
+			// copies THIS new value instead of restoring the old one.
+			prev_outer.offset_x = ev_ctx.scroll_offsets_x[id]
+		}
+	}
+
+	// ------------------------------------------------------------
+	// Text
+	// ------------------------------------------------------------
+
+	display_text := ""
+	if len(buffer) > 0 do display_text = string(buffer[:])
+	else do display_text = placeholder
+
+	text_color := Color{}
+	if len(buffer) > 0 do text_color = Color{0.1, 0.1, 0.1, 1}
+	else do text_color = Color{0.6, 0.6, 0.6, 1}
+
+	// ------------------------------------------------------------
+	// Cursor blink
+	// ------------------------------------------------------------
+
+	cursor_visible := false
+
+	if is_focused {
+		elapsed := u64(sdl.GetTicks()) - ev_ctx.cursor_blink_start[id]
+
+		// Visible for 500ms, invisible for 500ms.
+		cursor_visible = (elapsed % 1000) < 500
+	}
+
+	// ------------------------------------------------------------
+	// Scroll container
+	// ------------------------------------------------------------
+
+	scroll_begin(
+		ui_ctx,
+		ev_ctx,
+		id = id,
+		scroll_y = false,
+		scroll_x = true,
+		user_style = {
+			width = lc.Percent{100},
+			height = lc.Fixed{50},
+			padding = space(5),
+			border_radius = space(6),
+			border = space(2),
+			border_color = is_focused ? Color{0.15, 0.4, 0.8, 1} : Color{0.8, 0.8, 0.8, 1},
+			bg_color = Color{1, 1, 1, 1},
+		},
+		loc = loc,
+	)
+
+	// ------------------------------------------------------------
+	// Selection Highlight
+	// ------------------------------------------------------------
+	start_idx := min(cursor, anchor)
+	end_idx := max(cursor, anchor)
+
+	if start_idx != end_idx {
+		start_px := ui_text_width(&dummy_box, string(buffer[:start_idx]))
+		end_px := ui_text_width(&dummy_box, string(buffer[:end_idx]))
+
+		element_open(
+			ui_ctx,
+			Element {
+				style = {
+					position = .ABSOLUTE,
+					left     = start_px,
+					top      = 2.0,
+					width    = lc.Fixed{end_px - start_px},
+					height   = lc.Percent{100},
+					bg_color = Color{0.2, 0.5, 0.9, 0.4}, // Translucent blue
+				},
+			},
+			loc,
+		)
+		element_close(ui_ctx)
+	}
+
+	// ------------------------------------------------------------
+	// Text element
+	// ------------------------------------------------------------
+
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = string_id},
+			text = display_text,
+			style = {
+				width = lc.Fit(true),
+				height = lc.Fit(true),
+				font_size = 18,
+				text_wrap = .NONE,
+				text_color = text_color,
+			},
+		},
+		loc,
+	)
+
+	element_close(ui_ctx)
+
+	// ------------------------------------------------------------
+	// Cursor
+	//
+	// This is deliberately NOT part of the text string.
+	// Its X position is the measured width of the text before
+	// the cursor, and because it is inside the scroll container,
+	// it moves with the text.
+	// ------------------------------------------------------------
+
+	if cursor_visible {
+		element_open(
+			ui_ctx,
+			Element {
+				style = {
+					position = .ABSOLUTE,
+					left = cursor_px,
+					top = 4.0,
+					width = lc.Fixed{2},
+					height = lc.Fixed{27},
+					bg_color = Color{0.1, 0.1, 0.1, 1},
+				},
+			},
+			loc,
+		)
+
+		element_close(ui_ctx)
+	}
+
+	scroll_end(ui_ctx)
+
+	return is_focused
 }

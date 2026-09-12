@@ -69,24 +69,40 @@ main :: proc() {
 	defer ui_context_destroy(ui_ctx)
 
 	ev_ctx := events.Event_Context {
-		layout             = ui_ctx.layout,
-		listeners          = make(map[lc.Box_ID]events.Event_Callbacks),
-		clicked_this_frame = make(map[lc.Box_ID]bool),
-		scroll_offsets     = make(map[lc.Box_ID]f32), // Init table
+		layout               = ui_ctx.layout,
+		listeners            = make(map[lc.Box_ID]events.Event_Callbacks),
+		clicked_this_frame   = make(map[lc.Box_ID]bool),
+		scroll_offsets_x     = make(map[lc.Box_ID]f32),
+		scroll_offsets_y     = make(map[lc.Box_ID]f32),
+		text_cursors         = make(map[lc.Box_ID]int),
+		text_selection       = make(map[lc.Box_ID]int),
+		cursor_blink_start   = make(map[lc.Box_ID]u64),
+		cursor_last_position = make(map[lc.Box_ID]int),
 	}
 	defer {
 		delete(ev_ctx.listeners)
 		delete(ev_ctx.clicked_this_frame)
-		delete(ev_ctx.scroll_offsets) // Clean up
+		delete(ev_ctx.scroll_offsets_x)
+		delete(ev_ctx.scroll_offsets_y)
+		delete(ev_ctx.text_cursors)
+		delete(ev_ctx.cursor_blink_start)
+		delete(ev_ctx.cursor_last_position)
+		delete(ev_ctx.text_selection)
 	}
 
-	// FIX 1: Explicitly cast the untyped string literal to 'string' before transmuting
 	font_hash := hash.fnv32(transmute([]byte)(string("default_font")))
 	ui_ctx.fonts[font_hash] = font
 
+	check_state := false
+	radio_state := 1
+	slider_val: f32 = 75.0
+
+	// Dynamic arrays require explicit allocation and cleanup
+	text_buffer := make([dynamic]u8, 0, 256)
+	defer delete(text_buffer)
+
 	running := true
 	for running {
-		free_all(context.temp_allocator)
 		events.begin_frame(&ev_ctx) // Clear the click map
 
 		// Drain OS Event Queue
@@ -121,47 +137,6 @@ main :: proc() {
 			)
 			defer element_close(ui_ctx)
 
-			{
-				element_open(
-					ui_ctx,
-					{
-						style = {
-							width = lc.Fixed{260},
-							height = lc.Percent{100},
-							direction = .COLUMN,
-							padding = space(20),
-							gap = 15,
-							bg_color = Color{0.1, 0.12, 0.15, 1.0},
-							text_color = Color{0.8, 0.8, 0.8, 1.0},
-						},
-					},
-				)
-				defer element_close(ui_ctx)
-
-				{
-					element_open(
-						ui_ctx,
-						{
-							text = "DASHBOARD is like fis fl",
-							id = DASHBOARD_ID,
-							style = {
-								font_size = 24,
-								text_wrap = .LETTER,
-								padding = space(30),
-								width = lc.Percent{100},
-								text_color = Color{1, 0, 1, 1},
-								bg_color = Color{1, 1, 1, 1.0},
-							},
-						},
-					)
-					defer element_close(ui_ctx)
-				}
-
-				for dash in dashboard {
-					element_open(ui_ctx, {text = dash})
-					element_close(ui_ctx)
-				}
-			}
 
 			{
 				scroll_begin(
@@ -178,124 +153,57 @@ main :: proc() {
 				)
 				defer scroll_end(ui_ctx)
 
-				{
-					element_open(
-						ui_ctx,
-						{
-							id = WEEKLY_ANALYTICS,
-							text = "Weekly Analytics",
-							style = {
-								width = lc.Fit(true),
-								font_size = 32,
-								text_color = Color{0.1, 0.1, 0.1, 1.0},
-							},
+
+				element_open(
+					ui_ctx,
+					{
+						text = "Interactive Controls",
+						style = {
+							font_size = 24,
+							text_color = Color{0.1, 0.1, 0.1, 1.0},
+							margin = space_4(20, 0, 15, 0),
 						},
-					)
-					defer element_close(ui_ctx)
+					},
+				)
+				element_close(ui_ctx)
+
+				// Checkbox
+				if checkbox(ui_ctx, &ev_ctx, "Enable Hardware Acceleration", &check_state) {
+					fmt.printfln("Checkbox toggled: %v", check_state)
 				}
 
-				{
-					element_open(
-						ui_ctx,
-						{
-							text = "Recent Transactions",
-							style = {
-								font_size = 24,
-								text_color = Color{0.1, 0.1, 0.1, 1.0},
-								margin = space_4(20, 0, 10, 0),
-							},
-						},
-					)
-					defer element_close(ui_ctx)
+				// Radio Group (Wrapped in a row layout)
+				element_open(
+					ui_ctx,
+					{style = {direction = .ROW, gap = 20, margin = space_4(10, 0, 15, 0)}},
+				)
+				radio(ui_ctx, &ev_ctx, "Low", &radio_state, 1)
+				radio(ui_ctx, &ev_ctx, "Medium", &radio_state, 2)
+				radio(ui_ctx, &ev_ctx, "High", &radio_state, 3)
+				element_close(ui_ctx)
+
+				// Slider (with real-time value text generation)
+				slider_text := fmt.tprintf("Master Volume: %.1f%%", slider_val)
+				element_open(
+					ui_ctx,
+					{
+						text = slider_text,
+						style = {font_size = 18, text_color = Color{0.3, 0.3, 0.3, 1.0}},
+					},
+				)
+				element_close(ui_ctx)
+
+				if slider(ui_ctx, &ev_ctx, &slider_val, 0.0, 100.0) {
+					// This block fires continuously as the thumb is dragged
 				}
 
-				for i in 1 ..= 20 {
-					item_text := fmt.tprintf("Transaction #%04d - Payment Processed", i)
-					unique_id := lc.Box_ID(hash.fnv32(transmute([]byte)item_text))
-					element_open(
-						ui_ctx,
-						{
-							id = unique_id,
-							text = item_text,
-							style = {
-								width = lc.Percent{100},
-								height = lc.Fit(true),
-								padding = space(20),
-								bg_color = Color{1, 1, 1, 1},
-								border_radius = space(8),
-								border = space(1),
-								border_color = Color{0.85, 0.85, 0.85, 1.0},
-								text_color = Color{0.3, 0.3, 0.3, 1.0},
-								font_size = 18,
-							},
-						},
-					)
-					element_close(ui_ctx)
-				}
-
-				{
-					element_open(
-						ui_ctx,
-						{
-							style = {
-								width = lc.Percent{100},
-								height = lc.Fit(true),
-								direction = .ROW,
-								wrap = true,
-								gap = 20,
-							},
-						},
-					)
-					defer element_close(ui_ctx)
-
-					for metric in metrics {
-						unique_id := lc.Box_ID(hash.fnv32(transmute([]byte)metric))
-						element_open(
-							ui_ctx,
-							{
-								classes = {METRIC_CARD_CLASS},
-								text = metric,
-								id = unique_id,
-								style = {
-									text_wrap     = .LETTER,
-									width         = lc.Grow{1}, // Stretch to fill row
-									min_width     = lc.Fixed{200}, // Force wrap if squeezed
-									height        = lc.Fit(true),
-									padding       = space(15),
-									bg_color      = Color{1, 1, 1, 1},
-									border_radius = space(12),
-									border        = space(1),
-									border_color  = Color{0.85, 0.85, 0.85, 1.0},
-									text_color    = Color{0.2, 0.2, 0.2, 1.0},
-									font_size     = 20,
-									opacity       = 1,
-								},
-							},
-						)
-						element_close(ui_ctx)
-					}
-
-				}
-
-				if button(ui_ctx, &ev_ctx, "Save Settings") {
-					fmt.println("Playing Timeline Sequence!")
-
-
-					// 1. Fade the dashboard title out
-					tl_to(&tl, DASHBOARD_ID, {duration = 0.3, opacity = 0.0})
-
-					// 2. Stagger the metric cards out (Starts 0.1s BEFORE the title finishes fading)
-					tl_to(
-						&tl,
-						METRIC_CARD_CLASS,
-						{duration = 0.4, stagger = 0.1, opacity = 0.0},
-						.SEQUENCE,
-						-0.1,
-					)
-
-					// 3. Fade the "Weekly Analytics" text out (Starts at the EXACT same time the cards started)
-					tl_to(&tl, WEEKLY_ANALYTICS, {duration = 0.4, opacity = 0.0}, .WITH_PREV)
-				}
+				// Text Input
+				element_open(
+					ui_ctx,
+					{style = {width = lc.Fixed{300}, margin = space_4(15, 0, 20, 0)}},
+				)
+				text_input(ui_ctx, &ev_ctx, &text_buffer, "Search analytics...")
+				element_close(ui_ctx)
 
 			}
 		}

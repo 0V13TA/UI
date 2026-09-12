@@ -853,7 +853,6 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 ui_begin_frame :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, screen_w, screen_h: i32) {
 	// Note: Event processing and pointer state updates will go here next
 
-	lc.layout_reset(ctx.layout)
 	ctx.layout.screen_width = f32(screen_w)
 	ctx.layout.screen_height = f32(screen_h)
 	lc.begin_layout(ctx.layout)
