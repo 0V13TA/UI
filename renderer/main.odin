@@ -193,7 +193,7 @@ main :: proc() {
 				)
 				element_close(ui_ctx)
 
-				if slider(ui_ctx, &ev_ctx, &slider_val, 0.0, 100.0) {
+				if slider(ui_ctx, &ev_ctx, &anim_ctx, &slider_val, 0.0, 100.0) {
 					// This block fires continuously as the thumb is dragged
 				}
 

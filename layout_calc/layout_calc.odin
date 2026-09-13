@@ -1013,7 +1013,12 @@ layout_position_pass :: proc(
 	current_cross: f32 = 0.0
 	start := 0
 
-	own_rect := Rect{box.x, box.y, box.computed_width, box.computed_height}
+	own_rect := Rect {
+		x      = box.x + box.padding[Side.LEFT] + box.border[Side.LEFT],
+		y      = box.y + box.padding[Side.TOP] + box.border[Side.TOP],
+		width  = inner_width,
+		height = inner_height,
+	}
 	clips_children := box.overflow_x != .VISIBLE || box.overflow_y != .VISIBLE
 	effective_rect := own_rect
 	if box.overflow_x == .VISIBLE {

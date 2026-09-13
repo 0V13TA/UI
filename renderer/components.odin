@@ -1,5 +1,6 @@
 package renderer
 
+import anim "../animations"
 import "../events"
 import lc "../layout_calc"
 import "core:fmt"
@@ -236,6 +237,7 @@ radio :: proc(
 slider :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
+	anim_ctx: ^anim.Context,
 	value: ^f32,
 	min_val, max_val: f32,
 	salt := "",
@@ -243,19 +245,44 @@ slider :: proc(
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
-	events.register(ev_ctx, id, events.Event_Callbacks{})
+	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
 
 	changed := false
-	if ev_ctx.pressed_id == id {
+	is_pressed := ev_ctx.pressed_id == id
+	was_pressed := ev_ctx.prev_pressed_id == id
+	just_pressed := is_pressed && !was_pressed
+	is_dragging := is_pressed && was_pressed
+
+	if is_pressed {
 		if prev_box, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
 			mx, my: i32
-			sdl.GetMouseState(&mx, &my) // Fix: Pass pointers to extract actual X coordinates
-
+			sdl.GetMouseState(&mx, &my)
 			local_x := f32(mx) - prev_box.x
 			percent := clamp(local_x / prev_box.computed_width, 0.0, 1.0)
 			new_val := min_val + (max_val - min_val) * percent
+
 			if new_val != value^ {
-				value^ = new_val
+				if just_pressed {
+					// Slower, expressive tween for the initial jump
+					anim.to(
+						&anim_ctx.engine,
+						anim.Tween_Vars {
+							duration = 0.25,
+							ease_func = anim.ease_out_exp,
+							properties = {{target = value, to = new_val}},
+						},
+					)
+				} else if is_dragging {
+					// Fast tween for dragging to override the click animation
+					anim.to(
+						&anim_ctx.engine,
+						anim.Tween_Vars {
+							duration = 0.05,
+							ease_func = anim.ease_linear,
+							properties = {{target = value, to = new_val}},
+						},
+					)
+				}
 				changed = true
 			}
 		}
@@ -551,9 +578,8 @@ text_input :: proc(
 	// ------------------------------------------------------------
 	// Mouse click & Drag -> cursor position
 	// ------------------------------------------------------------
-	// Check both the outer container and the inner text string
-	is_pressed := (ev_ctx.pressed_id == id) || (ev_ctx.pressed_id == string_id)
-	was_pressed := (ev_ctx.prev_pressed_id == id) || (ev_ctx.prev_pressed_id == string_id)
+	is_pressed := ev_ctx.pressed_id == id
+	was_pressed := ev_ctx.prev_pressed_id == id
 	just_pressed := is_pressed && !was_pressed
 
 	if is_pressed {
@@ -574,7 +600,7 @@ text_input :: proc(
 			ev_ctx.text_cursors[id] = best_cursor
 			cursor = best_cursor
 
-			// Lock the anchor ONLY on the exact frame the mouse goes down
+			// Anchor the text highlight the exact frame the mouse goes down
 			if just_pressed {
 				ev_ctx.text_selection[id] = best_cursor
 			}

@@ -162,8 +162,6 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 	#partial switch e.type {
 	case .MOUSEBUTTONDOWN:
 		if e.button.button == sdl.BUTTON_LEFT {
-			ctx.pressed_id = current_hovered_id
-
 			focus_target: lc.Box_ID = 0
 			curr := hovered_box
 			for curr != nil {
@@ -173,14 +171,33 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 				}
 				curr = curr.parent
 			}
-			set_focus(ctx, focus_target)
+
+			// Snap the press to the interactive parent
+			if focus_target != 0 {
+				ctx.pressed_id = focus_target
+				set_focus(ctx, focus_target)
+			} else {
+				ctx.pressed_id = current_hovered_id
+				set_focus(ctx, 0)
+			}
 		}
 
 	case .MOUSEBUTTONUP:
 		if e.button.button == sdl.BUTTON_LEFT {
 			if ctx.pressed_id != 0 {
-				if ctx.pressed_id == current_hovered_id {
-					// Look up the exact box that was originally pressed
+				release_target: lc.Box_ID = 0
+				curr := hovered_box
+				for curr != nil {
+					if cb, ok := ctx.listeners[curr.id]; ok && cb.focusable {
+						release_target = curr.id
+						break
+					}
+					curr = curr.parent
+				}
+				if release_target == 0 do release_target = current_hovered_id
+
+				// The release must match the interactive parent that was pressed
+				if ctx.pressed_id == release_target {
 					if target_box, ok := ctx.layout.all_boxes[ctx.pressed_id]; ok {
 						ui_ev := UI_Event {
 							target  = ctx.pressed_id,
@@ -190,7 +207,7 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 						bubble_event(ctx, target_box, .Click, &ui_ev)
 					}
 				}
-				ctx.pressed_id = 0 // Always clear pressed state on release
+				ctx.pressed_id = 0
 			}
 		}
 
