@@ -37,6 +37,9 @@ Style :: struct {
 	text_color:      Maybe(Color),
 	text_wrap:       Maybe(Text_Wrap),
 	text_align:      Maybe(Text_Align),
+	selection_start: Maybe(int),
+	selection_end:   Maybe(int),
+	selection_color: Maybe(Color),
 
 	// Typography
 	font_size:       Maybe(f32),
@@ -111,11 +114,23 @@ Element :: struct {
 	resolved_bg_color:      Color,
 }
 
+Glyph_Key :: struct {
+	font: ^ttf.Font,
+	ch:   rune,
+}
+
+Glyph :: struct {
+	texture:               ^sdl.Texture,
+	width, height:         i32,
+	min_x, max_y, advance: i32,
+}
+
 UI_Context :: struct {
-	layout:     ^lc.Layout_Context,
-	fonts:      map[u32]^ttf.Font, // Hash Font name + Cache name
-	stylesheet: map[Class]Style,
-	word_cache: map[u64]Cached_Texture,
+	layout:      ^lc.Layout_Context,
+	fonts:       map[u32]^ttf.Font, // Hash Font name + Cache name
+	stylesheet:  map[Class]Style,
+	glyph_cache: map[Glyph_Key]Glyph,
+	slice_cache: map[i32]^sdl.Texture,
 }
 
 
@@ -156,129 +171,241 @@ set_render_color :: proc(renderer: ^sdl.Renderer, c: Color) {
 }
 
 clear_texture_cache :: proc(ctx: ^UI_Context) {
-	for _, cached in ctx.word_cache {
-		sdl.DestroyTexture(cached.texture)
+	// ADD 9-SLICE CLEANUP
+	for _, tex in ctx.slice_cache {
+		sdl.DestroyTexture(tex)
 	}
-	clear(&ctx.word_cache)
+	clear(&ctx.slice_cache)
+}
+
+create_9slice_base_texture :: proc(renderer: ^sdl.Renderer, radius: i32) -> ^sdl.Texture {
+	size := radius * 2 + 2 // +2 gives a 2px stretchable center
+
+	// Create an RGBA32 surface
+	rmask: u32 = 0x000000ff
+	gmask: u32 = 0x0000ff00
+	bmask: u32 = 0x00ff0000
+	amask: u32 = 0xff000000
+
+	surface := sdl.CreateRGBSurface(0, size, size, 32, rmask, gmask, bmask, amask)
+	defer sdl.FreeSurface(surface)
+
+	pixels := cast([^]u32)surface.pixels
+	pitch := surface.pitch / 4 // pitch in u32s
+
+	for y in 0 ..< size {
+		for x in 0 ..< size {
+			// Map x, y to distance from the nearest corner
+			cx := x < radius ? radius - x : (x > radius + 1 ? x - (radius + 1) : 0)
+			cy := y < radius ? radius - y : (y > radius + 1 ? y - (radius + 1) : 0)
+
+			dist := math.sqrt(f32(cx * cx + cy * cy))
+
+			alpha: u32 = 255
+			if dist > f32(radius) {
+				// Smooth anti-aliasing on the outer edge
+				diff := dist - f32(radius)
+				if diff > 1.0 {
+					alpha = 0
+				} else {
+					alpha = u32(255.0 * (1.0 - diff))
+				}
+			}
+
+			// Write white pixel with calculated alpha
+			pixels[y * pitch + x] = (alpha << 24) | 0x00FFFFFF
+		}
+	}
+
+	// Convert to a hardware texture
+	tex := sdl.CreateTextureFromSurface(renderer, surface)
+	sdl.SetTextureBlendMode(tex, .BLEND)
+	return tex
+}
+
+draw_rounded_rect_9slice :: proc(
+	renderer: ^sdl.Renderer,
+	tex: ^sdl.Texture,
+	dest_rect: sdl.Rect,
+	corner_radius: i32,
+	color: sdl.Color,
+) {
+	if tex == nil do return
+
+	// Tint the white texture to the target UI color
+	sdl.SetTextureColorMod(tex, color.r, color.g, color.b)
+	sdl.SetTextureAlphaMod(tex, color.a)
+
+	tex_w, tex_h: i32
+	sdl.QueryTexture(tex, nil, nil, &tex_w, &tex_h)
+
+	// The slice margin is the corner radius used when generating the texture
+	slice := tex_w / 2 - 1
+
+	// Clamp layout radius to avoid overlapping slices on very small boxes
+	r := corner_radius
+	if r > dest_rect.w / 2 do r = dest_rect.w / 2
+	if r > dest_rect.h / 2 do r = dest_rect.h / 2
+
+	// Define the 9 Source Rectangles (from the base texture)
+	src := [9]sdl.Rect {
+		{0, 0, slice, slice}, // Top Left
+		{slice, 0, tex_w - 2 * slice, slice}, // Top Center
+		{tex_w - slice, 0, slice, slice}, // Top Right
+		{0, slice, slice, tex_h - 2 * slice}, // Mid Left
+		{slice, slice, tex_w - 2 * slice, tex_h - 2 * slice}, // Mid Center
+		{tex_w - slice, slice, slice, tex_h - 2 * slice}, // Mid Right
+		{0, tex_h - slice, slice, slice}, // Bottom Left
+		{slice, tex_h - slice, tex_w - 2 * slice, slice}, // Bottom Center
+		{tex_w - slice, tex_h - slice, slice, slice}, // Bottom Right
+	}
+
+	// Define the 9 Destination Rectangles (on the screen)
+	x, y, w, h := dest_rect.x, dest_rect.y, dest_rect.w, dest_rect.h
+	dst := [9]sdl.Rect {
+		{x, y, r, r}, // Top Left
+		{x + r, y, w - 2 * r, r}, // Top Center
+		{x + w - r, y, r, r}, // Top Right
+		{x, y + r, r, h - 2 * r}, // Mid Left
+		{x + r, y + r, w - 2 * r, h - 2 * r}, // Mid Center
+		{x + w - r, y + r, r, h - 2 * r}, // Mid Right
+		{x, y + h - r, r, r}, // Bottom Left
+		{x + r, y + h - r, w - 2 * r, r}, // Bottom Center
+		{x + w - r, y + h - r, r, r}, // Bottom Right
+	}
+
+	// Dispatch the 9 draw calls
+	for i in 0 ..< 9 {
+		// Skip drawing segments that have been squished to 0 width or height
+		if dst[i].w > 0 && dst[i].h > 0 {
+			sdl.RenderCopy(renderer, tex, &src[i], &dst[i])
+		}
+	}
+}
+
+get_9slice_texture :: proc(
+	ctx: ^UI_Context,
+	renderer: ^sdl.Renderer,
+	radius: i32,
+) -> ^sdl.Texture {
+	if tex, exists := ctx.slice_cache[radius]; exists {
+		return tex
+	}
+	// Cache miss: Create and store the new 9-slice base texture
+	tex := create_9slice_base_texture(renderer, radius)
+	ctx.slice_cache[radius] = tex
+	return tex
 }
 
 // --- Master Box Drawing Proc ---
-// border: [Top, Right, Bottom, Left]
-// radii:  [TopLeft, TopRight, BottomRight, BottomLeft]
 draw_ui_box :: proc(
+	ctx: ^UI_Context,
 	renderer: ^sdl.Renderer,
 	bounds: sdl.Rect,
 	bg_color, border_color: Color,
-	border: [4]f32,
-	radii: [4]f32,
+	border: [4]f32, // border: [Top, Right, Bottom, Left]
+	radii: [4]f32, // radii:  [TopLeft, TopRight, BottomRight, BottomLeft]
 ) {
-	// 1. Draw Outer Border (if it has color and thickness)
 	has_border := border[0] > 0 || border[1] > 0 || border[2] > 0 || border[3] > 0
-	if has_border && border_color[3] > 0 {
-		set_render_color(renderer, border_color)
-		fill_rounded_rect(renderer, bounds, radii)
-	}
 
-	// 2. Draw Inner Background
-	if bg_color[3] > 0 {
-		inner_bounds := sdl.Rect {
-			x = bounds.x + i32(border[3]), // Push in by Left border
-			y = bounds.y + i32(border[0]), // Push in by Top border
-			w = bounds.w - i32(border[3] + border[1]), // Subtract Left + Right
-			h = bounds.h - i32(border[0] + border[2]), // Subtract Top + Bottom
+	// 9-slice requires a uniform radius. We'll use the top-left radius.
+	corner_radius := i32(radii[0])
+
+	// Fast path for hard corners (No texture overhead needed)
+	if corner_radius <= 0 {
+		if has_border && border_color[3] > 0 {
+			set_render_color(renderer, border_color)
+			rect_copy := bounds
+			sdl.RenderFillRect(renderer, &rect_copy)
 		}
-
-		// Clamp the inner corner radii so they curve cleanly inside the border
-		inner_radii: [4]f32
-		inner_radii[0] = max(radii[0] - max(border[0], border[3]), 0) // TL
-		inner_radii[1] = max(radii[1] - max(border[0], border[1]), 0) // TR
-		inner_radii[2] = max(radii[2] - max(border[2], border[1]), 0) // BR
-		inner_radii[3] = max(radii[3] - max(border[2], border[3]), 0) // BL
-
-		set_render_color(renderer, bg_color)
-		fill_rounded_rect(renderer, inner_bounds, inner_radii)
-	}
-}
-
-get_word_texture :: proc(
-	ctx: ^UI_Context,
-	renderer: ^sdl.Renderer,
-	word: string,
-	font: ^ttf.Font,
-	color: Color,
-) -> Cached_Texture {
-	// Hash the combination of the text, font, and color
-	hash_str := fmt.tprintf("%s_%p_%v", word, font, color)
-	key := hash.fnv64a(transmute([]byte)hash_str)
-
-	if cached, exists := ctx.word_cache[key]; exists {
-		return cached
-	}
-
-	// Cache miss: Rasterize on the CPU, upload to the GPU
-	r, g, b, a := to_sdl_color(color)
-	sdl_color := sdl.Color{r, g, b, a}
-	c_word := strings.clone_to_cstring(word, context.temp_allocator)
-
-	surface := ttf.RenderUTF8_Blended(font, c_word, sdl_color)
-	if surface == nil do return Cached_Texture{}
-
-	texture := sdl.CreateTextureFromSurface(renderer, surface)
-	cached := Cached_Texture{texture, surface.w, surface.h}
-
-	sdl.FreeSurface(surface)
-	ctx.word_cache[key] = cached
-	return cached
-}
-
-// --- Mathematical Scanline Rasterizer ---
-@(private)
-fill_rounded_rect :: proc(renderer: ^sdl.Renderer, rect: sdl.Rect, radii: [4]f32) {
-	if rect.w <= 0 || rect.h <= 0 do return
-
-	// Ensure corners don't overlap by clamping to half the shortest dimension
-	min_dim := f32(min(rect.w, rect.h)) / 2.0
-	tl := i32(min(radii[0], min_dim))
-	tr := i32(min(radii[1], min_dim))
-	br := i32(min(radii[2], min_dim))
-	bl := i32(min(radii[3], min_dim))
-
-	// Fast path: if no radius, just draw a native hardware rect
-	if tl == 0 && tr == 0 && br == 0 && bl == 0 {
-		rect_copy := rect
-		sdl.RenderFillRect(renderer, &rect_copy)
+		if bg_color[3] > 0 {
+			inner_bounds := sdl.Rect {
+				x = bounds.x + i32(border[3]),
+				y = bounds.y + i32(border[0]),
+				w = bounds.w - i32(border[3] + border[1]),
+				h = bounds.h - i32(border[0] + border[2]),
+			}
+			set_render_color(renderer, bg_color)
+			sdl.RenderFillRect(renderer, &inner_bounds)
+		}
 		return
 	}
 
-	// Scanline pass: draws top-to-bottom preventing alpha-blend overlaps
-	for y in 0 ..< rect.h {
-		real_y := rect.y + y
-		start_x := rect.x
-		end_x := rect.x + rect.w - 1
+	// 1. Draw Outer Border using 9-Slice
+	if has_border && border_color[3] > 0 {
+		tex := get_9slice_texture(ctx, renderer, corner_radius)
+		r, g, b, a := to_sdl_color(border_color)
+		draw_rounded_rect_9slice(renderer, tex, bounds, corner_radius, sdl.Color{r, g, b, a})
+	}
 
-		// Left boundary math
-		if y < tl {
-			dy := tl - y
-			dx := i32(math.sqrt(f32(tl * tl - dy * dy)))
-			start_x = rect.x + tl - dx
-		} else if y >= rect.h - bl {
-			dy := y - (rect.h - bl - 1)
-			dx := i32(math.sqrt(f32(bl * bl - dy * dy)))
-			start_x = rect.x + bl - dx
+	// 2. Draw Inner Background using 9-Slice
+	if bg_color[3] > 0 {
+		inner_bounds := sdl.Rect {
+			x = bounds.x + i32(border[3]),
+			y = bounds.y + i32(border[0]),
+			w = bounds.w - i32(border[3] + border[1]),
+			h = bounds.h - i32(border[0] + border[2]),
 		}
 
-		// Right boundary math
-		if y < tr {
-			dy := tr - y
-			dx := i32(math.sqrt(f32(tr * tr - dy * dy)))
-			end_x = rect.x + rect.w - 1 - tr + dx
-		} else if y >= rect.h - br {
-			dy := y - (rect.h - br - 1)
-			dx := i32(math.sqrt(f32(br * br - dy * dy)))
-			end_x = rect.x + rect.w - 1 - br + dx
+		// Calculate inner radius by subtracting the maximum border thickness
+		max_border := max(border[0], border[3])
+		inner_radius := i32(max(f32(corner_radius) - max_border, 0))
+
+		if inner_radius > 0 {
+			inner_tex := get_9slice_texture(ctx, renderer, inner_radius)
+			r, g, b, a := to_sdl_color(bg_color)
+			draw_rounded_rect_9slice(
+				renderer,
+				inner_tex,
+				inner_bounds,
+				inner_radius,
+				sdl.Color{r, g, b, a},
+			)
+		} else {
+			// If pushing the border in eliminates the radius, draw a standard hard rect
+			set_render_color(renderer, bg_color)
+			sdl.RenderFillRect(renderer, &inner_bounds)
+		}
+	}
+}
+
+draw_ui_text :: proc(
+	ctx: ^UI_Context,
+	renderer: ^sdl.Renderer,
+	font: ^ttf.Font,
+	text: string,
+	x, y: i32,
+	color: Color,
+) {
+	r, g, b, a := to_sdl_color(color)
+	current_x := x
+	prev_ch: rune = 0 // Track the preceding character for pair matching
+
+	for ch in text {
+		// Query and apply the kerning offset between the pair
+		if prev_ch != 0 {
+			kerning := ttf.GetFontKerningSizeGlyphs32(font, prev_ch, ch)
+			current_x += kerning
 		}
 
-		sdl.RenderDrawLine(renderer, start_x, real_y, end_x, real_y)
+		glyph := get_glyph(ctx, renderer, font, ch)
+		if glyph.texture != nil {
+			sdl.SetTextureColorMod(glyph.texture, r, g, b)
+			sdl.SetTextureAlphaMod(glyph.texture, a)
+
+			dest := sdl.Rect {
+				x = current_x + glyph.min_x,
+				y = y,
+				w = glyph.width,
+				h = glyph.height,
+			}
+
+			sdl.RenderCopy(renderer, glyph.texture, nil, &dest)
+			current_x += glyph.advance
+		}
+
+		// Save the current rune for the next iteration
+		prev_ch = ch
 	}
 }
 
@@ -632,11 +759,21 @@ render_box :: proc(
 	border_color[3] *= el.resolved_opacity
 
 	bounds := sdl.Rect{i32(box.x), i32(box.y), i32(box.computed_width), i32(box.computed_height)}
-	sdl.SetRenderDrawBlendMode(renderer, .BLEND) // Ensure alpha blending is active
 
-	draw_ui_box(renderer, bounds, bg_color, border_color, box.border, el.resolved_border_radius)
+	sdl.SetRenderDrawBlendMode(renderer, .BLEND)
 
-	// 4. Draw Cached Text
+	// UPDATE THIS LINE TO PASS ui_ctx:
+	draw_ui_box(
+		ui_ctx,
+		renderer,
+		bounds,
+		bg_color,
+		border_color,
+		box.border,
+		el.resolved_border_radius,
+	)
+
+	// Draw Cached Text
 	if text, ok := box.text.?; ok {
 		if el.resolved_font != nil { 	// Prevent Segfault if font is missing!
 
@@ -656,6 +793,7 @@ render_box :: proc(
 			line_height := f32(ttf.FontHeight(el.resolved_font))
 
 			cursor_y := text_y
+			global_char_idx := 0 // Track exact string index across wrapped lines
 			explicit_lines := strings.split(text, "\n", context.temp_allocator)
 
 			for explicit_line in explicit_lines {
@@ -684,7 +822,7 @@ render_box :: proc(
 							end_idx += 1
 						}
 
-						// 2. Align the line horizontally
+						// Align the line horizontally
 						start_x := text_x
 						if el.resolved_text_align == .CENTER {
 							start_x += max((inner_width - line_width) / 2.0, 0.0)
@@ -693,7 +831,7 @@ render_box :: proc(
 						}
 						cursor_x := start_x
 
-						// 3. Draw the cached runes
+						// Draw the cached runes
 						for i in start_idx ..< end_idx {
 							buf: [5]u8
 							bytes, n := utf8.encode_rune(runes[i])
@@ -701,27 +839,47 @@ render_box :: proc(
 							buf[n] = 0
 							rune_str := string(buf[:n])
 
-							cached := get_word_texture(
+							w, h: i32
+							ttf.SizeUTF8(el.resolved_font, cstring(&buf[0]), &w, &h)
+
+							// --- DRAW SELECTION HIGHLIGHT ---
+							if s, ok1 := el.style.selection_start.?; ok1 {
+								if e, ok2 := el.style.selection_end.?; ok2 {
+									if global_char_idx >= min(s, e) &&
+									   global_char_idx < max(s, e) {
+										sel_col :=
+											el.style.selection_color.? or_else Color {
+												0.2,
+												0.5,
+												0.9,
+												0.4,
+											}
+										set_render_color(renderer, sel_col)
+										bg_rect := sdl.Rect {
+											i32(cursor_x),
+											i32(cursor_y),
+											w,
+											i32(line_height),
+										}
+										sdl.RenderFillRect(renderer, &bg_rect)
+									}
+								}
+							}
+
+							text_color := el.resolved_text_color
+							text_color[3] *= el.resolved_opacity
+							draw_ui_text(
 								ui_ctx,
 								renderer,
-								rune_str,
 								el.resolved_font,
-								el.resolved_text_color,
+								rune_str,
+								i32(cursor_x),
+								i32(cursor_y),
+								text_color,
 							)
-							if cached.texture != nil {
-								dest := sdl.Rect {
-									i32(cursor_x),
-									i32(cursor_y),
-									cached.width,
-									cached.height,
-								}
-								sdl.SetTextureAlphaMod(
-									cached.texture,
-									u8(el.resolved_opacity * 255.0),
-								)
-								sdl.RenderCopy(renderer, cached.texture, nil, &dest)
-								cursor_x += f32(cached.width)
-							}
+
+							cursor_x += f32(w)
+							global_char_idx += 1
 						}
 						cursor_y += line_height
 						start_idx = end_idx
@@ -765,33 +923,90 @@ render_box :: proc(
 						// Draw the cached words
 						for i in start_idx ..< end_idx {
 							if len(words[i]) > 0 {
-								cached := get_word_texture(
+								word_runes := utf8.string_to_runes(
+									words[i],
+									context.temp_allocator,
+								)
+								word_len := len(word_runes)
+
+								c_word := fmt.ctprintf("%s", words[i])
+								w, h: i32
+								ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
+
+								// --- DRAW SELECTION HIGHLIGHT ---
+								if s, ok1 := el.style.selection_start.?; ok1 {
+									if e, ok2 := el.style.selection_end.?; ok2 {
+										s_idx, e_idx := min(s, e), max(s, e)
+										if s_idx < global_char_idx + word_len &&
+										   e_idx > global_char_idx {
+											overlap_s :=
+												max(s_idx, global_char_idx) - global_char_idx
+											overlap_e :=
+												min(e_idx, global_char_idx + word_len) -
+												global_char_idx
+
+											pre_str := utf8.runes_to_string(
+												word_runes[:overlap_s],
+												context.temp_allocator,
+											)
+											hl_str := utf8.runes_to_string(
+												word_runes[overlap_s:overlap_e],
+												context.temp_allocator,
+											)
+
+											pre_w: i32 = 0
+											if len(pre_str) > 0 do ttf.SizeUTF8(el.resolved_font, fmt.ctprintf("%s", pre_str), &pre_w, nil)
+											hl_w: i32
+											ttf.SizeUTF8(
+												el.resolved_font,
+												fmt.ctprintf("%s", hl_str),
+												&hl_w,
+												nil,
+											)
+
+											sel_col :=
+												el.style.selection_color.? or_else Color {
+													0.2,
+													0.5,
+													0.9,
+													0.4,
+												}
+											set_render_color(renderer, sel_col)
+											bg_rect := sdl.Rect {
+												i32(cursor_x) + pre_w,
+												i32(cursor_y),
+												hl_w,
+												i32(line_height),
+											}
+											sdl.RenderFillRect(renderer, &bg_rect)
+										}
+									}
+								}
+
+								text_color := el.resolved_text_color
+								text_color[3] *= el.resolved_opacity
+								draw_ui_text(
 									ui_ctx,
 									renderer,
-									words[i],
 									el.resolved_font,
-									el.resolved_text_color,
+									words[i],
+									i32(cursor_x),
+									i32(cursor_y),
+									text_color,
 								)
-								if cached.texture != nil {
-									dest := sdl.Rect {
-										i32(cursor_x),
-										i32(cursor_y),
-										cached.width,
-										cached.height,
-									}
-									sdl.SetTextureAlphaMod(
-										cached.texture,
-										u8(el.resolved_opacity * 255.0),
-									)
-									sdl.RenderCopy(renderer, cached.texture, nil, &dest)
-									cursor_x += f32(cached.width)
-								}
+
+								cursor_x += f32(w) + space_width
+								global_char_idx += word_len + 1 // Advance by word length + trailing space
+							} else {
+								cursor_x += space_width
+								global_char_idx += 1 // Empty string in split means consecutive spaces
 							}
-							cursor_x += space_width
 						}
+
 						cursor_y += line_height
 						start_idx = end_idx
 					}
+					global_char_idx += 1 // Advance +1 for the newline character skipped by strings.split
 				}
 			}
 		}
@@ -801,7 +1016,7 @@ render_box :: proc(
 		render_box(ui_ctx, renderer, child, current_clip)
 	}
 
-	// 5. RESTORE the caller's clip state before returning
+	// RESTORE the caller's clip state before returning
 	set_clip(renderer, current_clip, previous_clip)
 }
 
@@ -819,6 +1034,49 @@ render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^lc
 	}
 }
 
+get_glyph :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, font: ^ttf.Font, ch: rune) -> Glyph {
+	key := Glyph_Key {
+		font = font,
+		ch   = ch,
+	}
+
+	if glyph, exists := ctx.glyph_cache[key]; exists {
+		return glyph
+	}
+
+	// Cache miss: query metrics and generate a white glyph
+	minx, maxx, miny, maxy, advance: i32
+	ttf.GlyphMetrics32(font, ch, &minx, &maxx, &miny, &maxy, &advance)
+
+	white := sdl.Color{255, 255, 255, 255}
+	surface := ttf.RenderGlyph32_Blended(font, ch, white)
+
+	glyph := Glyph {
+		min_x   = minx,
+		max_y   = maxy,
+		advance = advance,
+	}
+
+	if surface != nil {
+		glyph.texture = sdl.CreateTextureFromSurface(renderer, surface)
+		glyph.width = surface.w
+		glyph.height = surface.h
+		sdl.SetTextureBlendMode(glyph.texture, .BLEND)
+		sdl.FreeSurface(surface)
+	}
+
+	ctx.glyph_cache[key] = glyph
+	return glyph
+}
+
+clear_glyph_cache :: proc(ctx: ^UI_Context) {
+	for _, glyph in ctx.glyph_cache {
+		if glyph.texture != nil {
+			sdl.DestroyTexture(glyph.texture)
+		}
+	}
+	clear(&ctx.glyph_cache)
+}
 
 ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx := new(UI_Context)
@@ -833,17 +1091,23 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 
 	ctx.stylesheet = make(map[Class]Style)
 	ctx.fonts = make(map[u32]^ttf.Font)
-	ctx.word_cache = make(map[u64]Cached_Texture) // Your new VRAM cache
+	ctx.glyph_cache = make(map[Glyph_Key]Glyph)
+	ctx.slice_cache = make(map[i32]^sdl.Texture)
 
 	return ctx
 }
 
 ui_context_destroy :: proc(ctx: ^UI_Context) {
 	lc.layout_context_destroy(ctx.layout)
+	clear_glyph_cache(ctx)
+	delete(ctx.glyph_cache)
 
 	// Purge GPU textures before destroying the map
 	clear_texture_cache(ctx)
-	delete(ctx.word_cache)
+	for _, tex in ctx.slice_cache {
+		sdl.DestroyTexture(tex)
+	}
+	delete(ctx.slice_cache)
 
 	delete(ctx.stylesheet)
 	delete(ctx.fonts)

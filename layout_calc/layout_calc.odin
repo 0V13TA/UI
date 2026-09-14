@@ -364,46 +364,17 @@ resolve_fixed_width :: proc(
 	parent_is_fit: bool,
 ) {
 	if box.computed_width != -1 do return
+
 	is_row := box.direction == .ROW || box.direction == .ROW_REVERSE
 
-	switch v in box.width {
-	case Fixed:
-		box.computed_width = v.value
-	case ViewPercent:
-		box.computed_width = max(
-			((v.value / 100.0) * viewport_dim) - get_horizontal(box.margin),
-			0.0,
-		)
-	case Percent:
-		if parent_is_fit || box.parent == nil {
-			box.computed_width = 0.0
-			if !box.warned {
-				parent_id := box.parent != nil ? box.parent.id : 0
-				fmt.printfln(
-					"Box: %d is dependent on parent: %d, which is Fit-sized",
-					box.id,
-					parent_id,
-				)
-				box.warned = true
-			}
-		} else {
-			parent_inner_width := max(
-				box.parent.computed_width -
-				get_horizontal(box.parent.padding) -
-				get_horizontal(box.parent.border),
-				0.0,
-			)
-			box.computed_width = max(
-				((v.value / 100.0) * parent_inner_width) - get_horizontal(box.margin),
-				0.0,
-			)
-		}
-	case Grow:
-		box.computed_width = 0.0
-	case Shrink:
-		// Fix 1: Shrink starts at box.basis rather than 0
-		box.computed_width = box.basis
-	case Fit:
+	is_fit := false
+	if box.width == nil do is_fit = true
+	else {
+		#partial switch _ in box.width {case Fit:
+			is_fit = true}
+	}
+
+	if is_fit {
 		sum: f32 = 0.0
 		if val, ok := box.text.?; ok do sum = ctx.text_width_func(box, val)
 		for child in box.children {
@@ -414,67 +385,115 @@ resolve_fixed_width :: proc(
 		gap_count := max(len(box.children) - 1, 0)
 		if is_row do sum += f32(gap_count) * box.gap
 		box.computed_width = sum + get_horizontal(box.padding) + get_horizontal(box.border)
-
-	case:
-		// If width is unset, default to text width (if it exists) or 0
-		if text, ok := box.text.?; ok {
-			box.computed_width =
-				ctx.text_width_func(box, text) +
-				get_horizontal(box.padding) +
-				get_horizontal(box.border)
-		} else do box.computed_width = 0
-
+	} else {
+		switch v in box.width {
+		case Fixed:
+			box.computed_width = v.value
+		case ViewPercent:
+			box.computed_width = max(
+				((v.value / 100.0) * viewport_dim) - get_horizontal(box.margin),
+				0.0,
+			)
+		case Percent:
+			if parent_is_fit || box.parent == nil {
+				box.computed_width = 0.0
+				if !box.warned {
+					parent_id := box.parent != nil ? box.parent.id : 0
+					fmt.printfln(
+						"Box: %d is dependent on parent: %d, which is Fit-sized",
+						box.id,
+						parent_id,
+					)
+					box.warned = true
+				}
+			} else {
+				parent_inner_width := max(
+					box.parent.computed_width -
+					get_horizontal(box.parent.padding) -
+					get_horizontal(box.parent.border),
+					0.0,
+				)
+				box.computed_width = max(
+					((v.value / 100.0) * parent_inner_width) - get_horizontal(box.margin),
+					0.0,
+				)
+			}
+		case Grow:
+			box.computed_width = 0.0
+		case Shrink:
+			box.computed_width = box.basis
+		case Fit: // Handled
+		}
 	}
 
 	if min_w := resolve_bound(box.min_width, viewport_dim); min_w >= 0 do box.computed_width = max(box.computed_width, min_w)
 	if max_w := resolve_bound(box.max_width, viewport_dim); max_w >= 0 do box.computed_width = min(box.computed_width, max_w)
 
-	#partial switch _ in box.width {
-	case Fit, Grow, Shrink:
-	// Skip recursion here; children will be sized in grow_shrink_width
-	case:
-		for child in box.children {
-			resolve_fixed_width(child, ctx, viewport_dim, false)
+	if !is_fit {
+		#partial switch _ in box.width {
+		case Grow, Shrink: // Skipped; sized in grow_shrink_width
+		case:
+			for child in box.children do resolve_fixed_width(child, ctx, viewport_dim, false)
 		}
 	}
 }
 
 grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
-	#partial switch _ in box.width {
-	case Grow, Shrink:
+	is_dynamic := false
+	if box.width != nil {
+		#partial switch _ in box.width {case Grow, Shrink, Percent:
+			is_dynamic = true}
+	}
+
+	// Also dynamic if cross-axis stretched
+	if box.parent != nil &&
+	   (box.parent.direction == .COLUMN || box.parent.direction == .COLUMN_REVERSE) &&
+	   box.parent.align_items == .STRETCH {
+		is_parent_stretch := false
+		if box.width == nil do is_parent_stretch = true
+		else {#partial switch _ in box.width {case Fit:
+				is_parent_stretch = true}}
+		if is_parent_stretch do is_dynamic = true
+	}
+
+	// Force re-evaluation of Percent children against newly resolved dynamic parent sizes
+	if is_dynamic {
 		for child in box.children {
-			resolve_fixed_width(child, ctx, viewport_dim, false)
+			if child.width != nil {
+				if _, is_pct := child.width.(Percent); is_pct {
+					child.computed_width = -1
+					resolve_fixed_width(child, ctx, viewport_dim, false)
+				}
+			}
 		}
 	}
 
+	if box.width != nil {
+		#partial switch _ in box.width {
+		case Grow, Shrink:
+			for child in box.children do resolve_fixed_width(child, ctx, viewport_dim, false)
+		}
+	}
 
 	switch box.direction {
 	case .ROW, .ROW_REVERSE:
 		parent_inner_width :=
 			box.computed_width - get_horizontal(box.padding) - get_horizontal(box.border)
 		start := 0
-
 		for start < len(box.children) {
 			end := start
 			line_sum: f32 = 0.0
-
-			// 1. Find the end index of the current line
 			for end < len(box.children) {
 				child := box.children[end]
 				child_outer := child.computed_width + get_horizontal(child.margin)
-
 				if box.wrap && end > start {
-					if line_sum + box.gap + child_outer > parent_inner_width {
-						break
-					}
+					if line_sum + box.gap + child_outer > parent_inner_width do break
+					line_sum += box.gap
 				}
-
-				if end > start do line_sum += box.gap
 				line_sum += child_outer
 				end += 1
 			}
 
-			// 2. Process this specific line
 			line_children := box.children[start:end]
 			remaining_space := parent_inner_width - line_sum
 
@@ -486,55 +505,57 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 					if iteration > 100 {
 						if !box.warned {
 							fmt.printfln(
-								"WARNING: Infinite flex-grow (height) loop on Box %d. Breaking.",
+								"WARNING: Infinite flex-grow (width) loop on Box %d. Breaking.",
 								box.id,
 							)
 							box.warned = true
 						}
 						break
 					}
-
 					total_grow_factor: f32 = 0
 					for child in line_children {
 						if !child.frozen {
-							#partial switch v in child.width {case Grow:
-								total_grow_factor += v.factor}
+							if child.width != nil {
+								#partial switch v in child.width {case Grow:
+									total_grow_factor += v.factor}
+							}
 						}
 					}
 					if total_grow_factor <= 0 do break
 
 					newly_frozen := false
-					round_space := remaining_space // SNAPSHOT
-
+					round_space := remaining_space
 					for child in line_children {
 						if child.frozen do continue
-						#partial switch v in child.width {
-						case Grow:
-							extra := round_space * (v.factor / total_grow_factor) // USE SNAPSHOT
-							target := child.computed_width + extra
-							clamped := clamp_value(
-								child.min_width,
-								child.max_width,
-								target,
-								viewport_dim,
-							)
-
-							if clamped != target {
-								child.frozen = true
-								newly_frozen = true
-								remaining_space -= (clamped - child.computed_width)
-								child.computed_width = clamped
+						if child.width != nil {
+							#partial switch v in child.width {
+							case Grow:
+								extra := round_space * (v.factor / total_grow_factor)
+								target := child.computed_width + extra
+								clamped := clamp_value(
+									child.min_width,
+									child.max_width,
+									target,
+									viewport_dim,
+								)
+								if clamped != target {
+									child.frozen = true
+									newly_frozen = true
+									remaining_space -= (clamped - child.computed_width)
+									child.computed_width = clamped
+								}
 							}
 						}
 					}
-
 					if !newly_frozen {
 						for child in line_children {
 							if !child.frozen {
-								#partial switch v in child.width {
-								case Grow:
-									child.computed_width +=
-										remaining_space * (v.factor / total_grow_factor)
+								if child.width != nil {
+									#partial switch v in child.width {
+									case Grow:
+										child.computed_width +=
+											remaining_space * (v.factor / total_grow_factor)
+									}
 								}
 							}
 						}
@@ -549,58 +570,61 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 					if iteration > 100 {
 						if !box.warned {
 							fmt.printfln(
-								"WARNING: Infinite flex-shrink (height) loop on Box %d. Breaking.",
+								"WARNING: Infinite flex-shrink (width) loop on Box %d. Breaking.",
 								box.id,
 							)
 							box.warned = true
 						}
 						break
 					}
-
 					total_shrink_factor: f32 = 0
 					for child in line_children {
 						if !child.frozen {
-							#partial switch v in child.width {case Shrink:
-								total_shrink_factor += v.factor * child.computed_width}
+							if child.width != nil {
+								#partial switch v in child.width {case Shrink:
+									total_shrink_factor += v.factor * child.computed_width}
+							}
 						}
 					}
 					if total_shrink_factor <= 0 do break
 
 					newly_frozen := false
-					round_space := remaining_space // SNAPSHOT
-
+					round_space := remaining_space
 					for child in line_children {
 						if child.frozen do continue
-						#partial switch v in child.width {
-						case Shrink:
-							extra :=
-								round_space *
-								((v.factor * child.computed_width) / total_shrink_factor) // USE SNAPSHOT
-							target := child.computed_width + extra
-							clamped := clamp_value(
-								child.min_width,
-								child.max_width,
-								target,
-								viewport_dim,
-							)
-
-							if clamped != target {
-								child.frozen = true
-								newly_frozen = true
-								remaining_space -= (clamped - child.computed_width)
-								child.computed_width = clamped
+						if child.width != nil {
+							#partial switch v in child.width {
+							case Shrink:
+								extra :=
+									round_space *
+									((v.factor * child.computed_width) / total_shrink_factor)
+								target := child.computed_width + extra
+								clamped := clamp_value(
+									child.min_width,
+									child.max_width,
+									target,
+									viewport_dim,
+								)
+								if clamped != target {
+									child.frozen = true
+									newly_frozen = true
+									remaining_space -= (clamped - child.computed_width)
+									child.computed_width = clamped
+								}
 							}
 						}
 					}
-
 					if !newly_frozen {
 						for child in line_children {
 							if !child.frozen {
-								#partial switch v in child.width {
-								case Shrink:
-									child.computed_width +=
-										remaining_space *
-										((v.factor * child.computed_width) / total_shrink_factor)
+								if child.width != nil {
+									#partial switch v in child.width {
+									case Shrink:
+										child.computed_width +=
+											remaining_space *
+											((v.factor * child.computed_width) /
+													total_shrink_factor)
+									}
 								}
 							}
 						}
@@ -608,8 +632,6 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 					}
 				}
 			}
-
-			// 3. Advance to next line
 			start = end
 		}
 
@@ -618,15 +640,15 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 			box.computed_width - get_horizontal(box.padding) - get_horizontal(box.border)
 		for child in box.children {
 			should_stretch := false
-			#partial switch _ in child.width {
-			case Grow, Shrink:
-				should_stretch = true
-			case Fit:
-				should_stretch = box.align_items == .STRETCH
-			case:
-				if child.width == nil {
+			if child.width != nil {
+				#partial switch _ in child.width {
+				case Grow, Shrink:
+					should_stretch = true
+				case Fit:
 					should_stretch = box.align_items == .STRETCH
 				}
+			} else {
+				should_stretch = box.align_items == .STRETCH
 			}
 
 			if should_stretch {
@@ -641,9 +663,7 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 		}
 	}
 
-	for child in box.children {
-		grow_shrink_width(child, ctx, viewport_dim)
-	}
+	for child in box.children do grow_shrink_width(child, ctx, viewport_dim)
 }
 
 wrap_text :: proc(box: ^Box, ctx: ^Layout_Context) {
@@ -666,47 +686,16 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 
 	is_column := box.direction == .COLUMN || box.direction == .COLUMN_REVERSE
 
-	switch v in box.height {
-	case Fixed:
-		box.computed_height = v.value
-	case ViewPercent:
-		box.computed_height = max(
-			((v.value / 100.0) * viewport_dim) - get_vertical(box.margin),
-			0.0,
-		)
-	case Percent:
-		if parent_is_fit || box.parent == nil {
-			box.computed_height = 0.0
-			if !box.warned {
-				parent_id := box.parent != nil ? box.parent.id : 0
-				fmt.printfln(
-					"Box: %d is dependent on parent: %d, which is Fit-sized",
-					box.id,
-					parent_id,
-				)
-				box.warned = true
-			}
-		} else {
-			parent_inner_height := max(
-				box.parent.computed_height -
-				get_vertical(box.parent.padding) -
-				get_vertical(box.parent.border),
-				0.0,
-			)
-			box.computed_height = max(
-				((v.value / 100.0) * parent_inner_height) - get_vertical(box.margin),
-				0.0,
-			)
-		}
-	case Grow:
-		box.computed_height = 0.0
-	case Shrink:
-		box.computed_height = box.basis
-	case Fit:
-		content_height: f32 = 0.0
+	is_fit := false
+	if box.height == nil do is_fit = true
+	else {
+		#partial switch _ in box.height {case Fit:
+			is_fit = true}
+	}
 
+	if is_fit {
+		content_height: f32 = 0.0
 		if is_column {
-			// Columns just sum all child heights
 			for child in box.children {
 				resolve_fixed_height(child, viewport_dim, true)
 				content_height += child.computed_height + get_vertical(child.margin)
@@ -714,85 +703,124 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 			gap_count := max(len(box.children) - 1, 0)
 			content_height += f32(gap_count) * box.gap
 		} else {
-			// Rows must calculate line by line to support wrapping
 			parent_inner_width := max(
 				box.computed_width - get_horizontal(box.padding) - get_horizontal(box.border),
 				0.0,
 			)
-
 			start := 0
 			line_count := 0
 			for start < len(box.children) {
 				end := start
 				line_width: f32 = 0.0
 				line_max_height: f32 = 0.0
-
 				for end < len(box.children) {
 					child := box.children[end]
 					resolve_fixed_height(child, viewport_dim, true)
-
 					child_w := child.computed_width + get_horizontal(child.margin)
 					child_h := child.computed_height + get_vertical(child.margin)
-
 					if box.wrap && end > start {
 						if line_width + box.gap + child_w > parent_inner_width do break
+						line_width += box.gap
 					}
-
-					if end > start do line_width += box.gap
 					line_width += child_w
 					line_max_height = max(line_max_height, child_h)
 					end += 1
 				}
-
-				if line_count > 0 do content_height += box.gap // Cross-axis gap between lines
+				if line_count > 0 do content_height += box.gap
 				content_height += line_max_height
-
 				line_count += 1
 				start = end
 			}
 		}
-
-		// Preserve text height if this node wraps text
-		if text, ok := box.text.?; ok && len(text) > 0 {
-			// Read safely from the explicit state!
-			content_height = max(content_height, box.text_height)
-		}
-
+		if text, ok := box.text.?; ok && len(text) > 0 do content_height = max(content_height, box.text_height)
 		box.computed_height = content_height + get_vertical(box.padding) + get_vertical(box.border)
-	case:
-		// If height is unset, default to text_height (if it exists) or 0
-		if box.computed_height < 0 {
-			if box.text_height > 0 {
-				box.computed_height =
-					box.text_height + get_vertical(box.padding) + get_vertical(box.border)
+	} else {
+		switch v in box.height {
+		case Fixed:
+			box.computed_height = v.value
+		case ViewPercent:
+			box.computed_height = max(
+				((v.value / 100.0) * viewport_dim) - get_vertical(box.margin),
+				0.0,
+			)
+		case Percent:
+			if parent_is_fit || box.parent == nil {
+				box.computed_height = 0.0
+				if !box.warned {
+					parent_id := box.parent != nil ? box.parent.id : 0
+					fmt.printfln(
+						"Box: %d is dependent on parent: %d, which is Fit-sized",
+						box.id,
+						parent_id,
+					)
+					box.warned = true
+				}
 			} else {
-				box.computed_height = 0
+				parent_inner_height := max(
+					box.parent.computed_height -
+					get_vertical(box.parent.padding) -
+					get_vertical(box.parent.border),
+					0.0,
+				)
+				box.computed_height = max(
+					((v.value / 100.0) * parent_inner_height) - get_vertical(box.margin),
+					0.0,
+				)
 			}
+		case Grow:
+			box.computed_height = 0.0
+		case Shrink:
+			box.computed_height = box.basis
+		case Fit: // Handled
 		}
 	}
-
 
 	if min_h := resolve_bound(box.min_height, viewport_dim); min_h >= 0 do box.computed_height = max(box.computed_height, min_h)
 	if max_h := resolve_bound(box.max_height, viewport_dim); max_h >= 0 do box.computed_height = min(box.computed_height, max_h)
 
-	#partial switch _ in box.height {
-	case Fit, Grow, Shrink:
-	// Children visited during Fit loop or deferred to grow_shrink_height
-	case:
-		for child in box.children {
-			resolve_fixed_height(child, viewport_dim, false)
+	if !is_fit {
+		#partial switch _ in box.height {
+		case Grow, Shrink:
+		case:
+			for child in box.children do resolve_fixed_height(child, viewport_dim, false)
 		}
 	}
 }
 
 grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
-	#partial switch _ in box.height {
-	case Grow, Shrink:
+	is_dynamic := false
+	if box.height != nil {
+		#partial switch _ in box.height {case Grow, Shrink, Percent:
+			is_dynamic = true}
+	}
+
+	if box.parent != nil &&
+	   (box.parent.direction == .ROW || box.parent.direction == .ROW_REVERSE) &&
+	   box.parent.align_items == .STRETCH {
+		is_parent_stretch := false
+		if box.height == nil do is_parent_stretch = true
+		else {#partial switch _ in box.height {case Fit:
+				is_parent_stretch = true}}
+		if is_parent_stretch do is_dynamic = true
+	}
+
+	if is_dynamic {
 		for child in box.children {
-			resolve_fixed_height(child, viewport_dim, false)
+			if child.height != nil {
+				if _, is_pct := child.height.(Percent); is_pct {
+					child.computed_height = -1
+					resolve_fixed_height(child, viewport_dim, false)
+				}
+			}
 		}
 	}
 
+	if box.height != nil {
+		#partial switch _ in box.height {
+		case Grow, Shrink:
+			for child in box.children do resolve_fixed_height(child, viewport_dim, false)
+		}
+	}
 
 	switch box.direction {
 	case .COLUMN, .COLUMN_REVERSE:
@@ -809,44 +837,47 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 				total_grow_factor: f32 = 0
 				for child in box.children {
 					if !child.frozen {
-						#partial switch v in child.height {case Grow:
-							total_grow_factor += v.factor}
+						if child.height != nil {
+							#partial switch v in child.height {case Grow:
+								total_grow_factor += v.factor}
+						}
 					}
 				}
 				if total_grow_factor <= 0 do break
 
 				newly_frozen := false
-				round_space := remaining_space // SNAPSHOT
-
+				round_space := remaining_space
 				for child in box.children {
 					if child.frozen do continue
-					#partial switch v in child.height {
-					case Grow:
-						extra := round_space * (v.factor / total_grow_factor) // USE SNAPSHOT
-						target := child.computed_height + extra
-						clamped := clamp_value(
-							child.min_height,
-							child.max_height,
-							target,
-							viewport_dim,
-						)
-
-						if clamped != target {
-							child.frozen = true
-							newly_frozen = true
-							remaining_space -= (clamped - child.computed_height)
-							child.computed_height = clamped
+					if child.height != nil {
+						#partial switch v in child.height {
+						case Grow:
+							extra := round_space * (v.factor / total_grow_factor)
+							target := child.computed_height + extra
+							clamped := clamp_value(
+								child.min_height,
+								child.max_height,
+								target,
+								viewport_dim,
+							)
+							if clamped != target {
+								child.frozen = true
+								newly_frozen = true
+								remaining_space -= (clamped - child.computed_height)
+								child.computed_height = clamped
+							}
 						}
 					}
 				}
-
 				if !newly_frozen {
 					for child in box.children {
 						if !child.frozen {
-							#partial switch v in child.height {
-							case Grow:
-								child.computed_height +=
-									remaining_space * (v.factor / total_grow_factor)
+							if child.height != nil {
+								#partial switch v in child.height {
+								case Grow:
+									child.computed_height +=
+										remaining_space * (v.factor / total_grow_factor)
+								}
 							}
 						}
 					}
@@ -859,47 +890,50 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 				total_shrink_factor: f32 = 0
 				for child in box.children {
 					if !child.frozen {
-						#partial switch v in child.height {case Shrink:
-							total_shrink_factor += v.factor * child.computed_height}
+						if child.height != nil {
+							#partial switch v in child.height {case Shrink:
+								total_shrink_factor += v.factor * child.computed_height}
+						}
 					}
 				}
 				if total_shrink_factor <= 0 do break
 
 				newly_frozen := false
-				round_space := remaining_space // SNAPSHOT
-
+				round_space := remaining_space
 				for child in box.children {
 					if child.frozen do continue
-					#partial switch v in child.height {
-					case Shrink:
-						extra :=
-							round_space *
-							((v.factor * child.computed_height) / total_shrink_factor) // USE SNAPSHOT
-						target := child.computed_height + extra
-						clamped := clamp_value(
-							child.min_height,
-							child.max_height,
-							target,
-							viewport_dim,
-						)
-
-						if clamped != target {
-							child.frozen = true
-							newly_frozen = true
-							remaining_space -= (clamped - child.computed_height)
-							child.computed_height = clamped
+					if child.height != nil {
+						#partial switch v in child.height {
+						case Shrink:
+							extra :=
+								round_space *
+								((v.factor * child.computed_height) / total_shrink_factor)
+							target := child.computed_height + extra
+							clamped := clamp_value(
+								child.min_height,
+								child.max_height,
+								target,
+								viewport_dim,
+							)
+							if clamped != target {
+								child.frozen = true
+								newly_frozen = true
+								remaining_space -= (clamped - child.computed_height)
+								child.computed_height = clamped
+							}
 						}
 					}
 				}
-
 				if !newly_frozen {
 					for child in box.children {
 						if !child.frozen {
-							#partial switch v in child.height {
-							case Shrink:
-								child.computed_height +=
-									remaining_space *
-									((v.factor * child.computed_height) / total_shrink_factor)
+							if child.height != nil {
+								#partial switch v in child.height {
+								case Shrink:
+									child.computed_height +=
+										remaining_space *
+										((v.factor * child.computed_height) / total_shrink_factor)
+								}
 							}
 						}
 					}
@@ -914,17 +948,14 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 			0.0,
 		)
 		start := 0
-
 		for start < len(box.children) {
 			end := start
 			line_width: f32 = 0.0
 			line_max_height: f32 = 0.0
 			flow_count := 0
 
-			// 1. Identify the current line and its maximum cross-axis height
 			for end < len(box.children) {
 				child := box.children[end]
-
 				if child.position == .ABSOLUTE || child.position == .FIXED {
 					end += 1
 					continue
@@ -935,30 +966,28 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 
 				if box.wrap && flow_count > 0 {
 					if line_width + box.gap + child_w > parent_inner_width do break
+					line_width += box.gap
 				}
-
-				if flow_count > 0 do line_width += box.gap
 				line_width += child_w
 				line_max_height = max(line_max_height, child_h)
 				flow_count += 1
 				end += 1
 			}
 
-			// 2. Stretch children vertically against the LINE'S max height
 			for i := start; i < end; i += 1 {
 				child := box.children[i]
 				if child.position == .ABSOLUTE || child.position == .FIXED do continue
 
 				should_stretch := false
-				#partial switch _ in child.height {
-				case Grow, Shrink:
-					should_stretch = true
-				case Fit:
-					should_stretch = box.align_items == .STRETCH
-				case:
-					if child.height == nil {
+				if child.height != nil {
+					#partial switch _ in child.height {
+					case Grow, Shrink:
+						should_stretch = true
+					case Fit:
 						should_stretch = box.align_items == .STRETCH
 					}
+				} else {
+					should_stretch = box.align_items == .STRETCH
 				}
 
 				if should_stretch {
@@ -971,15 +1000,11 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 					)
 				}
 			}
-
-			// 3. Advance to the next line
 			start = end
 		}
 	}
 
-	for child in box.children {
-		grow_shrink_height(child, viewport_dim)
-	}
+	for child in box.children do grow_shrink_height(child, viewport_dim)
 }
 
 layout_position_pass :: proc(

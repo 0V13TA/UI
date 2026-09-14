@@ -43,7 +43,7 @@ main :: proc() {
 	defer sdl.DestroyRenderer(renderer)
 
 	// 2. Setup the UI Context
-	font := ttf.OpenFont("font/Wallpoet-Regular.ttf", 32)
+	font := ttf.OpenFont("/home/ovieta/Programming/ODIN/UI/font/CaacupeOne-Regular.ttf", 32)
 	if font == nil {
 		fmt.printfln("Failed to load font: %s", ttf.GetError())
 		return

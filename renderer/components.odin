@@ -7,6 +7,75 @@ import "core:fmt"
 import "core:hash"
 import sdl "vendor:sdl2"
 
+selectable_text :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	text: string,
+	user_style := Style{},
+	salt := "",
+	loc := #caller_location,
+) {
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+
+	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
+
+	is_pressed := ev_ctx.pressed_id == id
+	just_pressed := is_pressed && ev_ctx.prev_pressed_id != id
+	is_focused := ev_ctx.focused_id == id
+
+	if id not_in ev_ctx.text_cursors do ev_ctx.text_cursors[id] = 0
+	if id not_in ev_ctx.text_selection do ev_ctx.text_selection[id] = 0
+
+	if !is_focused {
+		ev_ctx.text_selection[id] = 0
+		ev_ctx.text_cursors[id] = 0
+	}
+
+	if is_pressed {
+		if prev_box, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+			mx, my: i32
+			sdl.GetMouseState(&mx, &my)
+			local_x := f32(mx) - prev_box.x
+
+			dummy_el := Element {
+				resolved_font = ui_ctx.fonts[hash.fnv32(transmute([]byte)string("default_font"))],
+			}
+			dummy_box := lc.Box {
+				user_data = &dummy_el,
+			}
+
+			best_cursor := 0
+			for i in 0 ..= len(text) {
+				x := ui_text_width(&dummy_box, text[:i])
+				if i == len(text) {
+					best_cursor = i
+					break
+				}
+				next_x := ui_text_width(&dummy_box, text[:i + 1])
+				if local_x < (x + next_x) * 0.5 {
+					best_cursor = i
+					break
+				}
+			}
+
+			ev_ctx.text_cursors[id] = best_cursor
+			if just_pressed {
+				ev_ctx.text_selection[id] = best_cursor
+			}
+		}
+	}
+
+	final_style := user_style
+	if ev_ctx.text_cursors[id] != ev_ctx.text_selection[id] {
+		final_style.selection_start = ev_ctx.text_selection[id]
+		final_style.selection_end = ev_ctx.text_cursors[id]
+	}
+
+	element_open(ui_ctx, Element{_box = {id = id}, text = text, style = final_style}, loc)
+	element_close(ui_ctx)
+}
+
 button :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
