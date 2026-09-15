@@ -853,7 +853,65 @@ render_box :: proc(
 			}
 		}
 
-		sdl.RenderCopy(renderer, el.resolved_bg_image, &src_rect, &dst_rect)
+		corner_radius := i32(el.resolved_border_radius[0])
+
+		if corner_radius > 0 {
+			// Create a clipping blend mode (Src * DstColor, SrcAlpha * DstAlpha)
+			clip_blend := sdl.ComposeCustomBlendMode(
+				.DST_COLOR,
+				.ZERO,
+				.ADD,
+				.DST_ALPHA,
+				.ZERO,
+				.ADD,
+			)
+
+			// Allocate a transient render target for compositing
+			mask_tex := sdl.CreateTexture(
+				renderer,
+				sdl.PixelFormatEnum.RGBA8888,
+				sdl.TextureAccess.TARGET,
+				dst_rect.w,
+				dst_rect.h,
+			)
+			sdl.SetTextureBlendMode(mask_tex, .BLEND)
+
+			// Clear target to absolute transparency
+			prev_target := sdl.GetRenderTarget(renderer)
+			sdl.SetRenderTarget(renderer, mask_tex)
+			sdl.SetRenderDrawColor(renderer, 0, 0, 0, 0)
+			sdl.RenderClear(renderer)
+
+			// Draw an opaque white 9-slice mask at the origin (0, 0)
+			tex_9slice := get_9slice_texture(ui_ctx, renderer, corner_radius)
+			draw_rounded_rect_9slice(
+				renderer,
+				tex_9slice,
+				sdl.Rect{0, 0, dst_rect.w, dst_rect.h},
+				corner_radius,
+				sdl.Color{255, 255, 255, 255},
+			)
+
+			// Stamp the image onto the mask using our custom blend
+			sdl.SetTextureBlendMode(el.resolved_bg_image, clip_blend)
+			sdl.RenderCopy(
+				renderer,
+				el.resolved_bg_image,
+				&src_rect,
+				&sdl.Rect{0, 0, dst_rect.w, dst_rect.h},
+			)
+
+			// Restore state and draw the finalized composite to the screen
+			sdl.SetTextureBlendMode(el.resolved_bg_image, .BLEND)
+			sdl.SetRenderTarget(renderer, prev_target)
+			sdl.RenderCopy(renderer, mask_tex, nil, &dst_rect)
+
+			// Cleanup
+			sdl.DestroyTexture(mask_tex)
+		} else {
+			// Fallback to standard fast-path for non-rounded images
+			sdl.RenderCopy(renderer, el.resolved_bg_image, &src_rect, &dst_rect)
+		}
 	}
 
 	// Draw Cached Text
