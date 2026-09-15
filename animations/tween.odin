@@ -6,8 +6,54 @@ import "core:math"
 Callback_Fn :: proc(target: lc.Box_ID, data: rawptr)
 Easing_Fn :: proc(t: f32) -> f32
 
+// --- Easing System ---
+Bezier :: distinct [4]f32
+
+Easing :: union {
+	Easing_Fn,
+	Bezier,
+}
+
+// 1. Standard Math Procs
 ease_linear :: proc(t: f32) -> f32 {return t}
 ease_out_exp :: proc(t: f32) -> f32 {return t == 1.0 ? 1.0 : 1.0 - math.pow(2.0, -10.0 * t)}
+
+// 2. Standard CSS Bezier Curves
+css_ease :: Bezier{0.25, 0.1, 0.25, 1.0}
+css_ease_in :: Bezier{0.42, 0.0, 1.0, 1.0}
+css_ease_out :: Bezier{0.0, 0.0, 0.58, 1.0}
+css_ease_in_out :: Bezier{0.42, 0.0, 0.58, 1.0}
+
+// 3. Cubic Bezier Solver
+@(private)
+_bezier_coord :: proc(p1, p2, t: f32) -> f32 {
+	inv_t := 1.0 - t
+	return 3.0 * inv_t * inv_t * t * p1 + 3.0 * inv_t * t * t * p2 + t * t * t
+}
+
+@(private)
+solve_cubic_bezier :: proc(x1, y1, x2, y2, x: f32) -> f32 {
+	if x <= 0.0 do return 0.0
+	if x >= 1.0 do return 1.0
+
+	lower: f32 = 0.0
+	upper: f32 = 1.0
+	t: f32 = x
+
+	// Binary search for parametric 't' given x
+	for _ in 0 ..< 15 {
+		current_x := _bezier_coord(x1, x2, t)
+		if math.abs(current_x - x) < 0.001 do break
+		if current_x < x {
+			lower = t
+		} else {
+			upper = t
+		}
+		t = (lower + upper) * 0.5
+	}
+
+	return _bezier_coord(y1, y2, t)
+}
 
 Tween_Target :: union {
 	^f32,
@@ -21,7 +67,7 @@ Property_Tween :: struct {
 
 Tween_Vars :: struct {
 	duration, delay: f32,
-	ease_func:       Easing_Fn,
+	ease_func:       Easing,
 	properties:      []Property_Tween,
 	on_complete:     Callback_Fn,
 }
@@ -32,7 +78,7 @@ Tween :: struct {
 	duration: f32,
 	delay:    f32, // Added for sequencing
 	elapsed:  f32,
-	easing:   Easing_Fn,
+	easing:   Easing,
 	done:     bool,
 }
 
@@ -54,7 +100,18 @@ update :: proc(engine: ^Engine, dt: f32) {
 		}
 
 		t.elapsed = min(t.elapsed + dt, t.duration)
-		progress := t.duration > 0.0 ? t.easing(t.elapsed / t.duration) : 1.0
+
+		// NEW: Unpack the Easing union
+		progress: f32 = 1.0
+		if t.duration > 0.0 {
+			ratio := t.elapsed / t.duration
+			switch e in t.easing {
+			case Easing_Fn:
+				progress = e(ratio)
+			case Bezier:
+				progress = solve_cubic_bezier(e[0], e[1], e[2], e[3], ratio)
+			}
+		}
 
 		// The interpolated raw float
 		current_val := t.from + (t.to - t.from) * progress

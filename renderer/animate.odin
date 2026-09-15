@@ -13,7 +13,7 @@ Anim_Target :: union {
 // The user-friendly GSAP-style payload
 Anim_Props :: struct {
 	duration, delay: f32,
-	ease:            anim.Easing_Fn,
+	ease:            anim.Easing,
 	stagger:         f32,
 
 	// Optional Target Properties
@@ -48,7 +48,7 @@ timeline :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context) -> Timeline {
 	return Timeline{ctx = ctx, anim_ctx = anim_ctx}
 }
 
-// 1. Strictly Queue Instructions (No Math Here)
+// Strictly Queue Instructions (No Math Here)
 tl_to :: proc(
 	tl: ^Timeline,
 	target: Anim_Target,
@@ -75,7 +75,7 @@ tl_from :: proc(
 	)
 }
 
-// 2. Flush and Execute (Called after ui_end_frame)
+// Flush and Execute (Called after ui_end_frame)
 tl_play :: proc(tl: ^Timeline) {
 	cursor: f32 = 0.0
 	last_start_time: f32 = 0.0
@@ -120,20 +120,37 @@ tl_play :: proc(tl: ^Timeline) {
 
 to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props: Anim_Props) {
 	boxes := _resolve_targets(ctx, target)
-
 	for box, i in boxes {
-		// 1. Fetch the persistent state that survives frame-to-frame
 		state := anim.get_state(anim_ctx, box.id)
 
-		// 2. The Artificial Increment Stagger
-		calculated_delay := props.delay + (props.stagger * f32(i))
+		// 1. Sync Width
+		if !state.has_width {
+			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
+				state.width = prev.computed_width
+			} else if w, ok := box.width.(lc.Fixed); ok {
+				state.width = w.value
+			}
+		}
 
+		// 2. Sync Height
+		if !state.has_height {
+			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
+				state.height = prev.computed_height
+			} else if h, ok := box.height.(lc.Fixed); ok {
+				state.height = h.value
+			}
+		}
+
+		calculated_delay := props.delay + (props.stagger * f32(i))
 		tweens := make([dynamic]anim.Property_Tween, context.temp_allocator)
 
 		if v, ok := props.width.?; ok {
-			state.has_structural = true
-			// 3. Point the blind engine at the persistent state float
+			state.has_width = true
 			append(&tweens, anim.Property_Tween{target = &state.width, to = v})
+		}
+		if v, ok := props.height.?; ok {
+			state.has_height = true
+			append(&tweens, anim.Property_Tween{target = &state.height, to = v})
 		}
 		if v, ok := props.opacity.?; ok {
 			append(&tweens, anim.Property_Tween{target = &state.opacity, to = v})
@@ -141,7 +158,61 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 
 		safe_ease := props.ease
 		if safe_ease == nil do safe_ease = anim.ease_linear
+
 		anim.to(
+			&anim_ctx.engine,
+			anim.Tween_Vars {
+				duration = props.duration,
+				delay = calculated_delay,
+				ease_func = safe_ease,
+				properties = tweens[:],
+			},
+		)
+	}
+}
+
+from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props: Anim_Props) {
+	boxes := _resolve_targets(ctx, target)
+	for box, i in boxes {
+		state := anim.get_state(anim_ctx, box.id)
+
+		// 1. Sync Width
+		if !state.has_width {
+			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
+				state.width = prev.computed_width
+			} else if w, ok := box.width.(lc.Fixed); ok {
+				state.width = w.value
+			}
+		}
+
+		// 2. Sync Height
+		if !state.has_height {
+			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
+				state.height = prev.computed_height
+			} else if h, ok := box.height.(lc.Fixed); ok {
+				state.height = h.value
+			}
+		}
+
+		calculated_delay := props.delay + (props.stagger * f32(i))
+		tweens := make([dynamic]anim.Property_Tween, context.temp_allocator)
+
+		if v, ok := props.width.?; ok {
+			state.has_width = true
+			append(&tweens, anim.Property_Tween{target = &state.width, from = v})
+		}
+		if v, ok := props.height.?; ok {
+			state.has_height = true
+			append(&tweens, anim.Property_Tween{target = &state.height, from = v})
+		}
+		if v, ok := props.opacity.?; ok {
+			append(&tweens, anim.Property_Tween{target = &state.opacity, from = v})
+		}
+
+		safe_ease := props.ease
+		if safe_ease == nil do safe_ease = anim.ease_linear
+
+		anim.from(
 			&anim_ctx.engine,
 			anim.Tween_Vars {
 				duration = props.duration,
@@ -206,36 +277,5 @@ _collect_by_id :: proc(box: ^lc.Box, target: lc.Box_ID, results: ^[dynamic]^lc.B
 
 	for child in box.children {
 		_collect_by_id(child, target, results)
-	}
-}
-
-// Add this under your existing `to :: proc(...)` in renderer/animate.odin
-from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props: Anim_Props) {
-	boxes := _resolve_targets(ctx, target)
-	for box, i in boxes {
-		state := anim.get_state(anim_ctx, box.id)
-		calculated_delay := props.delay + (props.stagger * f32(i))
-		tweens := make([dynamic]anim.Property_Tween, context.temp_allocator)
-
-		if v, ok := props.width.?; ok {
-			state.has_structural = true
-			append(&tweens, anim.Property_Tween{target = &state.width, from = v})
-		}
-		if v, ok := props.opacity.?; ok {
-			append(&tweens, anim.Property_Tween{target = &state.opacity, from = v})
-		}
-
-		safe_ease := props.ease
-		if safe_ease == nil do safe_ease = anim.ease_linear
-
-		anim.from(
-			&anim_ctx.engine,
-			anim.Tween_Vars {
-				duration = props.duration,
-				delay = calculated_delay,
-				ease_func = safe_ease,
-				properties = tweens[:],
-			},
-		)
 	}
 }

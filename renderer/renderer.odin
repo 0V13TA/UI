@@ -1021,9 +1021,6 @@ render_box :: proc(
 }
 
 render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^lc.Box) {
-	lc.end_layout(ctx.layout)
-
-
 	current_clip: Maybe(lc.Rect) = nil
 	for root_box in root_boxes {
 		render_box(ctx, renderer, root_box, &current_clip)
@@ -1122,14 +1119,18 @@ ui_begin_frame :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, screen_w, scre
 	lc.begin_layout(ctx.layout)
 }
 
-ui_end_frame :: proc(ctx: ^UI_Context) -> []^lc.Box {
-	return ctx.layout.root_boxes[:] // Return the built tree for animations to use
+ui_layout_tree :: proc(ctx: ^UI_Context) -> []^lc.Box {
+	return ctx.layout.root_boxes[:]
+}
+
+ui_compute :: proc(ctx: ^UI_Context) {
+	lc.end_layout(ctx.layout)
 }
 
 
 element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) {
 	// Allocate the element for this frame
-	el := new(Element, context.temp_allocator)
+	el := new(Element, lc.frame_allocator(ctx.layout))
 	el^ = el_val
 
 	// Auto-generate an ID based on the call site if one wasn't provided

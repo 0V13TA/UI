@@ -7,7 +7,7 @@ import "core:fmt"
 import "core:hash"
 import sdl "vendor:sdl2"
 
-selectable_text :: proc(
+text :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
 	text: string,
@@ -16,7 +16,7 @@ selectable_text :: proc(
 	loc := #caller_location,
 ) {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+	id := lc.ID(hash_input)
 
 	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
 
@@ -67,6 +67,7 @@ selectable_text :: proc(
 	}
 
 	final_style := user_style
+	if user_style.text_wrap == nil do final_style.text_wrap = .WORD
 	if ev_ctx.text_cursors[id] != ev_ctx.text_selection[id] {
 		final_style.selection_start = ev_ctx.text_selection[id]
 		final_style.selection_end = ev_ctx.text_cursors[id]
@@ -85,7 +86,7 @@ button :: proc(
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+	id := lc.ID(hash_input)
 
 	is_hovered := ev_ctx.hovered_id == id
 	is_pressed := ev_ctx.pressed_id == id
@@ -130,13 +131,18 @@ scroll_begin :: proc(
 	final_id := id
 	if final_id == 0 {
 		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-		final_id = lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+		final_id = lc.ID(hash_input)
 	}
 
 	// Apply scroll overflow styles conditionally
 	final_style := user_style
 	if scroll_y do final_style.overflow_y = .SCROLL
 	if scroll_x do final_style.overflow_x = .SCROLL
+
+	// Auto-assign the most logical flex direction if the user didn't specify one
+	if final_style.direction == nil {
+		final_style.direction = scroll_y ? lc.Direction.COLUMN : lc.Direction.ROW
+	}
 
 	element_open(
 		ui_ctx,
@@ -166,7 +172,8 @@ checkbox :: proc(
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+	id := lc.ID(hash_input)
+
 
 	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
 	if ev_ctx.clicked_this_frame[id] or_else false do state^ = !state^
@@ -240,7 +247,7 @@ radio :: proc(
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s:%v", loc.file_path, loc.line, salt, value)
-	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+	id := lc.ID(hash_input)
 
 	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
 	if ev_ctx.clicked_this_frame[id] or_else false do state^ = value
@@ -313,7 +320,7 @@ slider :: proc(
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+	id := lc.ID(hash_input)
 	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
 
 	changed := false
@@ -431,8 +438,8 @@ _delete_selection :: proc(
 	ev_ctx: ^events.Event_Context,
 	id: lc.Box_ID,
 ) -> bool {
-	cursor := ev_ctx.text_cursors[id]
-	anchor := ev_ctx.text_selection[id]
+	cursor := clamp(ev_ctx.text_cursors[id], 0, len(buf^))
+	anchor := clamp(ev_ctx.text_selection[id], 0, len(buf^))
 	if cursor == anchor do return false
 
 	start_idx := min(cursor, anchor)
@@ -472,8 +479,9 @@ _key_down_cb :: proc(e: ^events.UI_Event, data: rawptr) {
 
 	buf := ev_ctx.focused_buffer
 	cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, len(buf^))
-	anchor := ev_ctx.text_selection[e.current_target]
 
+	anchor := clamp(ev_ctx.text_selection[e.current_target], 0, len(buf^))
+	ev_ctx.text_selection[e.current_target] = anchor
 	has_selection := cursor != anchor
 
 	// Safely check for LSHIFT/RSHIFT (0x0003) and LCTRL/RCTRL (0x00C0)
@@ -598,7 +606,7 @@ text_input :: proc(
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.Box_ID(hash.murmur64a(transmute([]byte)hash_input))
+	id := lc.ID(hash_input)
 
 	string_id_str := fmt.tprintf("%s:%d:%s1", loc.file_path, loc.line, salt)
 	string_id := lc.ID(string_id_str)
@@ -659,10 +667,10 @@ text_input :: proc(
 
 			best_cursor := 0
 			for i in 0 ..= len(buffer) {
-				x := ui_text_width(&dummy_box, string(buffer[:i]))
+				x := ui_text_width(&dummy_box, string(buffer^[:i]))
 				if i == len(buffer) {best_cursor = i; break}
 
-				next_x := ui_text_width(&dummy_box, string(buffer[:i + 1]))
+				next_x := ui_text_width(&dummy_box, string(buffer^[:i + 1]))
 				if local_x < (x + next_x) * 0.5 {best_cursor = i; break}
 			}
 
@@ -672,12 +680,15 @@ text_input :: proc(
 			// Anchor the text highlight the exact frame the mouse goes down
 			if just_pressed {
 				ev_ctx.text_selection[id] = best_cursor
+				ev_ctx.cursor_blink_start[id] = u64(sdl.GetTicks())
 			}
-			ev_ctx.cursor_blink_start[id] = u64(sdl.GetTicks())
+
+			// ADD CLAMP HERE
+			anchor := clamp(ev_ctx.text_selection[id], 0, len(buffer))
+			ev_ctx.text_selection[id] = anchor // Keep state in sync
 		}
 	}
 
-	anchor := ev_ctx.text_selection[id]
 
 	// ------------------------------------------------------------
 	// Detect keyboard/text changes and restart blinking
@@ -699,14 +710,17 @@ text_input :: proc(
 		}
 	}
 
-	// Re-read it because a callback may have changed it.
-	cursor = clamp(ev_ctx.text_cursors[id], 0, len(buffer))
+	current_len := len(buffer^)
+
+	// 2. Clamp BOTH the cursor and the selection anchor
+	cursor = clamp(ev_ctx.text_cursors[id], 0, current_len)
+	anchor := clamp(ev_ctx.text_selection[id], 0, current_len)
 
 	// ------------------------------------------------------------
 	// Calculate cursor position
 	// ------------------------------------------------------------
 
-	cursor_px := ui_text_width(&dummy_box, string(buffer[:cursor]))
+	cursor_px := ui_text_width(&dummy_box, string(buffer^[:cursor]))
 
 
 	// ------------------------------------------------------------
@@ -726,7 +740,7 @@ text_input :: proc(
 			viewport_width := max(viewport_right - viewport_left, 1.0)
 
 			// Cursor position in the text's unscrolled coordinate space.
-			cursor_px := ui_text_width(&dummy_box, string(buffer[:cursor]))
+			cursor_px := ui_text_width(&dummy_box, string(buffer^[:cursor]))
 
 			// Small amount of space around the cursor.
 			margin: f32 = 5.0
@@ -742,7 +756,7 @@ text_input :: proc(
 
 			// CLAMP SCROLL: Prevent the text from floating away from the right edge
 			// when characters are deleted and the total text width shrinks.
-			total_text_width := ui_text_width(&dummy_box, string(buffer[:]))
+			total_text_width := ui_text_width(&dummy_box, string(buffer^[:]))
 			max_scroll := max(total_text_width + 15.0 - viewport_width, 0.0)
 
 			ev_ctx.scroll_offsets_x[id] = clamp(ev_ctx.scroll_offsets_x[id], 0.0, max_scroll)
@@ -758,7 +772,7 @@ text_input :: proc(
 	// ------------------------------------------------------------
 
 	display_text := ""
-	if len(buffer) > 0 do display_text = string(buffer[:])
+	if len(buffer) > 0 do display_text = string(buffer^[:])
 	else do display_text = placeholder
 
 	text_color := Color{}
@@ -807,8 +821,8 @@ text_input :: proc(
 	end_idx := max(cursor, anchor)
 
 	if start_idx != end_idx {
-		start_px := ui_text_width(&dummy_box, string(buffer[:start_idx]))
-		end_px := ui_text_width(&dummy_box, string(buffer[:end_idx]))
+		start_px := ui_text_width(&dummy_box, string(buffer^[:start_idx]))
+		end_px := ui_text_width(&dummy_box, string(buffer^[:end_idx]))
 
 		element_open(
 			ui_ctx,

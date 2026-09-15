@@ -165,6 +165,11 @@ Box :: struct {
 
 // --- Arena Implementation ---
 
+//  a small public accessor, since the arena field itself is private
+frame_allocator :: proc(ctx: ^Layout_Context) -> mem.Allocator {
+	return chained_arena_allocator(&ctx.arenas[ctx.active_idx])
+}
+
 chained_arena_new_block :: proc(ca: ^Layout_Chained_Arena, min_size: int) -> ^Layout_Arena_Block {
 	size := max(min_size, ca.block_size)
 	block := new(Layout_Arena_Block, ca.backing_allocator)

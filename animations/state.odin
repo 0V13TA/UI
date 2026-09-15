@@ -3,11 +3,12 @@ package animations
 import lc "../layout_calc"
 
 Retained_State :: struct {
-	id:             lc.Box_ID,
-	has_structural: bool,
-	width:          f32,
-	height:         f32,
-	opacity:        f32,
+	id:         lc.Box_ID,
+	has_width:  bool,
+	has_height: bool,
+	width:      f32,
+	height:     f32,
+	opacity:    f32,
 }
 
 Context :: struct {
@@ -32,11 +33,16 @@ process_lifecycles :: proc(ctx: ^Context, layout: ^lc.Layout_Context) {
 
 apply_structural :: proc(ctx: ^Context, root: ^lc.Box) {
 	if root == nil do return
+
 	if state, ok := ctx.states[root.id]; ok {
-		if state.has_structural {
+		if state.has_width {
 			root.width = lc.Fixed{state.width}
 		}
+		if state.has_height {
+			root.height = lc.Fixed{state.height}
+		}
 	}
+
 	for child in root.children {
 		apply_structural(ctx, child)
 	}

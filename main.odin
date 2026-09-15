@@ -6,8 +6,18 @@ import lc "./layout_calc"
 import "./renderer"
 import "core:fmt"
 import "core:hash"
+import "core:strings"
 import sdl "vendor:sdl2"
 import ttf "vendor:sdl2/ttf"
+
+// 1. Define our Data Model
+User :: struct {
+	id:       int,
+	name:     string,
+	role:     string,
+	deleting: bool,
+	is_new:   bool,
+}
 
 main :: proc() {
 	sdl.Init({.VIDEO})
@@ -16,7 +26,7 @@ main :: proc() {
 	defer ttf.Quit()
 
 	window := sdl.CreateWindow(
-		"Odin UI Engine",
+		"Odin UI Engine - CRUD App",
 		sdl.WINDOWPOS_CENTERED,
 		sdl.WINDOWPOS_CENTERED,
 		1024,
@@ -24,6 +34,7 @@ main :: proc() {
 		{.SHOWN},
 	)
 	defer sdl.DestroyWindow(window)
+
 	sdl_rend := sdl.CreateRenderer(window, -1, {.ACCELERATED, .PRESENTVSYNC})
 	defer sdl.DestroyRenderer(sdl_rend)
 
@@ -50,14 +61,46 @@ main :: proc() {
 		states = make(map[lc.Box_ID]^anim.Retained_State),
 	}
 
-	// Component State
-	check_state := true
-	radio_state := 2
-	slider_val: f32 = 45.0
-	text_buffer := make([dynamic]u8)
-	defer delete(text_buffer)
+	// --- CRUD App State ---
+	users := make([dynamic]User)
+	defer {
+		for u in users {
+			delete(u.name)
+			delete(u.role)
+		}
+		delete(users)
+	}
 
-	sample_text := "This is a selectable text block. Drag your mouse across these words to see the global highlight rendering in action alongside the text kerning and word wrapping."
+	next_id := 1
+	edit_id := 0
+
+	name_buf := make([dynamic]u8)
+	role_buf := make([dynamic]u8)
+	defer {
+		delete(name_buf)
+		delete(role_buf)
+	}
+
+	// Seed some initial data to see the stagger effect
+	append(
+		&users,
+		User{id = next_id, name = strings.clone("Alice Admin"), role = strings.clone("Sysadmin")},
+	); next_id += 1
+	append(
+		&users,
+		User{id = next_id, name = strings.clone("Bob Builder"), role = strings.clone("Engineer")},
+	); next_id += 1
+	append(
+		&users,
+		User {
+			id = next_id,
+			name = strings.clone("Charlie Code"),
+			role = strings.clone("Developer"),
+		},
+	); next_id += 1
+
+	play_intro := true
+	USER_CARD_CLASS := renderer.Class_Name("user_card")
 
 	running := true
 	for running {
@@ -75,135 +118,303 @@ main :: proc() {
 		renderer.ui_begin_frame(ui_ctx, sdl_rend, win_w, win_h)
 		tl := renderer.timeline(ui_ctx, &anim_ctx)
 
-		{
-			renderer.element_open(
-				ui_ctx,
-				{
-					style = {
-						width = lc.ViewPercent{100},
-						height = lc.ViewPercent{100},
-						direction = .ROW,
-						bg_color = renderer.Color{0.95, 0.95, 0.97, 1},
-					},
+		// Main Layout Wrapper
+		renderer.element_open(
+			ui_ctx,
+			{
+				style = {
+					width = lc.ViewPercent{100},
+					height = lc.ViewPercent{100},
+					direction = .ROW,
+					bg_color = renderer.Color{0.95, 0.95, 0.97, 1},
 				},
-			)
-			defer renderer.element_close(ui_ctx)
+			},
+		)
 
+		// ---------------------------------------------------------
+		// LEFT PANEL: Form
+		// ---------------------------------------------------------
+		renderer.element_open(
+			ui_ctx,
 			{
-				renderer.element_open(
-					ui_ctx,
-					{
-						style = {
-							gap = 20,
-							direction = .COLUMN,
-							width = lc.Fixed{300},
-							height = lc.Percent{100},
-							padding = renderer.space(20),
-							bg_color = renderer.Color{1, 1, 1, 1},
-							border = renderer.space(0, 2, 0, 0),
-							border_color = renderer.Color{0.8, 0.8, 0.8, 1},
-						},
-					},
-				)
-				defer renderer.element_close(ui_ctx)
+				id = lc.ID("left_panel"),
+				style = {
+					gap = 20,
+					direction = .COLUMN,
+					width = lc.Fixed{300},
+					height = lc.Percent{100},
+					padding = renderer.space(30),
+					bg_color = renderer.Color{1, 1, 1, 1},
+					border = renderer.space(0, 8, 0, 0),
+					border_color = renderer.Color{0.8, 0.8, 0.8, 1},
+				},
+			},
+		)
 
-				renderer.selectable_text(
-					ui_ctx,
-					&ev_ctx,
-					"Settings",
-					{font_size = 18, text_color = renderer.Color{0.1, 0.1, 0.1, 1}},
-				)
+		form_title := edit_id == 0 ? "Add New User" : "Edit User"
+		renderer.text(
+			ui_ctx,
+			&ev_ctx,
+			form_title,
+			{font_size = 24, text_color = renderer.Color{0.1, 0.1, 0.1, 1}},
+		)
 
-				renderer.checkbox(ui_ctx, &ev_ctx, "Enable VSync", &check_state)
+		renderer.text(
+			ui_ctx,
+			&ev_ctx,
+			"Full Name",
+			{font_size = 14, text_color = renderer.Color{0.5, 0.5, 0.5, 1}},
+		)
+		renderer.text_input(ui_ctx, &ev_ctx, &name_buf, "e.g. Jane Doe")
 
-				{
-					renderer.element_open(ui_ctx, {style = {direction = .ROW, gap = 15}})
-					defer renderer.element_close(ui_ctx)
+		renderer.text(
+			ui_ctx,
+			&ev_ctx,
+			"Role",
+			{font_size = 14, text_color = renderer.Color{0.5, 0.5, 0.5, 1}},
+		)
+		renderer.text_input(ui_ctx, &ev_ctx, &role_buf, "e.g. Engineer")
 
-					renderer.radio(ui_ctx, &ev_ctx, "Low", &radio_state, 1)
-					renderer.radio(ui_ctx, &ev_ctx, "High", &radio_state, 2)
-				}
+		// Action Buttons
+		renderer.element_open(
+			ui_ctx,
+			{style = {direction = .ROW, gap = 10, margin = renderer.space(10, 0, 0, 0)}},
+		)
 
-				text := fmt.tprintf("Volume: %.0f%%", slider_val)
-				renderer.selectable_text(
-					ui_ctx,
-					&ev_ctx,
-					text,
-					{margin = renderer.space(20, 0, 0, 0)},
-				)
-				renderer.slider(ui_ctx, &ev_ctx, &anim_ctx, &slider_val, 0, 100)
-			}
-
-			{
-				renderer.scroll_begin(
-					ui_ctx,
-					&ev_ctx,
-					lc.ID("main_scroll"),
-					user_style = {
-						gap = 30,
-						width = lc.Grow{1},
-						height = lc.Percent{100},
-						padding = renderer.space(10),
-						bg_color = renderer.Color{0, 1, 0.3, 1},
-					},
-				)
-				defer renderer.scroll_end(ui_ctx)
-
-				renderer.text_input(ui_ctx, &ev_ctx, &text_buffer, "Search query...")
-
-				{
-					// Fine Elements
-					renderer.element_open(
-						ui_ctx,
-						{
-							style = {
-								width = lc.Percent{100},
-								height = lc.Fixed{100},
-								padding = renderer.space(20),
-								bg_color = renderer.Color{1, 1, 1, 1},
-								border_radius = renderer.space(8),
-								border = renderer.space(2),
-								border_color = renderer.Color{0.3, 0.8, 0.8, 1},
-							},
+		btn_text := edit_id == 0 ? "Create" : "Save Changes"
+		if renderer.button(ui_ctx, &ev_ctx, btn_text) {
+			if len(name_buf) > 0 {
+				if edit_id == 0 {
+					// CREATE
+					append(
+						&users,
+						User {
+							id     = next_id,
+							name   = strings.clone(string(name_buf[:])),
+							role   = strings.clone(string(role_buf[:])),
+							is_new = true, // <-- Flag it here
 						},
 					)
-					defer renderer.element_close(ui_ctx)
-
-					renderer.selectable_text(
-						ui_ctx,
-						&ev_ctx,
-						sample_text,
-						{
-							text_wrap = .WORD,
-							font_size = 20,
-							text_color = renderer.Color{0.3, 0.3, 0.3, 0.1},
-						},
-					)
-
-					for i in 0 ..< 5 {
-						renderer.element_open(
-							ui_ctx,
-							{
-								style = {
-									width = lc.Percent{100},
-									height = lc.Fixed{150},
-									bg_color = renderer.Color{0.9, 0.9, 0.9, 1},
-									border_radius = renderer.space(8),
-								},
-							},
-						); renderer.element_close(ui_ctx)
+					next_id += 1
+				} else {
+					// UPDATE
+					for &u in users {
+						if u.id == edit_id {
+							delete(u.name)
+							delete(u.role)
+							u.name = strings.clone(string(name_buf[:]))
+							u.role = strings.clone(string(role_buf[:]))
+							break
+						}
 					}
+					edit_id = 0
 				}
+				clear(&name_buf)
+				clear(&role_buf)
 			}
 		}
 
-		uncomputed_roots := renderer.ui_end_frame(ui_ctx)
+		if edit_id != 0 {
+			if renderer.button(
+				ui_ctx,
+				&ev_ctx,
+				"Cancel",
+				{bg_color = renderer.Color{0.6, 0.6, 0.6, 1}},
+			) {
+				edit_id = 0
+				clear(&name_buf)
+				clear(&role_buf)
+			}
+		}
+		renderer.element_close(ui_ctx) // Close Buttons
+		renderer.element_close(ui_ctx) // Close Left Panel
+
+
+		// ---------------------------------------------------------
+		// RIGHT PANEL: User List
+		// ---------------------------------------------------------
+		renderer.scroll_begin(
+			ui_ctx,
+			&ev_ctx,
+			lc.ID("user_list_scroll"),
+			scroll_y = true,
+			user_style = {
+				direction = .COLUMN,
+				gap = 15,
+				width = lc.Grow{1},
+				height = lc.Percent{100},
+				padding = renderer.space(40),
+			},
+		)
+
+		if len(users) == 0 {
+			renderer.text(
+				ui_ctx,
+				&ev_ctx,
+				"No users found. Create one to get started!",
+				{font_size = 18, text_color = renderer.Color{0.6, 0.6, 0.6, 1}},
+			)
+		}
+
+		to_delete_idx := -1
+
+		for &u, i in users {
+			// Create a stable ID for the animation engine to target
+			card_id := lc.ID(fmt.tprintf("user_card_%d", u.id))
+
+			if u.is_new {
+				// Fade in from 0 over 0.5 seconds
+				renderer.tl_from(
+					&tl,
+					card_id,
+					{duration = 0.5, ease = anim.ease_out_exp, opacity = 0.0},
+				)
+				u.is_new = false
+			}
+			// If it is deleting, wait for the opacity tween to finish before removing memory
+			if u.deleting {
+				state := anim.get_state(&anim_ctx, card_id)
+				if state.opacity <= 0.01 {
+					to_delete_idx = i
+					continue
+				}
+			}
+
+			renderer.element_open(
+				ui_ctx,
+				{
+					_box = {id = card_id}, // <-- Bind the ID
+					classes = []renderer.Class{USER_CARD_CLASS},
+					style = {
+						direction     = .ROW,
+						align_items   = .CENTER,
+						width         = lc.Percent{100},
+						// Strip padding and borders during deletion so it can collapse to 0
+						padding       = u.deleting ? renderer.space(0) : renderer.space(20),
+						border        = u.deleting ? renderer.space(0) : renderer.space(1),
+						bg_color      = renderer.Color{1, 1, 1, 1},
+						border_radius = renderer.space(8),
+						border_color  = renderer.Color{0.8, 0.8, 0.8, 1},
+						overflow_y    = .HIDDEN, // <-- Prevent text from spilling out while shrinking
+					},
+				},
+			)
+
+			// Info
+			renderer.element_open(
+				ui_ctx,
+				{style = {direction = .COLUMN, width = lc.Grow{1}, gap = 5}},
+			)
+			renderer.text(
+				ui_ctx,
+				&ev_ctx,
+				u.name,
+				{font_size = 20, text_color = renderer.Color{0.1, 0.1, 0.1, 1}},
+			)
+			renderer.text(
+				ui_ctx,
+				&ev_ctx,
+				u.role,
+				{font_size = 14, text_color = renderer.Color{0.5, 0.5, 0.6, 1}},
+			)
+			renderer.element_close(ui_ctx)
+
+			// Actions
+			edit_salt := fmt.tprintf("edit_%d", u.id)
+			if renderer.button(ui_ctx, &ev_ctx, "Edit", salt = edit_salt) {
+				edit_id = u.id
+				clear(&name_buf)
+				clear(&role_buf)
+				for b in transmute([]u8)u.name do append(&name_buf, b)
+				for b in transmute([]u8)u.role do append(&role_buf, b)
+			}
+
+			del_salt := fmt.tprintf("del_%d", u.id)
+			if renderer.button(
+				ui_ctx,
+				&ev_ctx,
+				"Delete",
+				{
+					bg_color = renderer.Color{0.9, 0.3, 0.3, 1},
+					margin = renderer.space(0, 0, 0, 10),
+				},
+				salt = del_salt,
+			) {
+				// 1. Mark as deleting and trigger the exit timeline
+				if !u.deleting {
+					u.deleting = true
+					renderer.tl_to(
+						&tl,
+						card_id,
+						{duration = 0.4, ease = anim.ease_out_exp, height = 0.0, opacity = 0.0},
+					)
+				}
+			}
+
+			renderer.element_close(ui_ctx) // Close User Card
+		}
+
+		renderer.scroll_end(ui_ctx) // Close Right Panel
+		renderer.element_close(ui_ctx) // Close Main Wrapper
+
+		// Perform deletion outside the rendering loop
+		if to_delete_idx != -1 {
+			if edit_id == users[to_delete_idx].id {
+				edit_id = 0
+				clear(&name_buf)
+				clear(&role_buf)
+			}
+			delete(users[to_delete_idx].name)
+			delete(users[to_delete_idx].role)
+			ordered_remove(&users, to_delete_idx)
+		}
+
+		// 1. Get the uncomputed tree and apply structural animations FIRST
+		roots := renderer.ui_layout_tree(ui_ctx)
+		for root in roots {
+			anim.apply_structural(&anim_ctx, root)
+		}
+
+		// 2. NOW run the layout math
+		renderer.ui_compute(ui_ctx)
+
+		// 3. Queue Intro Animation
+		if play_intro {
+			renderer.tl_from(
+				&tl,
+				lc.ID("left_panel"),
+				{duration = 0.6, ease = anim.ease_out_exp, width = 0.0},
+			)
+			renderer.tl_from(
+				&tl,
+				USER_CARD_CLASS,
+				{
+					duration = 1.2,
+					stagger  = 0.1,
+					// An aggressive overshoot cubic-bezier!
+					ease     = anim.Bezier{0.175, 0.885, 0.32, 1.275},
+					opacity  = 0.0,
+				},
+			)
+			play_intro = false
+		}
+
 		renderer.tl_play(&tl)
 		anim.update(&anim_ctx.engine, 0.016)
 
+		// 4. Apply visual animations (opacity/color) right before rendering
+		visual_cb :: proc(user_data: rawptr, state: ^anim.Retained_State) {
+			el := (^renderer.Element)(user_data)
+			if el != nil do el.resolved_opacity = state.opacity
+		}
+
+		for root in roots {
+			anim.apply_visual(&anim_ctx, root, visual_cb)
+		}
+
 		sdl.SetRenderDrawColor(sdl_rend, 240, 240, 245, 255)
 		sdl.RenderClear(sdl_rend)
-		renderer.render_tree(ui_ctx, sdl_rend, uncomputed_roots)
+		renderer.render_tree(ui_ctx, sdl_rend, roots)
 		sdl.RenderPresent(sdl_rend)
 	}
 }
