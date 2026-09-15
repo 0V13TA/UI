@@ -139,12 +139,15 @@ Glyph :: struct {
 }
 
 UI_Context :: struct {
-	layout:      ^lc.Layout_Context,
-	fonts:       map[u32]^ttf.Font, // Hash Font name + Cache name
-	stylesheet:  map[Class]Style,
-	glyph_cache: map[Glyph_Key]Glyph,
-	slice_cache: map[i32]^sdl.Texture,
-	image_cache: map[u32]^sdl.Texture,
+	layout:         ^lc.Layout_Context,
+	fonts:          map[u32]^ttf.Font, // Hash Font name + Cache name
+	stylesheet:     map[Class]Style,
+	glyph_cache:    map[Glyph_Key]Glyph,
+	slice_cache:    map[i32]^sdl.Texture,
+	image_cache:    map[u32]^sdl.Texture,
+	mask_texture:   ^sdl.Texture,
+	mask_texture_w: i32,
+	mask_texture_h: i32,
 }
 
 
@@ -309,6 +312,33 @@ get_9slice_texture :: proc(
 	tex := create_9slice_base_texture(renderer, radius)
 	ctx.slice_cache[radius] = tex
 	return tex
+}
+
+get_mask_texture :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, w, h: i32) -> ^sdl.Texture {
+	// If we already have a texture large enough, just reuse it!
+	if ctx.mask_texture != nil && ctx.mask_texture_w >= w && ctx.mask_texture_h >= h {
+		return ctx.mask_texture
+	}
+
+	if ctx.mask_texture != nil do sdl.DestroyTexture(ctx.mask_texture)
+
+	// Grow the texture in chunks so we aren't reallocating for every 1 pixel change
+	new_w := max(ctx.mask_texture_w, w) + 256
+	new_h := max(ctx.mask_texture_h, h) + 256
+
+	ctx.mask_texture = sdl.CreateTexture(
+		renderer,
+		u32(sdl.PixelFormatEnum.RGBA8888),
+		sdl.TextureAccess.TARGET,
+		new_w,
+		new_h,
+	)
+
+	sdl.SetTextureBlendMode(ctx.mask_texture, .BLEND)
+	ctx.mask_texture_w = new_w
+	ctx.mask_texture_h = new_h
+
+	return ctx.mask_texture
 }
 
 // --- Master Box Drawing Proc ---
@@ -866,48 +896,43 @@ render_box :: proc(
 				.ADD,
 			)
 
-			// Allocate a transient render target for compositing
-			mask_tex := sdl.CreateTexture(
-				renderer,
-				sdl.PixelFormatEnum.RGBA8888,
-				sdl.TextureAccess.TARGET,
-				dst_rect.w,
-				dst_rect.h,
-			)
-			sdl.SetTextureBlendMode(mask_tex, .BLEND)
+			// Grab our shared layout mask
+			mask_tex := get_mask_texture(ui_ctx, renderer, dst_rect.w, dst_rect.h)
 
-			// Clear target to absolute transparency
 			prev_target := sdl.GetRenderTarget(renderer)
 			sdl.SetRenderTarget(renderer, mask_tex)
-			sdl.SetRenderDrawColor(renderer, 0, 0, 0, 0)
-			sdl.RenderClear(renderer)
 
-			// Draw an opaque white 9-slice mask at the origin (0, 0)
+			// Clear ONLY the portion of the texture we are using this frame
+			prev_blend: sdl.BlendMode
+			sdl.GetRenderDrawBlendMode(renderer, &prev_blend)
+			sdl.SetRenderDrawBlendMode(renderer, .NONE) // Force overwrite pixels (including alpha)
+
+			sdl.SetRenderDrawColor(renderer, 0, 0, 0, 0)
+			clear_rect := sdl.Rect{0, 0, dst_rect.w, dst_rect.h}
+			sdl.RenderFillRect(renderer, &clear_rect)
+
+			sdl.SetRenderDrawBlendMode(renderer, prev_blend) // Restore blend
+
+			// Draw an opaque white 9-slice mask at the origin
 			tex_9slice := get_9slice_texture(ui_ctx, renderer, corner_radius)
 			draw_rounded_rect_9slice(
 				renderer,
 				tex_9slice,
-				sdl.Rect{0, 0, dst_rect.w, dst_rect.h},
+				clear_rect,
 				corner_radius,
 				sdl.Color{255, 255, 255, 255},
 			)
 
 			// Stamp the image onto the mask using our custom blend
 			sdl.SetTextureBlendMode(el.resolved_bg_image, clip_blend)
-			sdl.RenderCopy(
-				renderer,
-				el.resolved_bg_image,
-				&src_rect,
-				&sdl.Rect{0, 0, dst_rect.w, dst_rect.h},
-			)
+			sdl.RenderCopy(renderer, el.resolved_bg_image, &src_rect, &clear_rect)
 
-			// Restore state and draw the finalized composite to the screen
+			// Draw the finalized composite to the screen
 			sdl.SetTextureBlendMode(el.resolved_bg_image, .BLEND)
 			sdl.SetRenderTarget(renderer, prev_target)
-			sdl.RenderCopy(renderer, mask_tex, nil, &dst_rect)
 
-			// Cleanup
-			sdl.DestroyTexture(mask_tex)
+			// We only copy the specific `clear_rect` dimensions from the mask!
+			sdl.RenderCopy(renderer, mask_tex, &clear_rect, &dst_rect)
 		} else {
 			// Fallback to standard fast-path for non-rounded images
 			sdl.RenderCopy(renderer, el.resolved_bg_image, &src_rect, &dst_rect)
@@ -1243,6 +1268,7 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 
 	// Purge GPU textures before destroying the map
 	clear_texture_cache(ctx)
+	if ctx.mask_texture != nil do sdl.DestroyTexture(ctx.mask_texture)
 	for _, tex in ctx.slice_cache {
 		sdl.DestroyTexture(tex)
 	}
@@ -1250,6 +1276,7 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 	for _, tex in ctx.image_cache {
 		if tex != nil do sdl.DestroyTexture(tex)
 	}
+
 	delete(ctx.image_cache)
 
 	delete(ctx.stylesheet)
