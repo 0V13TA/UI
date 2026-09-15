@@ -382,12 +382,18 @@ resolve_fixed_width :: proc(
 	if is_fit {
 		sum: f32 = 0.0
 		if val, ok := box.text.?; ok do sum = ctx.text_width_func(box, val)
+
+		flow_count := 0
 		for child in box.children {
 			resolve_fixed_width(child, ctx, viewport_dim, true)
+
+			if child.position == .ABSOLUTE || child.position == .FIXED do continue
+
 			child_total := child.computed_width + get_horizontal(child.margin)
 			if is_row {sum += child_total} else {sum = max(sum, child_total)}
+			flow_count += 1
 		}
-		gap_count := max(len(box.children) - 1, 0)
+		gap_count := max(flow_count - 1, 0)
 		if is_row do sum += f32(gap_count) * box.gap
 		box.computed_width = sum + get_horizontal(box.padding) + get_horizontal(box.border)
 	} else {
@@ -490,6 +496,12 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 			line_sum: f32 = 0.0
 			for end < len(box.children) {
 				child := box.children[end]
+
+				if child.position == .ABSOLUTE || child.position == .FIXED {
+					end += 1
+					continue
+				}
+
 				child_outer := child.computed_width + get_horizontal(child.margin)
 				if box.wrap && end > start {
 					if line_sum + box.gap + child_outer > parent_inner_width do break
@@ -701,11 +713,16 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 	if is_fit {
 		content_height: f32 = 0.0
 		if is_column {
+			flow_count := 0
 			for child in box.children {
 				resolve_fixed_height(child, viewport_dim, true)
+
+				if child.position == .ABSOLUTE || child.position == .FIXED do continue
+
 				content_height += child.computed_height + get_vertical(child.margin)
+				flow_count += 1
 			}
-			gap_count := max(len(box.children) - 1, 0)
+			gap_count := max(flow_count - 1, 0)
 			content_height += f32(gap_count) * box.gap
 		} else {
 			parent_inner_width := max(
@@ -721,6 +738,10 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 				for end < len(box.children) {
 					child := box.children[end]
 					resolve_fixed_height(child, viewport_dim, true)
+					if child.position == .ABSOLUTE || child.position == .FIXED {
+						end += 1
+						continue
+					}
 					child_w := child.computed_width + get_horizontal(child.margin)
 					child_h := child.computed_height + get_vertical(child.margin)
 					if box.wrap && end > start {
@@ -1023,6 +1044,14 @@ layout_position_pass :: proc(
 	box.x = parent_x + box.margin[Side.LEFT]
 	box.y = parent_y + box.margin[Side.TOP]
 
+	if box.position == .FIXED && box.parent == nil {
+		if left, ok := box.left.?; ok do box.x = left + box.margin[Side.LEFT]
+		else if right, ok := box.right.?; ok do box.x = ctx.screen_width - box.computed_width - right - box.margin[Side.RIGHT]
+
+		if top, ok := box.top.?; ok do box.y = top + box.margin[Side.TOP]
+		else if bottom, ok := box.bottom.?; ok do box.y = ctx.screen_height - box.computed_height - bottom - box.margin[Side.BOTTOM]
+	}
+
 	// Inner content origin for children (after padding and border)
 	content_x := box.x + box.padding[Side.LEFT] + box.border[Side.LEFT] - box.offset_x
 	content_y := box.y + box.padding[Side.TOP] + box.border[Side.TOP] - box.offset_y
@@ -1157,7 +1186,8 @@ layout_position_pass :: proc(
 					child_y = anchor_y + bounds_h - child.computed_height - bottom
 				}
 
-				layout_position_pass(child, ctx, child_x, child_y, child_clip)
+				pass_clip := child.position == .FIXED ? nil : child_clip
+				layout_position_pass(child, ctx, child_x, child_y, pass_clip)
 				continue
 			}
 
@@ -1270,7 +1300,7 @@ sort_siblings_by_z :: proc(box: ^Box) {
 box_open :: proc(ctx: ^Layout_Context, box_config: Box, loc := #caller_location) -> ^Box {
 	box := new_box_from_config(ctx, box_config, loc)
 
-	if len(ctx.parent_stack) > 0 {
+	if len(ctx.parent_stack) > 0 && box.position != .FIXED {
 		parent := ctx.parent_stack[len(ctx.parent_stack) - 1]
 		append(&parent.children, box)
 		box.parent = parent

@@ -6,6 +6,7 @@ import lc "../layout_calc"
 import "core:fmt"
 import "core:hash"
 import sdl "vendor:sdl2"
+import img "vendor:sdl2/image"
 
 text :: proc(
 	ui_ctx: ^UI_Context,
@@ -83,16 +84,20 @@ button :: proc(
 	text: string,
 	user_style := Style{},
 	salt := "",
+	id: lc.Box_ID = 0,
 	loc := #caller_location,
 ) -> bool {
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.ID(hash_input)
+	final_id := id
+	if final_id == 0 {
+		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+		final_id = lc.ID(hash_input)
+	}
 
-	is_hovered := ev_ctx.hovered_id == id
-	is_pressed := ev_ctx.pressed_id == id
-	is_clicked := ev_ctx.clicked_this_frame[id] or_else false
+	is_hovered := ev_ctx.hovered_id == final_id
+	is_pressed := ev_ctx.pressed_id == final_id
+	is_clicked := ev_ctx.clicked_this_frame[final_id] or_else false
 
-	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
+	events.register(ev_ctx, final_id, events.Event_Callbacks{focusable = true})
 
 	// Fall back to default theme colors if not provided
 	bg := user_style.bg_color.? or_else Color{0.15, 0.4, 0.8, 1.0}
@@ -111,10 +116,58 @@ button :: proc(
 	if final_style.width == nil do final_style.width = lc.Fit(true)
 	if final_style.height == nil do final_style.height = lc.Fit(true)
 
-	element_open(ui_ctx, Element{_box = {id = id}, text = text, style = final_style}, loc)
+	element_open(ui_ctx, Element{_box = {id = final_id}, text = text, style = final_style}, loc)
 	element_close(ui_ctx)
 
 	return is_clicked
+}
+
+// --- TOOLTIP COMPONENT ---
+tooltip_begin :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	target_id: lc.Box_ID,
+	user_style := Style{},
+	loc := #caller_location,
+) -> bool {
+	// Immediate Mode Magic: If the target isn't hovered, we return false and skip rendering the children!
+	if ev_ctx.hovered_id != target_id do return false
+
+	// Fetch the target's position from the previous frame to anchor the tooltip
+	target_x, target_y, target_w, target_h: f32 = 0, 0, 0, 0
+	if prev, ok := ui_ctx.layout.prev_all_boxes[target_id]; ok {
+		target_x = prev.x
+		target_y = prev.y
+		target_w = prev.computed_width
+		target_h = prev.computed_height
+	}
+
+	final_style := user_style
+	final_style.position = .FIXED
+	final_style.z_index = 1000
+
+	// Default positioning (Anchored below the target)
+	if final_style.left == nil do final_style.left = target_x
+	if final_style.top == nil do final_style.top = target_y + target_h + 10.0
+	if final_style.z_index == nil do final_style.z_index = 1000
+
+	// Default Layout & Visuals
+	if final_style.direction == nil do final_style.direction = .COLUMN
+	if final_style.bg_color == nil do final_style.bg_color = Color{0.1, 0.1, 0.15, 0.95}
+	if final_style.border_color == nil do final_style.border_color = Color{1, 1, 1, 0.1}
+	if final_style.border == nil do final_style.border = space(1)
+	if final_style.border_radius == nil do final_style.border_radius = space(6)
+	if final_style.padding == nil do final_style.padding = space_2(8, 12)
+	if final_style.width == nil do final_style.width = lc.Fit(true)
+	if final_style.height == nil do final_style.height = lc.Fit(true)
+
+	tooltip_id := lc.Box_ID(hash.fnv32(transmute([]byte)fmt.tprintf("tooltip_%d", target_id)))
+	element_open(ui_ctx, Element{_box = {id = tooltip_id}, style = final_style}, loc)
+	return true
+}
+
+tooltip_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
+	if is_open do element_close(ui_ctx)
 }
 
 scroll_begin :: proc(
@@ -712,7 +765,7 @@ text_input :: proc(
 
 	current_len := len(buffer^)
 
-	// 2. Clamp BOTH the cursor and the selection anchor
+	// Clamp BOTH the cursor and the selection anchor
 	cursor = clamp(ev_ctx.text_cursors[id], 0, current_len)
 	anchor := clamp(ev_ctx.text_selection[id], 0, current_len)
 
@@ -894,4 +947,56 @@ text_input :: proc(
 	scroll_end(ui_ctx)
 
 	return is_focused
+}
+
+// --- OVERLOAD BLOCK ---
+image :: proc {
+	image_texture,
+	image_path,
+}
+
+// The original base component (renamed)
+image_texture :: proc(
+	ui_ctx: ^UI_Context,
+	texture: ^sdl.Texture,
+	user_style := Style{},
+	loc := #caller_location,
+) {
+	final_style := user_style
+	final_style.bg_image = texture
+
+	tex_w, tex_h: i32 = 0, 0
+	if texture != nil do sdl.QueryTexture(texture, nil, nil, &tex_w, &tex_h)
+
+	if final_style.width == nil do final_style.width = lc.Fixed{f32(tex_w)}
+	if final_style.height == nil do final_style.height = lc.Fixed{f32(tex_h)}
+
+	element_open(ui_ctx, Element{style = final_style}, loc)
+	element_close(ui_ctx)
+}
+
+// The new path-based component
+image_path :: proc(
+	ui_ctx: ^UI_Context,
+	sdl_rend: ^sdl.Renderer,
+	path: string,
+	user_style: Style = {},
+	loc := #caller_location,
+) {
+	// Hash the file path to use as a fast map key
+	path_hash := hash.fnv32(transmute([]byte)path)
+
+	// Fetch from cache, or load from disk if missing
+	tex, exists := ui_ctx.image_cache[path_hash]
+	if !exists {
+		c_path := fmt.ctprintf("%s", path)
+		tex = img.LoadTexture(sdl_rend, c_path)
+		if tex == nil {
+			fmt.printfln("ERROR: Failed to load image '%s': %s", path, sdl.GetError())
+		}
+		ui_ctx.image_cache[path_hash] = tex
+	}
+
+	// Pass the cached texture down to the base component
+	image_texture(ui_ctx, tex, user_style, loc)
 }

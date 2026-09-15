@@ -25,6 +25,13 @@ Cached_Texture :: struct {
 	height:  i32,
 }
 
+Object_Fit :: enum {
+	STRETCH, // Fills exactly, ignoring aspect ratio (Default)
+	CONTAIN, // Fits inside, preserving aspect ratio (Letterboxes)
+	COVER, // Fills entirely, preserving aspect ratio (Crops excess)
+	NONE, // Native size, centered (Crops if too large)
+}
+
 Color :: distinct [4]f32
 Class :: distinct u32
 
@@ -79,6 +86,10 @@ Style :: struct {
 	z_index:         Maybe(i32),
 
 	//
+	object_fit:      Maybe(Object_Fit),
+	bg_image:        Maybe(^sdl.Texture),
+
+	//
 	width:           Maybe(lc.Sizing),
 	height:          Maybe(lc.Sizing),
 	min_width:       Maybe(lc.Bound_Sizing),
@@ -112,6 +123,8 @@ Element :: struct {
 
 	// Backgroud
 	resolved_bg_color:      Color,
+	resolved_object_fit:    Object_Fit,
+	resolved_bg_image:      ^sdl.Texture,
 }
 
 Glyph_Key :: struct {
@@ -131,6 +144,7 @@ UI_Context :: struct {
 	stylesheet:  map[Class]Style,
 	glyph_cache: map[Glyph_Key]Glyph,
 	slice_cache: map[i32]^sdl.Texture,
+	image_cache: map[u32]^sdl.Texture,
 }
 
 
@@ -291,7 +305,7 @@ get_9slice_texture :: proc(
 	if tex, exists := ctx.slice_cache[radius]; exists {
 		return tex
 	}
-	// Cache miss: Create and store the new 9-slice base texture
+	// Cache miss: Create and store the 9-slice base texture
 	tex := create_9slice_base_texture(renderer, radius)
 	ctx.slice_cache[radius] = tex
 	return tex
@@ -331,14 +345,14 @@ draw_ui_box :: proc(
 		return
 	}
 
-	// 1. Draw Outer Border using 9-Slice
+	// Draw Outer Border using 9-Slice
 	if has_border && border_color[3] > 0 {
 		tex := get_9slice_texture(ctx, renderer, corner_radius)
 		r, g, b, a := to_sdl_color(border_color)
 		draw_rounded_rect_9slice(renderer, tex, bounds, corner_radius, sdl.Color{r, g, b, a})
 	}
 
-	// 2. Draw Inner Background using 9-Slice
+	// Draw Inner Background using 9-Slice
 	if bg_color[3] > 0 {
 		inner_bounds := sdl.Rect {
 			x = bounds.x + i32(border[3]),
@@ -499,6 +513,10 @@ default_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 	// Non-inherited visual defaults
 	// ------------------------------------------------------------
 
+	el.resolved_bg_image = nil
+	el.resolved_object_fit = .STRETCH
+
+
 	el.resolved_bg_color = {0, 0, 0, 0}
 	el.resolved_border_color = {0, 0, 0, 0}
 	el.resolved_border_radius = {0, 0, 0, 0}
@@ -543,6 +561,14 @@ apply_style_block :: proc(el: ^Element, s: Style, ctx: ^UI_Context) {
 	// ------------------------------------------------------------
 	// Visuals
 	// ------------------------------------------------------------
+
+	if v, ok := s.bg_image.?; ok {
+		el.resolved_bg_image = v
+	}
+
+	if v, ok := s.object_fit.?; ok {
+		el.resolved_object_fit = v
+	}
 
 	if v, ok := s.bg_color.?; ok {
 		el.resolved_bg_color = v
@@ -762,7 +788,6 @@ render_box :: proc(
 
 	sdl.SetRenderDrawBlendMode(renderer, .BLEND)
 
-	// UPDATE THIS LINE TO PASS ui_ctx:
 	draw_ui_box(
 		ui_ctx,
 		renderer,
@@ -772,6 +797,64 @@ render_box :: proc(
 		box.border,
 		el.resolved_border_radius,
 	)
+
+	// --- Draw Image/Video Texture ---
+	if el.resolved_bg_image != nil {
+		sdl.SetTextureAlphaMod(el.resolved_bg_image, u8(el.resolved_opacity * 255.0))
+
+		// Inset the image so it doesn't draw over your borders
+		inner_bounds := sdl.Rect {
+			x = bounds.x + i32(box.border[3]),
+			y = bounds.y + i32(box.border[0]),
+			w = bounds.w - i32(box.border[3] + box.border[1]),
+			h = bounds.h - i32(box.border[0] + box.border[2]),
+		}
+
+		tex_w, tex_h: i32
+		sdl.QueryTexture(el.resolved_bg_image, nil, nil, &tex_w, &tex_h)
+
+		src_rect := sdl.Rect{0, 0, tex_w, tex_h}
+		dst_rect := inner_bounds
+
+		if tex_w > 0 && tex_h > 0 && inner_bounds.w > 0 && inner_bounds.h > 0 {
+			tex_ratio := f32(tex_w) / f32(tex_h)
+			box_ratio := f32(inner_bounds.w) / f32(inner_bounds.h)
+
+			#partial switch el.resolved_object_fit {
+			case .CONTAIN:
+				if tex_ratio > box_ratio {
+					dst_rect.w = inner_bounds.w
+					dst_rect.h = i32(f32(inner_bounds.w) / tex_ratio)
+					dst_rect.y = inner_bounds.y + (inner_bounds.h - dst_rect.h) / 2
+				} else {
+					dst_rect.h = inner_bounds.h
+					dst_rect.w = i32(f32(inner_bounds.h) * tex_ratio)
+					dst_rect.x = inner_bounds.x + (inner_bounds.w - dst_rect.w) / 2
+				}
+			case .COVER:
+				if tex_ratio > box_ratio {
+					crop_w := i32(f32(tex_h) * box_ratio)
+					src_rect.x = (tex_w - crop_w) / 2
+					src_rect.w = crop_w
+				} else {
+					crop_h := i32(f32(tex_w) / box_ratio)
+					src_rect.y = (tex_h - crop_h) / 2
+					src_rect.h = crop_h
+				}
+			case .NONE:
+				dst_rect.w = min(tex_w, inner_bounds.w)
+				dst_rect.h = min(tex_h, inner_bounds.h)
+				dst_rect.x = inner_bounds.x + (inner_bounds.w - dst_rect.w) / 2
+				dst_rect.y = inner_bounds.y + (inner_bounds.h - dst_rect.h) / 2
+				src_rect.w = dst_rect.w
+				src_rect.h = dst_rect.h
+				src_rect.x = (tex_w - src_rect.w) / 2
+				src_rect.y = (tex_h - src_rect.h) / 2
+			}
+		}
+
+		sdl.RenderCopy(renderer, el.resolved_bg_image, &src_rect, &dst_rect)
+	}
 
 	// Draw Cached Text
 	if text, ok := box.text.?; ok {
@@ -804,7 +887,7 @@ render_box :: proc(
 						end_idx := start_idx
 						line_width: f32 = 0.0
 
-						// 1. Measure how many runes fit on this line
+						// Measure how many runes fit on this line
 						for end_idx < len(runes) {
 							buf: [5]u8
 							bytes, n := utf8.encode_rune(runes[end_idx])
@@ -1078,7 +1161,7 @@ clear_glyph_cache :: proc(ctx: ^UI_Context) {
 ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx := new(UI_Context)
 
-	// Pass the new SDL text measurement functions to the layout core
+	// Pass the SDL text measurement functions to the layout core
 	ctx.layout = lc.layout_context_create(
 		ui_text_width,
 		ui_text_height,
@@ -1090,6 +1173,7 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx.fonts = make(map[u32]^ttf.Font)
 	ctx.glyph_cache = make(map[Glyph_Key]Glyph)
 	ctx.slice_cache = make(map[i32]^sdl.Texture)
+	ctx.image_cache = make(map[u32]^sdl.Texture)
 
 	return ctx
 }
@@ -1105,6 +1189,10 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 		sdl.DestroyTexture(tex)
 	}
 	delete(ctx.slice_cache)
+	for _, tex in ctx.image_cache {
+		if tex != nil do sdl.DestroyTexture(tex)
+	}
+	delete(ctx.image_cache)
 
 	delete(ctx.stylesheet)
 	delete(ctx.fonts)

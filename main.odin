@@ -8,9 +8,10 @@ import "core:fmt"
 import "core:hash"
 import "core:strings"
 import sdl "vendor:sdl2"
+import img "vendor:sdl2/image"
 import ttf "vendor:sdl2/ttf"
 
-// 1. Define our Data Model
+// Define our Data Model
 User :: struct {
 	id:       int,
 	name:     string,
@@ -24,6 +25,8 @@ main :: proc() {
 	defer sdl.Quit()
 	ttf.Init()
 	defer ttf.Quit()
+	img.Init({.PNG, .JPG})
+	defer img.Quit()
 
 	window := sdl.CreateWindow(
 		"Odin UI Engine - CRUD App",
@@ -246,6 +249,17 @@ main :: proc() {
 				padding = renderer.space(40),
 			},
 		)
+		renderer.image(
+			ui_ctx,
+			sdl_rend,
+			"/home/ovieta/Pictures/wallpapers/wallhaven-1pd22w_1600x900.png",
+			user_style = renderer.Style {
+				object_fit = .COVER,
+				width = lc.Percent{100},
+				height = lc.Fixed{150},
+				border_radius = renderer.space(8),
+			},
+		)
 
 		if len(users) == 0 {
 			renderer.text(
@@ -328,6 +342,7 @@ main :: proc() {
 				for b in transmute([]u8)u.name do append(&name_buf, b)
 				for b in transmute([]u8)u.role do append(&role_buf, b)
 			}
+			del_id := lc.ID(fmt.tprintf("del_btn_%d", u.id))
 
 			del_salt := fmt.tprintf("del_%d", u.id)
 			if renderer.button(
@@ -338,9 +353,9 @@ main :: proc() {
 					bg_color = renderer.Color{0.9, 0.3, 0.3, 1},
 					margin = renderer.space(0, 0, 0, 10),
 				},
-				salt = del_salt,
+				id = del_id,
 			) {
-				// 1. Mark as deleting and trigger the exit timeline
+				// Mark as deleting and trigger the exit timeline
 				if !u.deleting {
 					u.deleting = true
 					renderer.tl_to(
@@ -349,6 +364,22 @@ main :: proc() {
 						{duration = 0.4, ease = anim.ease_out_exp, height = 0.0, opacity = 0.0},
 					)
 				}
+			}
+
+			if renderer.tooltip_begin(ui_ctx, &ev_ctx, del_id) {
+				renderer.text(
+					ui_ctx,
+					&ev_ctx,
+					"Warning:",
+					{font_size = 14, text_color = renderer.Color{0.9, 0.4, 0.4, 1}},
+				)
+				renderer.text(
+					ui_ctx,
+					&ev_ctx,
+					"Permanently remove this user",
+					{font_size = 12, text_color = renderer.Color{0.7, 0.7, 0.7, 1}},
+				)
+				renderer.tooltip_end(ui_ctx, true)
 			}
 
 			renderer.element_close(ui_ctx) // Close User Card
@@ -369,16 +400,16 @@ main :: proc() {
 			ordered_remove(&users, to_delete_idx)
 		}
 
-		// 1. Get the uncomputed tree and apply structural animations FIRST
+		// Get the uncomputed tree and apply structural animations FIRST
 		roots := renderer.ui_layout_tree(ui_ctx)
 		for root in roots {
 			anim.apply_structural(&anim_ctx, root)
 		}
 
-		// 2. NOW run the layout math
+		// NOW run the layout math
 		renderer.ui_compute(ui_ctx)
 
-		// 3. Queue Intro Animation
+		// Queue Intro Animation
 		if play_intro {
 			renderer.tl_from(
 				&tl,
@@ -402,7 +433,7 @@ main :: proc() {
 		renderer.tl_play(&tl)
 		anim.update(&anim_ctx.engine, 0.016)
 
-		// 4. Apply visual animations (opacity/color) right before rendering
+		// Apply visual animations (opacity/color) right before rendering
 		visual_cb :: proc(user_data: rawptr, state: ^anim.Retained_State) {
 			el := (^renderer.Element)(user_data)
 			if el != nil do el.resolved_opacity = state.opacity
