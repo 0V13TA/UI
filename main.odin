@@ -112,6 +112,11 @@ main :: proc() {
 	defer sdl.FreeCursor(cursor_hand)
 	defer sdl.FreeCursor(cursor_ibeam)
 
+	my_video := renderer.video_player_init(
+		sdl_rend,
+		"assets/Two 2-minute Rules to Beat Procrastination (in 2 minutes).mp4",
+	)
+
 	perf_freq := f64(sdl.GetPerformanceFrequency())
 	last_time := sdl.GetPerformanceCounter()
 
@@ -475,6 +480,24 @@ main :: proc() {
 		sdl.SetRenderDrawColor(sdl_rend, 240, 240, 245, 255)
 		sdl.RenderClear(sdl_rend)
 		renderer.render_tree(ui_ctx, sdl_rend, roots)
+
+		if my_video != nil {
+			if my_video.is_playing {
+				my_video.playback_time += dt
+			}
+
+			renderer.video_player_update(my_video, dt)
+
+			// Define where you want the video to render on screen
+			dest_rect := sdl.Rect {
+				x = 50,
+				y = 50, // Top-left coordinates
+				w = my_video.width,
+				h = my_video.height,
+			}
+			sdl.RenderCopy(sdl_rend, my_video.texture, nil, &dest_rect)
+		}
+
 		sdl.RenderPresent(sdl_rend)
 	}
 }

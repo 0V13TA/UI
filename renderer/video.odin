@@ -1,8 +1,15 @@
 package renderer
+
 import avcodec "../odin-ffmpeg/odin-ffmpeg/avcodec"
 import avformat "../odin-ffmpeg/odin-ffmpeg/avformat"
 import avutil "../odin-ffmpeg/odin-ffmpeg/avutil"
 import swscale "../odin-ffmpeg/odin-ffmpeg/swscale"
+import "core:fmt"
+import "core:slice"
+import "core:strings"
+import "core:sync"
+import "core:thread"
+import sdl "vendor:sdl2"
 
 Video_Frame :: struct {
 	y_plane, u_plane, v_plane: []u8,
@@ -102,7 +109,7 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 
 	player.texture = sdl.CreateTexture(
 		renderer,
-		u32(sdl.PixelFormatEnum.IYUV),
+		sdl.PixelFormatEnum.IYUV,
 		sdl.TextureAccess.STREAMING,
 		player.width,
 		player.height,
@@ -160,8 +167,8 @@ video_player_destroy :: proc(player: ^Video_Player) {
 }
 
 @(private)
-ffmpeg_worker_thread :: proc(t: ^thread.Thread) {
-	player := cast(^Video_Player)t.data
+ffmpeg_worker_thread :: proc(data: rawptr) {
+	player := cast(^Video_Player)data
 
 	pkt := avcodec.av_packet_alloc()
 	frame := avutil.av_frame_alloc()
