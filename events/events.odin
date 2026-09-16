@@ -14,6 +14,7 @@ Event_Type :: enum {
 
 Event_Callbacks :: struct {
 	focusable:      bool,
+	cursor:         sdl.SystemCursor,
 
 	// Mouse
 	on_click:       proc(e: ^UI_Event, data: rawptr),

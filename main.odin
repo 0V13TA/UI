@@ -105,14 +105,43 @@ main :: proc() {
 	play_intro := true
 	USER_CARD_CLASS := renderer.Class_Name("user_card")
 
+	cursor_arrow := sdl.CreateSystemCursor(.ARROW)
+	cursor_hand := sdl.CreateSystemCursor(.HAND)
+	cursor_ibeam := sdl.CreateSystemCursor(.IBEAM)
+	defer sdl.FreeCursor(cursor_arrow)
+	defer sdl.FreeCursor(cursor_hand)
+	defer sdl.FreeCursor(cursor_ibeam)
+
+	perf_freq := f64(sdl.GetPerformanceFrequency())
+	last_time := sdl.GetPerformanceCounter()
+
 	running := true
 	for running {
+		now := sdl.GetPerformanceCounter()
+		dt := f64(now - last_time) / perf_freq
+		last_time = now
+
 		ev.begin_frame(&ev_ctx)
 
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
 			ev.pump_events(&ev_ctx, &event)
 			if event.type == .QUIT do running = false
+		}
+
+		target_cursor := cursor_arrow
+		if cb, ok := ev_ctx.listeners[ev_ctx.hovered_id]; ok {
+			#partial switch cb.cursor {
+			case .HAND:
+				target_cursor = cursor_hand
+			case .IBEAM:
+				target_cursor = cursor_ibeam
+			}
+		}
+
+		// Only push to SDL if the cursor actually changed
+		if sdl.GetCursor() != target_cursor {
+			sdl.SetCursor(target_cursor)
 		}
 
 		win_w, win_h: i32

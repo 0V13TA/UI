@@ -1,0 +1,245 @@
+package renderer
+import avcodec "../odin-ffmpeg/odin-ffmpeg/avcodec"
+import avformat "../odin-ffmpeg/odin-ffmpeg/avformat"
+import avutil "../odin-ffmpeg/odin-ffmpeg/avutil"
+import swscale "../odin-ffmpeg/odin-ffmpeg/swscale"
+
+Video_Frame :: struct {
+	y_plane, u_plane, v_plane: []u8,
+	y_pitch, u_pitch, v_pitch: i32,
+	pts:                       f64,
+}
+
+Video_Player :: struct {
+	texture:          ^sdl.Texture,
+	width:            i32,
+	height:           i32,
+	is_playing:       bool,
+	playback_time:    f64,
+
+	// --- FFmpeg State ---
+	file_path:        string,
+	fmt_ctx:          ^avformat.AVFormatContext,
+	codec_ctx:        ^avcodec.AVCodecContext,
+	video_stream_idx: i32,
+	sws_ctx:          ^swscale.SwsContext,
+
+	// --- Threading ---
+	decoder_thread:   ^thread.Thread,
+	frame_queue:      [dynamic]Video_Frame,
+	queue_mutex:      sync.Mutex,
+	quit_flag:        bool,
+}
+
+video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Player {
+	player := new(Video_Player)
+	player.file_path = path
+	player.is_playing = true
+	player.frame_queue = make([dynamic]Video_Frame)
+
+	c_path := strings.clone_to_cstring(path)
+	defer delete(c_path)
+
+	// 1. Open the file container
+	if avformat.avformat_open_input(&player.fmt_ctx, c_path, nil, nil) < 0 {
+		fmt.printfln("FFMPEG ERROR: Could not open file: %s", path)
+		return nil
+	}
+
+	// 2. Read packets to get stream information
+	if avformat.avformat_find_stream_info(player.fmt_ctx, nil) < 0 {
+		fmt.println("FFMPEG ERROR: Could not find stream info")
+		return nil
+	}
+
+	// 3. Find the first video stream
+	player.video_stream_idx = -1
+	codec: ^avcodec.AVCodec = nil
+
+	// Convert C-array to Odin slice for safe iteration
+	streams := slice.from_ptr(player.fmt_ctx.streams, int(player.fmt_ctx.nb_streams))
+
+	for stream, i in streams {
+		if stream.codecpar.codec_type == .AVMEDIA_TYPE_VIDEO {
+			player.video_stream_idx = i32(i)
+			codec = avcodec.avcodec_find_decoder(stream.codecpar.codec_id)
+			break
+		}
+	}
+
+	if player.video_stream_idx == -1 || codec == nil {
+		fmt.println("FFMPEG ERROR: No video stream or unsupported codec found")
+		return nil
+	}
+
+	// 4. Allocate and open the codec context
+	player.codec_ctx = avcodec.avcodec_alloc_context3(codec)
+	avcodec.avcodec_parameters_to_context(
+		player.codec_ctx,
+		streams[player.video_stream_idx].codecpar,
+	)
+
+	if avcodec.avcodec_open2(player.codec_ctx, codec, nil) < 0 {
+		fmt.println("FFMPEG ERROR: Could not open codec")
+		return nil
+	}
+	player.sws_ctx = swscale.sws_getContext(
+		player.codec_ctx.width,
+		player.codec_ctx.height,
+		player.codec_ctx.pix_fmt,
+		player.codec_ctx.width,
+		player.codec_ctx.height,
+		avutil.AVPixelFormat.YUV420P,
+		swscale.SWS_BILINEAR,
+		nil,
+		nil,
+		nil,
+	)
+
+	// 5. Create the GPU Texture using the detected dimensions
+	player.width = player.codec_ctx.width
+	player.height = player.codec_ctx.height
+
+	player.texture = sdl.CreateTexture(
+		renderer,
+		u32(sdl.PixelFormatEnum.IYUV),
+		sdl.TextureAccess.STREAMING,
+		player.width,
+		player.height,
+	)
+
+	// 6. Spawn the worker thread
+	player.decoder_thread = thread.create_and_start_with_data(player, ffmpeg_worker_thread)
+	return player
+}
+
+video_player_update :: proc(player: ^Video_Player, dt: f64) {
+	if !player.is_playing do return
+
+	// Advance our UI playback clock
+	player.playback_time += dt
+
+	sync.lock(&player.queue_mutex)
+	defer sync.unlock(&player.queue_mutex)
+
+	if len(player.frame_queue) > 0 {
+		// Check if the next frame in the queue is due to be shown
+		next_frame := player.frame_queue[0]
+
+		// If our UI clock has passed the frame's presentation timestamp (PTS)
+		if player.playback_time >= next_frame.pts {
+
+			// Push the decoded YUV planes directly to the GPU
+			sdl.UpdateYUVTexture(
+				player.texture,
+				nil,
+				raw_data(next_frame.y_plane),
+				next_frame.y_pitch,
+				raw_data(next_frame.u_plane),
+				next_frame.u_pitch,
+				raw_data(next_frame.v_plane),
+				next_frame.v_pitch,
+			)
+
+			// Free the memory and remove it from the queue
+			delete(next_frame.y_plane); delete(next_frame.u_plane); delete(next_frame.v_plane)
+			ordered_remove(&player.frame_queue, 0)
+		}
+	}
+}
+
+video_player_destroy :: proc(player: ^Video_Player) {
+	// Signal the thread to die, wait for it, then clean up memory
+	player.quit_flag = true
+	thread.join(player.decoder_thread)
+	thread.destroy(player.decoder_thread)
+	swscale.sws_freeContext(player.sws_ctx)
+
+	sdl.DestroyTexture(player.texture)
+	delete(player.frame_queue)
+}
+
+@(private)
+ffmpeg_worker_thread :: proc(t: ^thread.Thread) {
+	player := cast(^Video_Player)t.data
+
+	pkt := avcodec.av_packet_alloc()
+	frame := avutil.av_frame_alloc()
+	defer {
+		avcodec.av_packet_free(&pkt)
+		avutil.av_frame_free(&frame)
+	}
+
+	MAX_BUFFERED_FRAMES :: 30
+
+	stream := player.fmt_ctx.streams[player.video_stream_idx]
+	time_base := f64(stream.time_base.num) / f64(stream.time_base.den)
+
+	for !player.quit_flag {
+		// 1. Throttle decoding if UI thread falls behind
+		sync.lock(&player.queue_mutex)
+		queue_len := len(player.frame_queue)
+		sync.unlock(&player.queue_mutex)
+
+		if queue_len >= MAX_BUFFERED_FRAMES {
+			time.sleep(time.Millisecond * 5)
+			continue
+		}
+
+		// 2. Read the next packet
+		if avformat.av_read_frame(player.fmt_ctx, pkt) < 0 do break
+		defer avcodec.av_packet_unref(pkt)
+
+		if pkt.stream_index != player.video_stream_idx do continue
+
+		// 3. Send to Decoder
+		if avcodec.avcodec_send_packet(player.codec_ctx, pkt) == 0 {
+
+			// 4. Receive all available uncompressed frames
+			for avcodec.avcodec_receive_frame(player.codec_ctx, frame) == 0 {
+				pts_seconds := f64(frame.best_effort_timestamp) * time_base
+
+				// YUV420P Math: U and V planes are exactly half the width and height of Y
+				y_pitch := player.width
+				u_pitch := player.width / 2
+				v_pitch := player.width / 2
+
+				new_frame := Video_Frame {
+					y_plane = make([]u8, y_pitch * player.height),
+					u_plane = make([]u8, u_pitch * (player.height / 2)),
+					v_plane = make([]u8, v_pitch * (player.height / 2)),
+					y_pitch = y_pitch,
+					u_pitch = u_pitch,
+					v_pitch = v_pitch,
+					pts     = pts_seconds,
+				}
+
+				// 5. Setup destination arrays for SwsScale
+				dst_data := [4][^]u8 {
+					raw_data(new_frame.y_plane),
+					raw_data(new_frame.u_plane),
+					raw_data(new_frame.v_plane),
+					nil,
+				}
+				dst_linesize := [4]c_int{y_pitch, u_pitch, v_pitch, 0}
+
+				// 6. Scale and convert colors directly into our Odin slices!
+				swscale.sws_scale(
+					player.sws_ctx,
+					&frame.data[0],
+					&frame.linesize[0],
+					0,
+					player.height,
+					&dst_data[0],
+					&dst_linesize[0],
+				)
+
+				sync.lock(&player.queue_mutex)
+				append(&player.frame_queue, new_frame)
+				sync.unlock(&player.queue_mutex)
+
+				avutil.av_frame_unref(frame)
+			}
+		}
+	}
+}

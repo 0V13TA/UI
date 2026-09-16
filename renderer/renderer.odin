@@ -328,7 +328,7 @@ get_mask_texture :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, w, h: i32) -
 
 	ctx.mask_texture = sdl.CreateTexture(
 		renderer,
-		u32(sdl.PixelFormatEnum.RGBA8888),
+		sdl.PixelFormatEnum.RGBA8888,
 		sdl.TextureAccess.TARGET,
 		new_w,
 		new_h,

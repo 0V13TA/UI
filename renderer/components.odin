@@ -97,7 +97,7 @@ button :: proc(
 	is_pressed := ev_ctx.pressed_id == final_id
 	is_clicked := ev_ctx.clicked_this_frame[final_id] or_else false
 
-	events.register(ev_ctx, final_id, events.Event_Callbacks{focusable = true})
+	events.register(ev_ctx, final_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
 
 	// Fall back to default theme colors if not provided
 	bg := user_style.bg_color.? or_else Color{0.15, 0.4, 0.8, 1.0}
@@ -228,7 +228,7 @@ checkbox :: proc(
 	id := lc.ID(hash_input)
 
 
-	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
+	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true, cursor = .HAND})
 	if ev_ctx.clicked_this_frame[id] or_else false do state^ = !state^
 
 	// Robust spatial hover check that ignores children blocking the raycast
@@ -302,7 +302,7 @@ radio :: proc(
 	hash_input := fmt.tprintf("%s:%d:%s:%v", loc.file_path, loc.line, salt, value)
 	id := lc.ID(hash_input)
 
-	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
+	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true, cursor = .HAND})
 	if ev_ctx.clicked_this_frame[id] or_else false do state^ = value
 	is_active := state^ == value
 
@@ -668,6 +668,7 @@ text_input :: proc(
 		ev_ctx,
 		id,
 		events.Event_Callbacks {
+			cursor = .IBEAM,
 			focusable = true,
 			user_data = ev_ctx,
 			on_text_input = _text_input_cb,
