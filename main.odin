@@ -32,7 +32,7 @@ main :: proc() {
 		"Odin UI Engine - CRUD App",
 		sdl.WINDOWPOS_CENTERED,
 		sdl.WINDOWPOS_CENTERED,
-		1024,
+		1184,
 		768,
 		{.SHOWN},
 	)
