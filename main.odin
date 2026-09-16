@@ -484,18 +484,28 @@ main :: proc() {
 		if my_video != nil {
 			if my_video.is_playing {
 				my_video.playback_time += dt
+				renderer.video_player_update(my_video, dt)
 			}
 
-			renderer.video_player_update(my_video, dt)
+			// 1. Prevent the green flash by waiting for the first frame to decode.
+			// (If your renderer has a `frames_decoded > 0` flag, use that instead of time)
+			if my_video.playback_time > 0.1 {
 
-			// Define where you want the video to render on screen
-			dest_rect := sdl.Rect {
-				x = 50,
-				y = 50, // Top-left coordinates
-				w = my_video.width,
-				h = my_video.height,
+				// 2. Scale down the video to fit sensibly on screen
+				target_w: i32 = 600
+				scale := f32(target_w) / f32(my_video.width)
+				target_h := i32(f32(my_video.height) * scale)
+
+				dest_rect := sdl.Rect {
+					x = 50,
+					y = 50,
+					w = target_w,
+					h = target_h,
+				}
+
+				// Draw the video
+				sdl.RenderCopy(sdl_rend, my_video.texture, nil, &dest_rect)
 			}
-			sdl.RenderCopy(sdl_rend, my_video.texture, nil, &dest_rect)
 		}
 
 		sdl.RenderPresent(sdl_rend)

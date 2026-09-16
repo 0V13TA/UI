@@ -199,12 +199,21 @@ create_9slice_base_texture :: proc(renderer: ^sdl.Renderer, radius: i32) -> ^sdl
 	size := radius * 2 + 2 // +2 gives a 2px stretchable center
 
 	// Create an RGBA32 surface
-	rmask: u32 = 0x000000ff
-	gmask: u32 = 0x0000ff00
-	bmask: u32 = 0x00ff0000
-	amask: u32 = 0xff000000
+	rmask: u32 = 0xff000000
+	gmask: u32 = 0x00ff0000
+	bmask: u32 = 0x0000ff00
+	amask: u32 = 0x000000ff
 
-	surface := sdl.CreateRGBSurface(0, size, size, 32, rmask, gmask, bmask, amask)
+	surface := sdl.CreateRGBSurface(
+		cast(u32)sdl.WINDOW_SHOWN,
+		size,
+		size,
+		32,
+		rmask,
+		gmask,
+		bmask,
+		amask,
+	)
 	defer sdl.FreeSurface(surface)
 
 	pixels := cast([^]u32)surface.pixels

@@ -1,11 +1,10 @@
 package renderer
 
-import "core:c"
 import avcodec "../ffmpeg-bindings/avcodec"
 import avformat "../ffmpeg-bindings/avformat"
 import avutil "../ffmpeg-bindings/avutil"
-import swscale "../ffmpeg-bindings/swscale"
 import types "../ffmpeg-bindings/types"
+import "core:c"
 import "core:fmt"
 import "core:slice"
 import "core:strings"
@@ -32,7 +31,6 @@ Video_Player :: struct {
 	fmt_ctx:          ^types.Format_Context,
 	codec_ctx:        ^types.Codec_Context,
 	video_stream_idx: i32,
-	sws_ctx:          ^types.Sws_Context,
 
 	// --- Threading ---
 	decoder_thread:   ^thread.Thread,
@@ -50,23 +48,18 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 	c_path := strings.clone_to_cstring(path)
 	defer delete(c_path)
 
-	// 1. Open the file container
 	if avformat.open_input(&player.fmt_ctx, c_path, nil, nil) < 0 {
 		fmt.printfln("FFMPEG ERROR: Could not open file: %s", path)
 		return nil
 	}
 
-	// 2. Read packets to get stream information
 	if avformat.find_stream_info(player.fmt_ctx, nil) < 0 {
 		fmt.println("FFMPEG ERROR: Could not find stream info")
 		return nil
 	}
 
-	// 3. Find the first video stream
 	player.video_stream_idx = -1
 	codec: ^types.Codec = nil
-
-	// Convert C-array to Odin slice for safe iteration
 	streams := slice.from_ptr(player.fmt_ctx.streams, int(player.fmt_ctx.nb_streams))
 
 	for stream, i in streams {
@@ -82,35 +75,23 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 		return nil
 	}
 
-	// 4. Allocate and open the codec context
 	player.codec_ctx = avcodec.alloc_context3(codec)
-	avcodec.parameters_to_context(
-		player.codec_ctx,
-		streams[player.video_stream_idx].codecpar,
-	)
+	avcodec.parameters_to_context(player.codec_ctx, streams[player.video_stream_idx].codecpar)
 
 	if avcodec.open2(player.codec_ctx, codec, nil) < 0 {
 		fmt.println("FFMPEG ERROR: Could not open codec")
 		return nil
 	}
-    
-	player.sws_ctx = swscale.getContext(
-		player.codec_ctx.width,
-		player.codec_ctx.height,
-		player.codec_ctx.pix_fmt,
-		player.codec_ctx.width,
-		player.codec_ctx.height,
-		types.Pixel_Format.YUV420P,
-		2, // SWS_BILINEAR flag
-		nil,
-		nil,
-		nil,
-	)
 
-	// 5. Create the GPU Texture using the detected dimensions
+	// BRUTE FORCE FIX: FFmpeg's AV_PIX_FMT_YUV420P is exactly 0 in C.
+	// We cast it to the Odin enum to completely bypass the broken binding mapping.
+	FORCE_YUV420P := cast(types.Pixel_Format)c.int(0)
+
+
 	player.width = player.codec_ctx.width
 	player.height = player.codec_ctx.height
 
+	// Create an IYUV texture for hardware color conversion
 	player.texture = sdl.CreateTexture(
 		renderer,
 		sdl.PixelFormatEnum.IYUV,
@@ -119,7 +100,6 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 		player.height,
 	)
 
-	// 6. Spawn the worker thread
 	player.decoder_thread = thread.create_and_start_with_data(player, ffmpeg_worker_thread)
 	return player
 }
@@ -127,20 +107,16 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 video_player_update :: proc(player: ^Video_Player, dt: f64) {
 	if !player.is_playing do return
 
-	// Advance our UI playback clock
 	player.playback_time += dt
 
 	sync.lock(&player.queue_mutex)
 	defer sync.unlock(&player.queue_mutex)
 
 	if len(player.frame_queue) > 0 {
-		// Check if the next frame in the queue is due to be shown
 		next_frame := player.frame_queue[0]
 
-		// If our UI clock has passed the frame's presentation timestamp (PTS)
 		if player.playback_time >= next_frame.pts {
-
-			// Push the decoded YUV planes directly to the GPU
+			// Pass all 3 planar components directly to the GPU shader
 			sdl.UpdateYUVTexture(
 				player.texture,
 				nil,
@@ -152,21 +128,27 @@ video_player_update :: proc(player: ^Video_Player, dt: f64) {
 				next_frame.v_pitch,
 			)
 
-			// Free the memory and remove it from the queue
-			delete(next_frame.y_plane); delete(next_frame.u_plane); delete(next_frame.v_plane)
+			delete(next_frame.y_plane)
+			delete(next_frame.u_plane)
+			delete(next_frame.v_plane)
 			ordered_remove(&player.frame_queue, 0)
 		}
 	}
 }
 
 video_player_destroy :: proc(player: ^Video_Player) {
-	// Signal the thread to die, wait for it, then clean up memory
 	player.quit_flag = true
 	thread.join(player.decoder_thread)
 	thread.destroy(player.decoder_thread)
-	swscale.freeContext(player.sws_ctx)
 
 	sdl.DestroyTexture(player.texture)
+
+	// Clean up any remaining unplayed frames
+	for f in player.frame_queue {
+		delete(f.y_plane)
+		delete(f.u_plane)
+		delete(f.v_plane)
+	}
 	delete(player.frame_queue)
 }
 
@@ -182,12 +164,10 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 	}
 
 	MAX_BUFFERED_FRAMES :: 30
-
 	stream := player.fmt_ctx.streams[player.video_stream_idx]
 	time_base := f64(stream.time_base.numerator) / f64(stream.time_base.denominator)
 
 	for !player.quit_flag {
-		// 1. Throttle decoding if UI thread falls behind
 		sync.lock(&player.queue_mutex)
 		queue_len := len(player.frame_queue)
 		sync.unlock(&player.queue_mutex)
@@ -197,20 +177,16 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 			continue
 		}
 
-		// 2. Read the next packet
 		if avformat.read_frame(player.fmt_ctx, pkt) < 0 do break
 		defer avcodec.packet_unref(pkt)
 
 		if pkt.stream_index != player.video_stream_idx do continue
 
-		// 3. Send to Decoder
 		if avcodec.send_packet(player.codec_ctx, pkt) == 0 {
-
-			// 4. Receive all available uncompressed frames
 			for avcodec.receive_frame(player.codec_ctx, frame) == 0 {
 				pts_seconds := f64(frame.best_effort_timestamp) * time_base
 
-				// YUV420P Math: U and V planes are exactly half the width and height of Y
+				// YUV420P Math: U and V planes are half the resolution of Y
 				y_pitch := player.width
 				u_pitch := player.width / 2
 				v_pitch := player.width / 2
@@ -225,25 +201,42 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 					pts     = pts_seconds,
 				}
 
-				// 5. Setup destination arrays for SwsScale
-				dst_data := [4][^]u8 {
-					raw_data(new_frame.y_plane),
-					raw_data(new_frame.u_plane),
-					raw_data(new_frame.v_plane),
-					nil,
-				}
-				dst_linesize := [4]c.int{y_pitch, u_pitch, v_pitch, 0}
+				// Safely cast FFmpeg's raw C-pointers to Odin multi-pointers for slicing
+				src_y := cast([^]u8)frame.data[0]
+				src_u := cast([^]u8)frame.data[1]
+				src_v := cast([^]u8)frame.data[2]
 
-				// 6. Scale and convert colors directly into our Odin slices!
-        swscale.scale(
-					player.sws_ctx,
-					cast([^]^u8)&frame.data[0],
-					&frame.linesize[0],
-					0,
-					player.height,
-					cast([^]^u8)&dst_data[0],
-					&dst_linesize[0],
-				)
+				// 1. Copy Y Plane (Luma - Full Resolution)
+				for y: i32 = 0; y < player.height; y += 1 {
+					src_idx := y * frame.linesize[0]
+					dst_idx := y * new_frame.y_pitch
+
+					copy(
+						new_frame.y_plane[dst_idx:dst_idx + player.width],
+						src_y[src_idx:src_idx + player.width],
+					)
+				}
+
+				// 2. Copy U and V Planes (Chroma - Half Resolution for 4:2:0)
+				half_w := player.width / 2
+				half_h := player.height / 2
+
+				for y: i32 = 0; y < half_h; y += 1 {
+					src_idx_u := y * frame.linesize[1]
+					src_idx_v := y * frame.linesize[2]
+
+					dst_idx_u := y * new_frame.u_pitch
+					dst_idx_v := y * new_frame.v_pitch
+
+					copy(
+						new_frame.u_plane[dst_idx_u:dst_idx_u + half_w],
+						src_u[src_idx_u:src_idx_u + half_w],
+					)
+					copy(
+						new_frame.v_plane[dst_idx_v:dst_idx_v + half_w],
+						src_v[src_idx_v:src_idx_v + half_w],
+					)
+				}
 
 				sync.lock(&player.queue_mutex)
 				append(&player.frame_queue, new_frame)
