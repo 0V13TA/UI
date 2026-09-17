@@ -190,14 +190,6 @@ set_render_color :: proc(renderer: ^sdl.Renderer, c: Color) {
 	sdl.SetRenderDrawColor(renderer, r, g, b, a)
 }
 
-// clear_texture_cache :: proc(ctx: ^UI_Context) {
-// 	// ADD 9-SLICE CLEANUP
-// 	for _, tex in ctx.slice_cache {
-// 		sdl.DestroyTexture(tex)
-// 	}
-// 	clear(&ctx.slice_cache)
-// }
-
 create_9slice_base_texture :: proc(renderer: ^sdl.Renderer, radius: i32) -> ^sdl.Texture {
 	size := radius * 2 + 2 // +2 gives a 2px stretchable center
 
@@ -904,10 +896,13 @@ render_box :: proc(
 			)
 
 			// Grab our shared layout mask
-			mask_tex := get_mask_texture(ui_ctx, renderer, dst_rect.w, dst_rect.h)
 
+			mask_tex := get_mask_texture(ui_ctx, renderer, dst_rect.w, dst_rect.h)
 			prev_target := sdl.GetRenderTarget(renderer)
+
+			// Switch to mask target safely
 			sdl.SetRenderTarget(renderer, mask_tex)
+			defer sdl.SetRenderTarget(renderer, prev_target)
 
 			// Clear ONLY the portion of the texture we are using this frame
 			prev_blend: sdl.BlendMode
@@ -915,10 +910,17 @@ render_box :: proc(
 			sdl.SetRenderDrawBlendMode(renderer, .NONE) // Force overwrite pixels (including alpha)
 
 			sdl.SetRenderDrawColor(renderer, 0, 0, 0, 0)
+
 			clear_rect := sdl.Rect{0, 0, dst_rect.w, dst_rect.h}
+
+			sdl.GetRenderDrawBlendMode(renderer, &prev_blend)
+			sdl.SetRenderDrawBlendMode(renderer, .NONE)
+			sdl.SetRenderDrawColor(renderer, 0, 0, 0, 0)
+
+			// Clear only the active region
 			sdl.RenderFillRect(renderer, &clear_rect)
 
-			sdl.SetRenderDrawBlendMode(renderer, prev_blend) // Restore blend
+			sdl.SetRenderDrawBlendMode(renderer, prev_blend)
 
 			// Draw an opaque white 9-slice mask at the origin
 			tex_9slice := get_9slice_texture(ui_ctx, renderer)
