@@ -1001,3 +1001,39 @@ image_path :: proc(
 	// Pass the cached texture down to the base component
 	image_texture(ui_ctx, tex, user_style, loc)
 }
+
+video :: proc(
+	ctx: ^UI_Context,
+	rend: ^sdl.Renderer,
+	path: string,
+	dt: f64,
+	user_style: Style = {},
+	id: lc.Box_ID = 0,
+) {
+	// Cache Layer: Init if it doesn't exist
+	if path not_in ctx.videos {
+		// Note: Use strings.clone_to_cstring(path, context.temp_allocator)
+		// if your init function strictly requires a cstring.
+		ctx.videos[path] = video_player_init(rend, path)
+	}
+
+	player := ctx.videos[path]
+
+	// Playback Layer: Advance the media clocks
+	if player != nil && player.is_playing {
+		video_player_update(player, dt)
+	}
+
+	// Presentation Layer: Emit the layout node
+	// (Mirror exactly how your existing `image` component works)
+	el := element_open(ctx, {id = id, style = user_style})
+
+	if player != nil && player.texture != nil {
+		// Prevent the green FFmpeg startup flash
+		if player.playback_time > 0.1 {
+			el.resolved_bg_image = player.texture // Attach the decoded frame
+		}
+	}
+
+	element_close(ctx)
+}

@@ -141,14 +141,17 @@ Glyph :: struct {
 UI_Context :: struct {
 	layout:         ^lc.Layout_Context,
 	fonts:          map[u32]^ttf.Font, // Hash Font name + Cache name
+	videos:         map[string]^Video_Player,
 	stylesheet:     map[Class]Style,
 	glyph_cache:    map[Glyph_Key]Glyph,
-	slice_cache:    map[i32]^sdl.Texture,
 	image_cache:    map[u32]^sdl.Texture,
+	master_9slice:  ^sdl.Texture,
 	mask_texture:   ^sdl.Texture,
 	mask_texture_w: i32,
 	mask_texture_h: i32,
 }
+
+MASTER_CORNER_RADIUS :: 64
 
 
 // Utility Functions
@@ -187,13 +190,13 @@ set_render_color :: proc(renderer: ^sdl.Renderer, c: Color) {
 	sdl.SetRenderDrawColor(renderer, r, g, b, a)
 }
 
-clear_texture_cache :: proc(ctx: ^UI_Context) {
-	// ADD 9-SLICE CLEANUP
-	for _, tex in ctx.slice_cache {
-		sdl.DestroyTexture(tex)
-	}
-	clear(&ctx.slice_cache)
-}
+// clear_texture_cache :: proc(ctx: ^UI_Context) {
+// 	// ADD 9-SLICE CLEANUP
+// 	for _, tex in ctx.slice_cache {
+// 		sdl.DestroyTexture(tex)
+// 	}
+// 	clear(&ctx.slice_cache)
+// }
 
 create_9slice_base_texture :: proc(renderer: ^sdl.Renderer, radius: i32) -> ^sdl.Texture {
 	size := radius * 2 + 2 // +2 gives a 2px stretchable center
@@ -239,13 +242,14 @@ create_9slice_base_texture :: proc(renderer: ^sdl.Renderer, radius: i32) -> ^sdl
 			}
 
 			// Write white pixel with calculated alpha
-			pixels[y * pitch + x] = (alpha << 24) | 0x00FFFFFF
+			pixels[y * pitch + x] = 0xFFFFFF00 | alpha
 		}
 	}
 
 	// Convert to a hardware texture
 	tex := sdl.CreateTextureFromSurface(renderer, surface)
 	sdl.SetTextureBlendMode(tex, .BLEND)
+	sdl.SetTextureScaleMode(tex, .Linear)
 	return tex
 }
 
@@ -309,18 +313,12 @@ draw_rounded_rect_9slice :: proc(
 	}
 }
 
-get_9slice_texture :: proc(
-	ctx: ^UI_Context,
-	renderer: ^sdl.Renderer,
-	radius: i32,
-) -> ^sdl.Texture {
-	if tex, exists := ctx.slice_cache[radius]; exists {
-		return tex
+
+get_9slice_texture :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer) -> ^sdl.Texture {
+	if ctx.master_9slice == nil {
+		ctx.master_9slice = create_9slice_base_texture(renderer, MASTER_CORNER_RADIUS)
 	}
-	// Cache miss: Create and store the 9-slice base texture
-	tex := create_9slice_base_texture(renderer, radius)
-	ctx.slice_cache[radius] = tex
-	return tex
+	return ctx.master_9slice
 }
 
 get_mask_texture :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, w, h: i32) -> ^sdl.Texture {
@@ -386,7 +384,7 @@ draw_ui_box :: proc(
 
 	// Draw Outer Border using 9-Slice
 	if has_border && border_color[3] > 0 {
-		tex := get_9slice_texture(ctx, renderer, corner_radius)
+		tex := get_9slice_texture(ctx, renderer)
 		r, g, b, a := to_sdl_color(border_color)
 		draw_rounded_rect_9slice(renderer, tex, bounds, corner_radius, sdl.Color{r, g, b, a})
 	}
@@ -405,7 +403,7 @@ draw_ui_box :: proc(
 		inner_radius := i32(max(f32(corner_radius) - max_border, 0))
 
 		if inner_radius > 0 {
-			inner_tex := get_9slice_texture(ctx, renderer, inner_radius)
+			inner_tex := get_9slice_texture(ctx, renderer)
 			r, g, b, a := to_sdl_color(bg_color)
 			draw_rounded_rect_9slice(
 				renderer,
@@ -923,7 +921,7 @@ render_box :: proc(
 			sdl.SetRenderDrawBlendMode(renderer, prev_blend) // Restore blend
 
 			// Draw an opaque white 9-slice mask at the origin
-			tex_9slice := get_9slice_texture(ui_ctx, renderer, corner_radius)
+			tex_9slice := get_9slice_texture(ui_ctx, renderer)
 			draw_rounded_rect_9slice(
 				renderer,
 				tex_9slice,
@@ -1263,8 +1261,8 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 
 	ctx.stylesheet = make(map[Class]Style)
 	ctx.fonts = make(map[u32]^ttf.Font)
+	ctx.videos = make(map[string]^Video_Player)
 	ctx.glyph_cache = make(map[Glyph_Key]Glyph)
-	ctx.slice_cache = make(map[i32]^sdl.Texture)
 	ctx.image_cache = make(map[u32]^sdl.Texture)
 
 	return ctx
@@ -1276,20 +1274,16 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 	delete(ctx.glyph_cache)
 
 	// Purge GPU textures before destroying the map
-	clear_texture_cache(ctx)
+	// clear_texture_cache(ctx)
 	if ctx.mask_texture != nil do sdl.DestroyTexture(ctx.mask_texture)
-	for _, tex in ctx.slice_cache {
-		sdl.DestroyTexture(tex)
-	}
-	delete(ctx.slice_cache)
 	for _, tex in ctx.image_cache {
 		if tex != nil do sdl.DestroyTexture(tex)
 	}
-
 	delete(ctx.image_cache)
 
 	delete(ctx.stylesheet)
 	delete(ctx.fonts)
+	delete(ctx.videos)
 	free(ctx)
 }
 
@@ -1310,7 +1304,7 @@ ui_compute :: proc(ctx: ^UI_Context) {
 }
 
 
-element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) {
+element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) -> ^Element {
 	// Allocate the element for this frame
 	el := new(Element, lc.frame_allocator(ctx.layout))
 	el^ = el_val
@@ -1328,6 +1322,7 @@ element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location)
 	el._box.user_data = el
 
 	lc.box_open(ctx.layout, el._box, loc)
+	return el
 }
 
 element_close :: proc(ctx: ^UI_Context) {

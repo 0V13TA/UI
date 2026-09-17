@@ -41,6 +41,8 @@ main :: proc() {
 	sdl_rend := sdl.CreateRenderer(window, -1, {.ACCELERATED, .PRESENTVSYNC})
 	defer sdl.DestroyRenderer(sdl_rend)
 
+	sdl.SetRenderDrawBlendMode(sdl_rend, .BLEND)
+
 	font := ttf.OpenFont("font/CaacupeOne-Regular.ttf", 24)
 	defer ttf.CloseFont(font)
 
@@ -103,6 +105,10 @@ main :: proc() {
 	); next_id += 1
 
 	play_intro := true
+	is_scrubbing := false
+	scrub_time := f32(0)
+	slider_val := f32(0)
+
 	USER_CARD_CLASS := renderer.Class_Name("user_card")
 
 	cursor_arrow := sdl.CreateSystemCursor(.ARROW)
@@ -111,11 +117,6 @@ main :: proc() {
 	defer sdl.FreeCursor(cursor_arrow)
 	defer sdl.FreeCursor(cursor_hand)
 	defer sdl.FreeCursor(cursor_ibeam)
-
-	my_video := renderer.video_player_init(
-		sdl_rend,
-		"assets/Two 2-minute Rules to Beat Procrastination (in 2 minutes).mp4",
-	)
 
 	perf_freq := f64(sdl.GetPerformanceFrequency())
 	last_time := sdl.GetPerformanceCounter()
@@ -283,6 +284,110 @@ main :: proc() {
 				padding = renderer.space(40),
 			},
 		)
+
+		// Fetch the player from the cache
+		video_path := "assets/Two 2-minute Rules to Beat Procrastination (in 2 minutes).mp4"
+		player := ui_ctx.videos[video_path]
+
+		// The RELATIVE Wrapper
+		renderer.element_open(
+			ui_ctx,
+			{style = {position = .RELATIVE, width = lc.Percent{100}, height = lc.Fixed{250}}},
+		)
+
+		// The Video Component
+		renderer.video(
+			ui_ctx,
+			sdl_rend,
+			video_path,
+			dt,
+			user_style = {width = lc.Percent{100}, height = lc.Percent{100}, object_fit = .COVER},
+		)
+
+		if player != nil {
+			// The ABSOLUTE Controls Overlay
+			renderer.element_open(
+				ui_ctx,
+				{
+					style = {
+						position    = .ABSOLUTE,
+						direction   = .ROW,
+						align_items = .CENTER,
+						gap         = 15,
+						padding     = renderer.space(10),
+						width       = lc.Percent{100},
+						bg_color    = renderer.Color{0, 0, 0, 0.7}, // Semi-transparent backdrop
+					},
+				},
+			)
+
+			// Play/Pause
+			btn_text := player.is_playing ? "Pause" : "Play"
+			if renderer.button(ui_ctx, &ev_ctx, btn_text) {
+				player.is_playing = !player.is_playing
+				sdl.PauseAudioDevice(player.audio_dev, !player.is_playing)
+			}
+
+			// --- SCRUBBING & SEEK LOGIC ---
+			mouse_state := sdl.GetMouseState(nil, nil)
+			is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
+
+			// 1. Feed the stable slider_val either the paused scrub time or the real playback time
+			slider_val = is_scrubbing ? scrub_time : f32(player.playback_time)
+			old_val := slider_val
+
+			renderer.element_open(ui_ctx, {style = {width = lc.Grow{1}}})
+			// Pass the STABLE pointer to the slider so it doesn't lose mouse focus
+			renderer.slider(ui_ctx, &ev_ctx, &anim_ctx, &slider_val, 0.0, f32(player.duration))
+			renderer.element_close(ui_ctx)
+
+			// 2. Handle Slider Interactions & State Transitions
+			if slider_val != old_val {
+				// The slider value was changed by the user (either dragged or fast-clicked)
+				scrub_time = slider_val
+
+				if is_mouse_down {
+					// User is holding down the mouse, start/continue scrubbing
+					is_scrubbing = true
+				} else {
+					// Fast click: mouse went down and up in the exact same frame
+					renderer.video_player_seek(player, f64(scrub_time))
+					player.playback_time = f64(scrub_time) // Prevent visual snap-back
+					is_scrubbing = false
+				}
+			} else if is_scrubbing {
+				// We were scrubbing, but the value didn't move this frame.
+				if !is_mouse_down {
+					// The user finally released the mouse after a sustained drag
+					renderer.video_player_seek(player, f64(scrub_time))
+					player.playback_time = f64(scrub_time) // Prevent visual snap-back
+					is_scrubbing = false
+				} else {
+					// User is holding the slider perfectly still
+					scrub_time = slider_val
+				}
+			}
+
+			// --- TIME FORMATTING ---
+			// Use display_time so the text updates instantly while scrubbing
+			display_time := is_scrubbing ? f64(scrub_time) : player.playback_time
+
+			curr_m := int(display_time) / 60
+			curr_s := int(display_time) % 60
+			tot_m := int(player.duration) / 60
+			tot_s := int(player.duration) % 60
+
+			time_str := fmt.tprintf("%02d:%02d / %02d:%02d", curr_m, curr_s, tot_m, tot_s)
+			renderer.text(
+				ui_ctx,
+				&ev_ctx,
+				time_str,
+				{font_size = 14, text_color = renderer.Color{1, 1, 1, 1}},
+			)
+			renderer.element_close(ui_ctx) // Close Overlay
+		}
+		renderer.element_close(ui_ctx) // Close Relative Wrapper
+
 		renderer.image(
 			ui_ctx,
 			sdl_rend,
@@ -480,34 +585,6 @@ main :: proc() {
 		sdl.SetRenderDrawColor(sdl_rend, 240, 240, 245, 255)
 		sdl.RenderClear(sdl_rend)
 		renderer.render_tree(ui_ctx, sdl_rend, roots)
-
-		if my_video != nil {
-			if my_video.is_playing {
-				my_video.playback_time += dt
-				renderer.video_player_update(my_video, dt)
-			}
-
-			// 1. Prevent the green flash by waiting for the first frame to decode.
-			// (If your renderer has a `frames_decoded > 0` flag, use that instead of time)
-			if my_video.playback_time > 0.1 {
-
-				// 2. Scale down the video to fit sensibly on screen
-				target_w: i32 = 600
-				scale := f32(target_w) / f32(my_video.width)
-				target_h := i32(f32(my_video.height) * scale)
-
-				dest_rect := sdl.Rect {
-					x = 50,
-					y = 50,
-					w = target_w,
-					h = target_h,
-				}
-
-				// Draw the video
-				sdl.RenderCopy(sdl_rend, my_video.texture, nil, &dest_rect)
-			}
-		}
-
 		sdl.RenderPresent(sdl_rend)
 	}
 }

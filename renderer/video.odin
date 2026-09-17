@@ -26,6 +26,10 @@ Video_Player :: struct {
 	height:                   i32,
 	is_playing:               bool,
 	playback_time:            f64,
+	duration:                 f64,
+	audio_clock_offset:       f64,
+	seek_req:                 bool,
+	seek_target:              f64,
 
 	// --- Video State ---
 	file_path:                string,
@@ -94,6 +98,19 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 		return nil
 	}
 
+	v_stream := streams[player.video_stream_idx]
+
+	if v_stream.duration > 0 {
+		// Stream duration uses its own time_base (e.g., 1/90000 or 1/24)
+		tb := f64(v_stream.time_base.numerator) / f64(v_stream.time_base.denominator)
+		player.duration = f64(v_stream.duration) * tb
+	} else if player.fmt_ctx.duration > 0 {
+		// Fallback to global format context (in AV_TIME_BASE microsecond units)
+		player.duration = f64(player.fmt_ctx.duration) / 1000000.0
+	} else {
+		player.duration = 0.0
+	}
+
 	// ---------------------------------------------------------
 	// Video Setup
 	// ---------------------------------------------------------
@@ -128,12 +145,12 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 
 		if avcodec.open2(player.audio_codec_ctx, audio_codec, nil) >= 0 {
 
-			// 1. Seed defaults from codecpar (which may be correct if the ABI hasn't shifted these specific fields)
+			// Seed defaults from codecpar (which may be correct if the ABI hasn't shifted these specific fields)
 			sample_rate_64: i64 = i64(streams[player.audio_stream_idx].codecpar.sample_rate)
 			channels_64: i64 = 2 // Safe default, old channels field is notoriously shifted in Odin bindings
 			sample_fmt: types.Sample_Format = .FLTP
 
-			// 2. Overwrite with reflection (Using the correct FFmpeg AVOption shortcodes!)
+			// Overwrite with reflection (Using the correct FFmpeg AVOption shortcodes!)
 			avutil.opt_get_int(player.audio_codec_ctx, "ar", 0, &sample_rate_64)
 			avutil.opt_get_int(player.audio_codec_ctx, "ac", 0, &channels_64)
 			avutil.opt_get_sample_fmt(player.audio_codec_ctx, "sample_fmt", 0, &sample_fmt)
@@ -141,7 +158,7 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 			sample_rate := i32(sample_rate_64)
 			channels := i32(channels_64)
 
-			// 3. Failsafe bounds
+			// Failsafe bounds
 			if sample_rate <= 0 do sample_rate = 44100
 			if channels <= 0 do channels = 2
 
@@ -173,7 +190,7 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 				}
 			}
 
-			// 4. Only open the audio device if the resampler is fully initialized
+			// Only open the audio device if the resampler is fully initialized
 			if player.swr_ctx != nil {
 				want := sdl.AudioSpec {
 					freq     = sample_rate,
@@ -210,7 +227,7 @@ video_player_update :: proc(player: ^Video_Player, dt: f64) {
 		played_bytes := total_queued - unplayed_bytes
 
 		bytes_per_sec := u64(player.audio_channels * player.audio_sample_rate * 4)
-		player.playback_time = f64(played_bytes) / f64(bytes_per_sec)
+		player.playback_time = player.audio_clock_offset + (f64(played_bytes) / f64(bytes_per_sec))
 	} else {
 		// Fallback for silent video streams
 		player.playback_time += dt
@@ -271,6 +288,19 @@ video_player_destroy :: proc(player: ^Video_Player) {
 	free(player)
 }
 
+video_player_seek :: proc(player: ^Video_Player, time_sec: f64) {
+	sync.lock(&player.queue_mutex)
+	player.seek_target = time_sec
+	player.seek_req = true
+
+	// Instantly update the visual clock so the slider feels responsive
+	player.audio_clock_offset = time_sec
+	player.total_audio_bytes_queued = 0
+	sdl.ClearQueuedAudio(player.audio_dev)
+
+	sync.unlock(&player.queue_mutex)
+}
+
 @(private)
 ffmpeg_worker_thread :: proc(data: rawptr) {
 	player := cast(^Video_Player)data
@@ -286,117 +316,132 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 	stream := player.fmt_ctx.streams[player.video_stream_idx]
 	time_base := f64(stream.time_base.numerator) / f64(stream.time_base.denominator)
 
-	for !player.quit_flag {
+	for player.is_playing { 	// or your standard thread loop
 		sync.lock(&player.queue_mutex)
-		queue_len := len(player.frame_queue)
+		if player.seek_req {
+			target_ts := i64(player.seek_target * 1000000.0) // AV_TIME_BASE
+			avformat.seek_frame(player.fmt_ctx, -1, target_ts, {.Backward}) // 1 = AVSEEK_FLAG_BACKWARD
+
+			avcodec.flush_buffers(player.codec_ctx)
+			if player.audio_codec_ctx != nil do avcodec.flush_buffers(player.audio_codec_ctx)
+
+			clear(&player.frame_queue)
+			player.seek_req = false
+		}
 		sync.unlock(&player.queue_mutex)
 
-		if queue_len >= MAX_BUFFERED_FRAMES {
-			time.sleep(time.Millisecond * 5)
-			continue
-		}
+		for !player.quit_flag {
+			sync.lock(&player.queue_mutex)
+			queue_len := len(player.frame_queue)
+			sync.unlock(&player.queue_mutex)
 
-		if avformat.read_frame(player.fmt_ctx, pkt) < 0 do break
-		defer avcodec.packet_unref(pkt)
-
-		if pkt.stream_index == player.video_stream_idx {
-			if avcodec.send_packet(player.codec_ctx, pkt) == 0 {
-				for avcodec.receive_frame(player.codec_ctx, frame) == 0 {
-					pts_seconds := f64(frame.best_effort_timestamp) * time_base
-
-					y_pitch := player.width
-					u_pitch := player.width / 2
-					v_pitch := player.width / 2
-
-					new_frame := Video_Frame {
-						y_plane = make([]u8, y_pitch * player.height),
-						u_plane = make([]u8, u_pitch * (player.height / 2)),
-						v_plane = make([]u8, v_pitch * (player.height / 2)),
-						y_pitch = y_pitch,
-						u_pitch = u_pitch,
-						v_pitch = v_pitch,
-						pts     = pts_seconds,
-					}
-
-					src_y := cast([^]u8)frame.data[0]
-					src_u := cast([^]u8)frame.data[1]
-					src_v := cast([^]u8)frame.data[2]
-
-					for y: i32 = 0; y < player.height; y += 1 {
-						src_idx := y * frame.linesize[0]
-						dst_idx := y * new_frame.y_pitch
-						copy(
-							new_frame.y_plane[dst_idx:dst_idx + player.width],
-							src_y[src_idx:src_idx + player.width],
-						)
-					}
-
-					half_w := player.width / 2
-					half_h := player.height / 2
-
-					for y: i32 = 0; y < half_h; y += 1 {
-						src_idx_u := y * frame.linesize[1]
-						src_idx_v := y * frame.linesize[2]
-						dst_idx_u := y * new_frame.u_pitch
-						dst_idx_v := y * new_frame.v_pitch
-						copy(
-							new_frame.u_plane[dst_idx_u:dst_idx_u + half_w],
-							src_u[src_idx_u:src_idx_u + half_w],
-						)
-						copy(
-							new_frame.v_plane[dst_idx_v:dst_idx_v + half_w],
-							src_v[src_idx_v:src_idx_v + half_w],
-						)
-					}
-
-					sync.lock(&player.queue_mutex)
-					append(&player.frame_queue, new_frame)
-					sync.unlock(&player.queue_mutex)
-
-					avutil.frame_unref(frame)
-				}
+			if queue_len >= MAX_BUFFERED_FRAMES {
+				time.sleep(time.Millisecond * 5)
+				continue
 			}
-		} else if pkt.stream_index == player.audio_stream_idx && player.audio_dev > 0 {
 
-			// --- Audio Decoding & Resampling ---
-			if avcodec.send_packet(player.audio_codec_ctx, pkt) == 0 {
-				for avcodec.receive_frame(player.audio_codec_ctx, frame) == 0 {
+			if avformat.read_frame(player.fmt_ctx, pkt) < 0 do break
+			defer avcodec.packet_unref(pkt)
 
-					out_samples := swresample.get_out_samples(player.swr_ctx, frame.nb_samples)
+			if pkt.stream_index == player.video_stream_idx {
+				if avcodec.send_packet(player.codec_ctx, pkt) == 0 {
+					for avcodec.receive_frame(player.codec_ctx, frame) == 0 {
+						pts_seconds := f64(frame.best_effort_timestamp) * time_base
 
-					// 1. Pull the guaranteed channel count from our state
-					channels := player.audio_channels
+						y_pitch := player.width
+						u_pitch := player.width / 2
+						v_pitch := player.width / 2
 
-					// 2. Allocate enough memory for interleaved 32-bit floats
-					out_buf := make([]f32, out_samples * channels)
+						new_frame := Video_Frame {
+							y_plane = make([]u8, y_pitch * player.height),
+							u_plane = make([]u8, u_pitch * (player.height / 2)),
+							v_plane = make([]u8, v_pitch * (player.height / 2)),
+							y_pitch = y_pitch,
+							u_pitch = u_pitch,
+							v_pitch = v_pitch,
+							pts     = pts_seconds,
+						}
 
-					out_arr := [1][^]u8{cast([^]u8)raw_data(out_buf)}
-					in_arr: [8][^]u8
-					for i in 0 ..< 8 do in_arr[i] = cast([^]u8)frame.data[i]
+						src_y := cast([^]u8)frame.data[0]
+						src_u := cast([^]u8)frame.data[1]
+						src_v := cast([^]u8)frame.data[2]
 
-					// 3. Perform the resampling conversion
-					converted := swresample.convert(
-						player.swr_ctx,
-						cast([^][^]u8)&out_arr[0],
-						out_samples,
-						cast([^][^]u8)&in_arr[0],
-						frame.nb_samples,
-					)
+						for y: i32 = 0; y < player.height; y += 1 {
+							src_idx := y * frame.linesize[0]
+							dst_idx := y * new_frame.y_pitch
+							copy(
+								new_frame.y_plane[dst_idx:dst_idx + player.width],
+								src_y[src_idx:src_idx + player.width],
+							)
+						}
 
-					// 4. Push to SDL and track the Master Audio Clock
-					if converted > 0 {
-						byte_size := u32(converted * channels * 4) // 4 bytes per 32-bit float
-						sdl.QueueAudio(player.audio_dev, raw_data(out_buf), byte_size)
+						half_w := player.width / 2
+						half_h := player.height / 2
 
-						// Accumulate the lifetime byte count for A/V sync
+						for y: i32 = 0; y < half_h; y += 1 {
+							src_idx_u := y * frame.linesize[1]
+							src_idx_v := y * frame.linesize[2]
+							dst_idx_u := y * new_frame.u_pitch
+							dst_idx_v := y * new_frame.v_pitch
+							copy(
+								new_frame.u_plane[dst_idx_u:dst_idx_u + half_w],
+								src_u[src_idx_u:src_idx_u + half_w],
+							)
+							copy(
+								new_frame.v_plane[dst_idx_v:dst_idx_v + half_w],
+								src_v[src_idx_v:src_idx_v + half_w],
+							)
+						}
+
 						sync.lock(&player.queue_mutex)
-						player.total_audio_bytes_queued += u64(byte_size)
+						append(&player.frame_queue, new_frame)
 						sync.unlock(&player.queue_mutex)
-					}
 
-					// 5. Cleanup
-					delete(out_buf)
-					avutil.frame_unref(frame)
+						avutil.frame_unref(frame)
+					}
+				}
+			} else if pkt.stream_index == player.audio_stream_idx && player.audio_dev > 0 {
+
+				// --- Audio Decoding & Resampling ---
+				if avcodec.send_packet(player.audio_codec_ctx, pkt) == 0 {
+					for avcodec.receive_frame(player.audio_codec_ctx, frame) == 0 {
+
+						out_samples := swresample.get_out_samples(player.swr_ctx, frame.nb_samples)
+
+						// Pull the guaranteed channel count from our state
+						channels := player.audio_channels
+
+						// Allocate enough memory for interleaved 32-bit floats
+						out_buf := make([]f32, out_samples * channels)
+
+						out_arr := [1][^]u8{cast([^]u8)raw_data(out_buf)}
+						in_arr: [8][^]u8
+						for i in 0 ..< 8 do in_arr[i] = cast([^]u8)frame.data[i]
+
+						// Perform the resampling conversion
+						converted := swresample.convert(
+							player.swr_ctx,
+							cast([^][^]u8)&out_arr[0],
+							out_samples,
+							cast([^][^]u8)&in_arr[0],
+							frame.nb_samples,
+						)
+
+						// Push to SDL and track the Master Audio Clock
+						if converted > 0 {
+							byte_size := u32(converted * channels * 4) // 4 bytes per 32-bit float
+							sdl.QueueAudio(player.audio_dev, raw_data(out_buf), byte_size)
+
+							// Accumulate the lifetime byte count for A/V sync
+							sync.lock(&player.queue_mutex)
+							player.total_audio_bytes_queued += u64(byte_size)
+							sync.unlock(&player.queue_mutex)
+						}
+
+						// Cleanup
+						delete(out_buf)
+						avutil.frame_unref(frame)
+					}
 				}
 			}
 		}
