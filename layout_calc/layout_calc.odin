@@ -4,6 +4,11 @@ import "core:fmt"
 import "core:hash"
 import "core:mem"
 import "core:slice"
+import "core:strings"
+
+when ODIN_DEBUG {
+	g_debug_id_registry: map[Box_ID]string
+}
 
 Layout_Arena_Block :: struct {
 	arena:  mem.Arena,
@@ -289,7 +294,25 @@ chained_arena_allocator :: proc(ca: ^Layout_Chained_Arena) -> mem.Allocator {
 // --- Helper Functions ---
 
 ID :: proc(id: string) -> Box_ID {
-	return Box_ID(hash.fnv32(transmute([]byte)id))
+	hash_val := Box_ID(hash.fnv32(transmute([]byte)id))
+
+	when ODIN_DEBUG {
+		if hash_val not_in g_debug_id_registry {
+			// Clone it so temp strings (fmt.tprintf) don't corrupt the registry
+			g_debug_id_registry[hash_val] = strings.clone(id)
+		}
+	}
+
+	return hash_val
+}
+
+// Add a quick helper to safely fetch the name
+get_debug_name :: proc(id: Box_ID) -> string {
+	when ODIN_DEBUG {
+		return g_debug_id_registry[id] or_else "UNKNOWN_ID"
+	} else {
+		return ""
+	}
 }
 
 rect_intersect :: proc(a, b: Rect) -> Rect {
@@ -409,11 +432,10 @@ resolve_fixed_width :: proc(
 			if parent_is_fit || box.parent == nil {
 				box.computed_width = 0.0
 				if !box.warned {
-					parent_id := box.parent != nil ? box.parent.id : 0
 					fmt.printfln(
-						"Box: %d is dependent on parent: %d, which is Fit-sized",
+						"WARNING: Infinite flex-grow (width) loop on Box '%s' (%d). Breaking.",
+						get_debug_name(box.id),
 						box.id,
-						parent_id,
 					)
 					box.warned = true
 				}
@@ -506,6 +528,8 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 				if box.wrap && end > start {
 					if line_sum + box.gap + child_outer > parent_inner_width do break
 					line_sum += box.gap
+				} else if !box.wrap && end > start {
+					line_sum += box.gap
 				}
 				line_sum += child_outer
 				end += 1
@@ -522,7 +546,8 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 					if iteration > 100 {
 						if !box.warned {
 							fmt.printfln(
-								"WARNING: Infinite flex-grow (width) loop on Box %d. Breaking.",
+								"WARNING: Infinite flex-grow (width) loop on Box '%s' (%d). Breaking.",
+								get_debug_name(box.id),
 								box.id,
 							)
 							box.warned = true
@@ -587,7 +612,8 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 					if iteration > 100 {
 						if !box.warned {
 							fmt.printfln(
-								"WARNING: Infinite flex-shrink (width) loop on Box %d. Breaking.",
+								"WARNING: Infinite flex-grow (width) loop on Box '%s' (%d). Breaking.",
+								get_debug_name(box.id),
 								box.id,
 							)
 							box.warned = true
@@ -773,11 +799,10 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 			if parent_is_fit || box.parent == nil {
 				box.computed_height = 0.0
 				if !box.warned {
-					parent_id := box.parent != nil ? box.parent.id : 0
 					fmt.printfln(
-						"Box: %d is dependent on parent: %d, which is Fit-sized",
+						"WARNING: Infinite flex-grow (width) loop on Box '%s' (%d). Breaking.",
+						get_debug_name(box.id),
 						box.id,
-						parent_id,
 					)
 					box.warned = true
 				}
@@ -850,8 +875,14 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 
 	switch box.direction {
 	case .COLUMN, .COLUMN_REVERSE:
-		sum := f32(max((len(box.children) - 1), 0)) * box.gap
-		for child in box.children do sum += child.computed_height + get_vertical(child.margin)
+		sum: f32 = 0.0
+		flow_count := 0
+		for child in box.children {
+			if child.position == .ABSOLUTE || child.position == .FIXED do continue
+			if flow_count > 0 do sum += box.gap
+			sum += child.computed_height + get_vertical(child.margin)
+			flow_count += 1
+		}
 
 		parent_inner_height :=
 			box.computed_height - get_vertical(box.padding) - get_vertical(box.border)
@@ -993,6 +1024,8 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 				if box.wrap && flow_count > 0 {
 					if line_width + box.gap + child_w > parent_inner_width do break
 					line_width += box.gap
+				} else if !box.wrap && flow_count > 0 {
+					line_width += box.gap
 				}
 				line_width += child_w
 				line_max_height = max(line_max_height, child_h)
@@ -1040,7 +1073,7 @@ layout_position_pass :: proc(
 	parent_y: f32 = 0.0,
 	inherited_clip: Maybe(Rect) = nil,
 ) {
-	// 1. Calculate box's own top-left origin (including margins)
+	// Calculate box's own top-left origin (including margins)
 	box.x = parent_x + box.margin[Side.LEFT]
 	box.y = parent_y + box.margin[Side.TOP]
 
@@ -1107,7 +1140,7 @@ layout_position_pass :: proc(
 		line_cross_size: f32 = 0.0
 		flow_count := 0
 
-		// 2. Measure the current line
+		// Measure the current line
 		for end < len(box.children) {
 			child := box.children[end]
 
@@ -1139,7 +1172,7 @@ layout_position_pass :: proc(
 			line_cross_size = max(line_cross_size, parent_cross_dim)
 		}
 
-		// 3. Determine main-axis cursor and gap step for the line based on justify_content
+		// Determine main-axis cursor and gap step for the line based on justify_content
 		free_space := parent_main_dim - line_main_size
 		main_cursor: f32 = 0.0
 		space_between_gap: f32 = box.gap
@@ -1160,7 +1193,7 @@ layout_position_pass :: proc(
 
 		current_main := is_reverse ? (parent_main_dim - main_cursor) : main_cursor
 
-		// 4. Lay out children along the current line
+		// Lay out children along the current line
 		for i := start; i < end; i += 1 {
 			child := box.children[i]
 
@@ -1233,7 +1266,7 @@ layout_position_pass :: proc(
 			}
 		}
 
-		// 5. Advance cross-axis cursor for the next line
+		// Advance cross-axis cursor for the next line
 		if flow_count > 0 {
 			current_cross += line_cross_size + box.gap
 		}
@@ -1243,7 +1276,7 @@ layout_position_pass :: proc(
 
 	// --- Replace the bottom of layout_position_pass with this: ---
 
-	// 1. Define the inner origin (top-left of usable content area, UNSCROLLED)
+	// Define the inner origin (top-left of usable content area, UNSCROLLED)
 	inner_origin_x := box.x + box.padding[Side.LEFT] + box.border[Side.LEFT]
 	inner_origin_y := box.y + box.padding[Side.TOP] + box.border[Side.TOP]
 
@@ -1254,7 +1287,7 @@ layout_position_pass :: proc(
 		// Out-of-flow elements don't stretch the scroll canvas
 		if child.position == .ABSOLUTE || child.position == .FIXED do continue
 
-		// 2. Bring the child's bounding box back to UNSCROLLED container space
+		// Bring the child's bounding box back to UNSCROLLED container space
 		unscrolled_child_x := child.x + box.offset_x
 		unscrolled_child_y := child.y + box.offset_y
 
@@ -1265,15 +1298,15 @@ layout_position_pass :: proc(
 		if child_bottom > furthest_content_y do furthest_content_y = child_bottom
 	}
 
-	// 3. Find the raw span of the inner content
+	// Find the raw span of the inner content
 	inner_content_w := furthest_content_x - inner_origin_x
 	inner_content_h := furthest_content_y - inner_origin_y
 
-	// 4. Add the container's trailing padding & border
+	// Add the container's trailing padding & border
 	total_inner_w := inner_content_w + box.padding[Side.RIGHT] + box.border[Side.RIGHT]
 	total_inner_h := inner_content_h + box.padding[Side.BOTTOM] + box.border[Side.BOTTOM]
 
-	// 5. Final dimensions live in the outer box's coordinate space (add leading padding & border)
+	// Final dimensions live in the outer box's coordinate space (add leading padding & border)
 	box.scroll_width = max(
 		total_inner_w + box.padding[Side.LEFT] + box.border[Side.LEFT],
 		box.computed_width,
@@ -1362,12 +1395,12 @@ layout_context_destroy :: proc(ctx: ^Layout_Context) {
 }
 
 layout_reset :: proc(ctx: ^Layout_Context) {
-	// 1. Swap Arenas
+	// Swap Arenas
 	ctx.active_idx = 1 - ctx.active_idx
 	arena_alloc := chained_arena_allocator(&ctx.arenas[ctx.active_idx])
 	free_all(arena_alloc)
 
-	// 2. Swap Maps & Arrays
+	// Swap Maps & Arrays
 	tmp_map := ctx.all_boxes
 	ctx.all_boxes = ctx.prev_all_boxes
 	ctx.prev_all_boxes = tmp_map
@@ -1378,7 +1411,7 @@ layout_reset :: proc(ctx: ^Layout_Context) {
 	ctx.prev_root_boxes = tmp_roots
 	clear(&ctx.root_boxes)
 
-	// 3. Clear Transient State
+	// Clear Transient State
 	clear(&ctx.parent_stack)
 	clear(&ctx.draw_buffer)
 }

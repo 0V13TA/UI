@@ -1070,12 +1070,12 @@ image_button :: proc(
 // --- VIDEO PLAYER ---
 DEFAULT_VIDEO_WRAPPER_STYLE :: Style {
 	width  = lc.Percent{100},
-	height = lc.Fixed{250},
+	height = lc.Percent{100},
 }
 DEFAULT_VIDEO_FRAME_STYLE :: Style {
 	width      = lc.Percent{100},
 	height     = lc.Percent{100},
-	object_fit = .COVER,
+	object_fit = .CONTAIN,
 }
 DEFAULT_VIDEO_OVERLAY_STYLE :: Style {
 	position    = .ABSOLUTE,
@@ -1089,11 +1089,10 @@ DEFAULT_VIDEO_OVERLAY_STYLE :: Style {
 	bg_color    = Color{0, 0, 0, 0.7},
 }
 DEFAULT_VIDEO_TIME_STYLE :: Style {
-	font_size  = 14,
+	font_name  = "time_font",
 	text_color = Color{1, 1, 1, 1},
 	text_wrap  = .NONE,
 	text_align = .RIGHT,
-	width      = lc.Fixed{95},
 }
 
 video :: proc(
@@ -1142,138 +1141,305 @@ video :: proc(
 	final_wrapper := wrapper_style
 	final_wrapper.position = .RELATIVE
 	final_wrapper.overflow_y = .HIDDEN
-	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	// --- VIDEO FRAME ---
-	final_frame := frame_style
-	// Inherit rounded corners from the wrapper so the video perfectly clips
-	if final_frame.border_radius == nil do final_frame.border_radius = final_wrapper.border_radius
+	{
+		element_open(ui_ctx, {id = root_id, style = final_wrapper}, loc)
+		defer element_close(ui_ctx)
 
-	el := element_open(ui_ctx, Element{style = final_frame})
-	if player != nil && player.texture != nil {
-		if player.playback_time > 0.1 {
-			el.resolved_bg_image = player.texture
+		{
+			final_frame := frame_style
+			// Inherit rounded corners from the wrapper so the video perfectly clips
+			if final_frame.border_radius == nil do final_frame.border_radius = final_wrapper.border_radius
+
+			el := element_open(ui_ctx, Element{style = final_frame})
+			defer element_close(ui_ctx) // close video frame
+			if player != nil && player.texture != nil {
+				if player.playback_time > 0.1 do el.resolved_bg_image = player.texture
+			}
+		}
+
+		// --- CONTROLS OVERLAY ---
+		if player != nil {
+			overlay_id := lc.ID(fmt.tprintf("%d_overlay", root_id))
+
+			// Determine if it SHOULD be open (using the tree hover fix!)
+			should_show := is_tree_hovered(ui_ctx, ev_ctx, root_id) || is_scrubbing^
+
+			// Fire the animation ONLY when the state changes
+			if should_show != overlay_active^ {
+				overlay_active^ = should_show
+
+				anim.to(
+					&anim_ctx.engine,
+					anim.Tween_Vars {
+						duration   = 0.35, // 350ms feels smooth for a UI slide
+						ease_func  = anim.ease_out_exp,
+						properties = {{target = overlay_anim, to = should_show ? 1.0 : 0.0}},
+					},
+				)
+			}
+
+			// Only render the overlay if the animation is actually visible
+			if overlay_anim^ > 0.001 {
+				final_overlay := overlay_style
+
+				if final_overlay.border_radius == nil {
+					if br, ok := final_wrapper.border_radius.?; ok {
+						final_overlay.border_radius = [4]f32{0, 0, br[2], br[3]}
+					}
+				}
+
+				// --- ANIMATION MAGIC ---
+
+				// Slide down by 55 pixels when hiding (adjust based on your actual height)
+				offset_y := 55.0 * (1.0 - overlay_anim^)
+				final_overlay.bottom = -offset_y
+
+				// Fade out the dark background overlay
+				if bg, ok := final_overlay.bg_color.?; ok {
+					final_overlay.bg_color = Color{bg[0], bg[1], bg[2], bg[3] * overlay_anim^}
+				}
+
+				{
+					element_open(ui_ctx, Element{_box = {id = overlay_id}, style = final_overlay})
+					defer element_close(ui_ctx)
+
+
+					// Play/Pause Button
+					icon := player.is_playing ? pause_icon : play_icon
+					if image_button(
+						ui_ctx,
+						ev_ctx,
+						sdl_rend,
+						icon,
+						user_style = play_btn_style,
+						salt = fmt.tprintf("%s_play", salt),
+					) {
+						player.is_playing = !player.is_playing
+						sdl.PauseAudioDevice(player.audio_dev, !player.is_playing)
+					}
+
+					// Time Formatting
+					display_time := is_scrubbing^ ? f64(scrub_time^) : player.playback_time
+					curr_m := int(display_time) / 60
+					curr_s := int(display_time) % 60
+					tot_m := int(player.duration) / 60
+					tot_s := int(player.duration) % 60
+					time_str := fmt.tprintf("%02d:%02d / %02d:%02d", curr_m, curr_s, tot_m, tot_s)
+
+					text(
+						ui_ctx,
+						ev_ctx,
+						time_str,
+						user_style = time_style,
+						salt = fmt.tprintf("%s_time", salt),
+					)
+
+					// Scrubbing Logic
+					mouse_state := sdl.GetMouseState(nil, nil)
+					is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
+
+					slider_val^ = is_scrubbing^ ? scrub_time^ : f32(player.playback_time)
+
+					final_slider_wrapper := slider_wrapper_style
+					final_slider_wrapper.width = lc.Grow{1}
+
+					slider_changed, scrub_target := slider(
+						ui_ctx,
+						ev_ctx,
+						anim_ctx,
+						slider_val,
+						0.0,
+						f32(player.duration),
+						wrapper_style = final_slider_wrapper, // <--- Clean alignment!
+						track_style = slider_track_style,
+						fill_style = slider_fill_style,
+						thumb_style = slider_thumb_style,
+						salt = fmt.tprintf("%s_slider", salt),
+					)
+
+					// Handle state transitions based on instant feedback
+					if slider_changed {
+						scrub_time^ = scrub_target
+						if is_mouse_down {
+							is_scrubbing^ = true
+						} else {
+							video_player_seek(player, f64(scrub_time^))
+							is_scrubbing^ = false
+						}
+					} else if is_scrubbing^ {
+						if !is_mouse_down {
+							video_player_seek(player, f64(scrub_time^))
+							is_scrubbing^ = false
+						}
+					}
+
+
+				}
+			}
+		}
+
+	}
+}
+
+DEFAULT_POPOVER_STYLE :: Style {
+	direction     = .COLUMN,
+	bg_color      = Color{1, 1, 1, 1},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	border_radius = [4]f32{6, 6, 6, 6},
+	padding       = [4]f32{8, 12, 8, 12},
+	width         = lc.Fit(true),
+	height        = lc.Fit(true),
+}
+
+// Returns true if the popover is active and its children should be rendered
+popover_begin :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	target_id: lc.Box_ID,
+	is_open: ^bool,
+	user_style: Style = DEFAULT_POPOVER_STYLE,
+	salt := "",
+	loc := #caller_location,
+) -> bool {
+	if !is_open^ do return false
+
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	root_id := lc.ID(hash_input)
+
+	backdrop_id := lc.ID(fmt.tprintf("%d_backdrop", root_id))
+	content_id := lc.ID(fmt.tprintf("%d_content", root_id))
+
+	// The Invisible Backdrop
+	// This catches all clicks outside the popover content.
+	events.register(ev_ctx, backdrop_id, events.Event_Callbacks{focusable = true})
+
+	if ev_ctx.clicked_this_frame[backdrop_id] or_else false {
+		is_open^ = false
+		return false // Abort rendering this frame since it was just closed
+	}
+
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = backdrop_id},
+			style = {
+				position = .FIXED,
+				top      = 0,
+				left     = 0,
+				width    = lc.ViewPercent{100}, // Covers entire viewport
+				height   = lc.ViewPercent{100}, // Covers entire viewport
+				z_index  = 999, // Just below the popover content
+				bg_color = Color{0, 0, 0, 0}, // Fully transparent
+			},
+		},
+		loc,
+	)
+	element_close(ui_ctx)
+
+	// The Popover Content
+	target_x, target_y, target_w, target_h: f32 = 0, 0, 0, 0
+	if prev, ok := ui_ctx.layout.prev_all_boxes[target_id]; ok {
+		target_x = prev.x
+		target_y = prev.y
+		target_w = prev.computed_width
+		target_h = prev.computed_height
+	}
+
+	final_style := user_style
+	final_style.position = .FIXED
+	final_style.z_index = 1000
+
+	// Default positioning anchors exactly below the target
+	if final_style.left == nil do final_style.left = target_x
+	if final_style.top == nil do final_style.top = target_y + target_h + 8.0
+
+	// register the content container so it acts as a shield.
+	// Clicks on the popover itself stop here and don't punch through to the backdrop.
+	events.register(ev_ctx, content_id, events.Event_Callbacks{focusable = true})
+
+	element_open(ui_ctx, Element{_box = {id = content_id}, style = final_style}, loc)
+
+	return true
+}
+
+popover_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
+	if is_open do element_close(ui_ctx)
+}
+
+DEFAULT_DROPDOWN_STYLE :: Style {
+	width         = lc.Fixed{200},
+	height        = lc.Fit(true),
+	padding       = [4]f32{8, 12, 8, 12},
+	border_radius = [4]f32{6, 6, 6, 6},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	bg_color      = Color{1, 1, 1, 1},
+	text_color    = Color{0, 0, 0, 1},
+}
+
+// Returns true if the selection changed this frame
+dropdown :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	label: string,
+	options: []string,
+	selected_idx: ^int,
+	is_open: ^bool,
+	wrapper_style: Style = DEFAULT_DROPDOWN_STYLE,
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	changed := false
+	hash_input := id
+	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	root_id := lc.ID(hash_input)
+
+	// Determine Display Text
+	display_text := label
+	if selected_idx^ >= 0 && selected_idx^ < len(options) {
+		display_text = options[selected_idx^]
+	}
+
+	// The Trigger Button
+	if button(ui_ctx, ev_ctx, display_text, user_style = wrapper_style, id = root_id) do is_open^ = !is_open^
+
+	// The Popover List
+	if popover_begin(ui_ctx, ev_ctx, root_id, is_open, salt = salt, loc = loc) {
+		defer popover_end(ui_ctx, is_open^)
+
+		for opt, i in options {
+			opt_id := lc.ID(fmt.tprintf("%d_opt_%d", root_id, i))
+
+			is_selected := selected_idx^ == i
+			opt_bg := is_selected ? Color{0.15, 0.4, 0.8, 1.0} : Color{0, 0, 0, 0}
+			opt_text := is_selected ? Color{1, 1, 1, 1} : Color{0.2, 0.2, 0.2, 1}
+
+			// Using block scope for individual options just to be safe
+			{
+				if button(
+					ui_ctx,
+					ev_ctx,
+					opt,
+					id = opt_id,
+					user_style = {
+						width = lc.Percent{100},
+						height = lc.Fit(true),
+						bg_color = opt_bg,
+						text_color = opt_text,
+						text_align = .LEFT,
+						border_radius = space(4),
+					},
+				) {
+					selected_idx^ = i
+					is_open^ = false
+					changed = true
+				}
+			}
 		}
 	}
-	element_close(ui_ctx) // close video frame
 
-	// --- CONTROLS OVERLAY ---
-	if player != nil {
-		overlay_id := lc.ID(fmt.tprintf("%d_overlay", root_id))
-
-		// 1. Determine if it SHOULD be open (using the tree hover fix!)
-		should_show := is_tree_hovered(ui_ctx, ev_ctx, root_id) || is_scrubbing^
-
-		// 2. Fire the animation ONLY when the state changes
-		if should_show != overlay_active^ {
-			overlay_active^ = should_show
-
-			anim.to(
-				&anim_ctx.engine,
-				anim.Tween_Vars {
-					duration   = 0.35, // 350ms feels smooth for a UI slide
-					ease_func  = anim.ease_out_exp,
-					properties = {{target = overlay_anim, to = should_show ? 1.0 : 0.0}},
-				},
-			)
-		}
-
-		// 3. Only render the overlay if the animation is actually visible
-		if overlay_anim^ > 0.001 {
-			final_overlay := overlay_style
-
-			if final_overlay.border_radius == nil {
-				if br, ok := final_wrapper.border_radius.?; ok {
-					final_overlay.border_radius = [4]f32{0, 0, br[2], br[3]}
-				}
-			}
-
-			// --- ANIMATION MAGIC ---
-
-			// Slide down by 55 pixels when hiding (adjust based on your actual height)
-			offset_y := 55.0 * (1.0 - overlay_anim^)
-			final_overlay.bottom = -offset_y
-
-			// Fade out the dark background overlay
-			if bg, ok := final_overlay.bg_color.?; ok {
-				final_overlay.bg_color = Color{bg[0], bg[1], bg[2], bg[3] * overlay_anim^}
-			}
-
-			element_open(ui_ctx, Element{_box = {id = overlay_id}, style = final_overlay})
-
-
-			// Play/Pause Button
-			icon := player.is_playing ? pause_icon : play_icon
-			if image_button(
-				ui_ctx,
-				ev_ctx,
-				sdl_rend,
-				icon,
-				user_style = play_btn_style,
-				salt = fmt.tprintf("%s_play", salt),
-			) {
-				player.is_playing = !player.is_playing
-				sdl.PauseAudioDevice(player.audio_dev, !player.is_playing)
-			}
-
-			// Scrubbing Logic
-			mouse_state := sdl.GetMouseState(nil, nil)
-			is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
-
-			slider_val^ = is_scrubbing^ ? scrub_time^ : f32(player.playback_time)
-
-			final_slider_wrapper := slider_wrapper_style
-			final_slider_wrapper.width = lc.Grow{1}
-
-			slider_changed, scrub_target := slider(
-				ui_ctx,
-				ev_ctx,
-				anim_ctx,
-				slider_val,
-				0.0,
-				f32(player.duration),
-				wrapper_style = final_slider_wrapper, // <--- Clean alignment!
-				track_style = slider_track_style,
-				fill_style = slider_fill_style,
-				thumb_style = slider_thumb_style,
-				salt = fmt.tprintf("%s_slider", salt),
-			)
-
-			// Handle state transitions based on instant feedback
-			if slider_changed {
-				scrub_time^ = scrub_target
-				if is_mouse_down {
-					is_scrubbing^ = true
-				} else {
-					video_player_seek(player, f64(scrub_time^))
-					is_scrubbing^ = false
-				}
-			} else if is_scrubbing^ {
-				if !is_mouse_down {
-					video_player_seek(player, f64(scrub_time^))
-					is_scrubbing^ = false
-				}
-			}
-
-			// Time Formatting
-			display_time := is_scrubbing^ ? f64(scrub_time^) : player.playback_time
-			curr_m := int(display_time) / 60
-			curr_s := int(display_time) % 60
-			tot_m := int(player.duration) / 60
-			tot_s := int(player.duration) % 60
-			time_str := fmt.tprintf("%02d:%02d / %02d:%02d", curr_m, curr_s, tot_m, tot_s)
-
-			text(
-				ui_ctx,
-				ev_ctx,
-				time_str,
-				user_style = time_style,
-				salt = fmt.tprintf("%s_time", salt),
-			)
-
-			element_close(ui_ctx) // close overlay
-		}
-	}
-
-	element_close(ui_ctx) // close relative wrapper
+	return changed
 }

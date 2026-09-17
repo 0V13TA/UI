@@ -1,0 +1,134 @@
+element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	// --- VIDEO FRAME ---
+	final_frame := frame_style
+	// Inherit rounded corners from the wrapper so the video perfectly clips
+	if final_frame.border_radius == nil do final_frame.border_radius = final_wrapper.border_radius
+
+	el := element_open(ui_ctx, Element{style = final_frame})
+	if player != nil && player.texture != nil {
+		if player.playback_time > 0.1 {
+			el.resolved_bg_image = player.texture
+		}
+	}
+	element_close(ui_ctx) // close video frame
+
+	// --- CONTROLS OVERLAY ---
+	if player != nil {
+		overlay_id := lc.ID(fmt.tprintf("%d_overlay", root_id))
+
+		// Determine if it SHOULD be open (using the tree hover fix!)
+		should_show := is_tree_hovered(ui_ctx, ev_ctx, root_id) || is_scrubbing^
+
+		// Fire the animation ONLY when the state changes
+		if should_show != overlay_active^ {
+			overlay_active^ = should_show
+
+			anim.to(
+				&anim_ctx.engine,
+				anim.Tween_Vars {
+					duration   = 0.35, // 350ms feels smooth for a UI slide
+					ease_func  = anim.ease_out_exp,
+					properties = {{target = overlay_anim, to = should_show ? 1.0 : 0.0}},
+				},
+			)
+		}
+
+		// Only render the overlay if the animation is actually visible
+		if overlay_anim^ > 0.001 {
+			final_overlay := overlay_style
+
+			if final_overlay.border_radius == nil {
+				if br, ok := final_wrapper.border_radius.?; ok {
+					final_overlay.border_radius = [4]f32{0, 0, br[2], br[3]}
+				}
+			}
+
+			// --- ANIMATION MAGIC ---
+
+			// Slide down by 55 pixels when hiding (adjust based on your actual height)
+			offset_y := 55.0 * (1.0 - overlay_anim^)
+			final_overlay.bottom = -offset_y
+
+			// Fade out the dark background overlay
+			if bg, ok := final_overlay.bg_color.?; ok {
+				final_overlay.bg_color = Color{bg[0], bg[1], bg[2], bg[3] * overlay_anim^}
+			}
+
+			element_open(ui_ctx, Element{_box = {id = overlay_id}, style = final_overlay})
+
+
+			// Play/Pause Button
+			icon := player.is_playing ? pause_icon : play_icon
+			if image_button(
+				ui_ctx,
+				ev_ctx,
+				sdl_rend,
+				icon,
+				user_style = play_btn_style,
+				salt = fmt.tprintf("%s_play", salt),
+			) {
+				player.is_playing = !player.is_playing
+				sdl.PauseAudioDevice(player.audio_dev, !player.is_playing)
+			}
+
+			// Scrubbing Logic
+			mouse_state := sdl.GetMouseState(nil, nil)
+			is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
+
+			slider_val^ = is_scrubbing^ ? scrub_time^ : f32(player.playback_time)
+
+			final_slider_wrapper := slider_wrapper_style
+			final_slider_wrapper.width = lc.Grow{1}
+
+			slider_changed, scrub_target := slider(
+				ui_ctx,
+				ev_ctx,
+				anim_ctx,
+				slider_val,
+				0.0,
+				f32(player.duration),
+				wrapper_style = final_slider_wrapper, // <--- Clean alignment!
+				track_style = slider_track_style,
+				fill_style = slider_fill_style,
+				thumb_style = slider_thumb_style,
+				salt = fmt.tprintf("%s_slider", salt),
+			)
+
+			// Handle state transitions based on instant feedback
+			if slider_changed {
+				scrub_time^ = scrub_target
+				if is_mouse_down {
+					is_scrubbing^ = true
+				} else {
+					video_player_seek(player, f64(scrub_time^))
+					is_scrubbing^ = false
+				}
+			} else if is_scrubbing^ {
+				if !is_mouse_down {
+					video_player_seek(player, f64(scrub_time^))
+					is_scrubbing^ = false
+				}
+			}
+
+			// Time Formatting
+			display_time := is_scrubbing^ ? f64(scrub_time^) : player.playback_time
+			curr_m := int(display_time) / 60
+			curr_s := int(display_time) % 60
+			tot_m := int(player.duration) / 60
+			tot_s := int(player.duration) % 60
+			time_str := fmt.tprintf("%02d:%02d / %02d:%02d", curr_m, curr_s, tot_m, tot_s)
+
+			text(
+				ui_ctx,
+				ev_ctx,
+				time_str,
+				user_style = time_style,
+				salt = fmt.tprintf("%s_time", salt),
+			)
+
+			element_close(ui_ctx) // close overlay
+		}
+	}
+
+	element_close(ui_ctx) // close relative wrapper

@@ -9,6 +9,10 @@ import "core:unicode/utf8"
 import sdl "vendor:sdl2"
 import "vendor:sdl2/ttf"
 
+when ODIN_DEBUG {
+	g_debug_class_registry: map[Class]string
+}
+
 Text_Align :: enum {
 	LEFT,
 	RIGHT,
@@ -156,7 +160,23 @@ MASTER_CORNER_RADIUS :: 64
 
 // Utility Functions
 Class_Name :: proc(id: string) -> Class {
-	return Class(hash.fnv32(transmute([]byte)id))
+	hash_val := Class(hash.fnv32(transmute([]byte)id))
+
+	when ODIN_DEBUG {
+		if hash_val not_in g_debug_class_registry {
+			g_debug_class_registry[hash_val] = strings.clone(id)
+		}
+	}
+
+	return hash_val
+}
+
+get_class_name :: proc(c: Class) -> string {
+	when ODIN_DEBUG {
+		return g_debug_class_registry[c] or_else "UNKNOWN_CLASS"
+	} else {
+		return ""
+	}
 }
 
 space_1 :: proc(all: f32) -> [4]f32 {
@@ -422,13 +442,11 @@ draw_ui_text :: proc(
 ) {
 	r, g, b, a := to_sdl_color(color)
 	current_x := x
-	prev_ch: rune = 0 // Track the preceding character for pair matching
+	prev_ch: rune = 0
 
 	for ch in text {
-		// Query and apply the kerning offset between the pair
 		if prev_ch != 0 {
-			kerning := ttf.GetFontKerningSizeGlyphs32(font, prev_ch, ch)
-			current_x += kerning
+			current_x += ttf.GetFontKerningSizeGlyphs32(font, prev_ch, ch)
 		}
 
 		glyph := get_glyph(ctx, renderer, font, ch)
@@ -446,12 +464,9 @@ draw_ui_text :: proc(
 			sdl.RenderCopy(renderer, glyph.texture, nil, &dest)
 			current_x += glyph.advance
 		}
-
-		// Save the current rune for the next iteration
 		prev_ch = ch
 	}
 }
-
 
 @(private)
 ui_text_width :: proc(box: ^lc.Box, text: string) -> f32 {
@@ -464,25 +479,11 @@ ui_text_width :: proc(box: ^lc.Box, text: string) -> f32 {
 	for line in explicit_lines {
 		if len(line) == 0 do continue
 
-		line_width: i32 = 0
-		prev_ch: rune = 0
+		c_line := fmt.ctprintf("%s", line)
+		w, h: i32
+		ttf.SizeUTF8(el.resolved_font, c_line, &w, &h)
 
-		for ch in line {
-			// Apply kerning between the previous character and current character
-			if prev_ch != 0 {
-				kerning := ttf.GetFontKerningSizeGlyphs32(el.resolved_font, prev_ch, ch)
-				line_width += kerning
-			}
-
-			// Retrieve metrics without rendering a texture
-			minx, maxx, miny, maxy, advance: i32
-			ttf.GlyphMetrics32(el.resolved_font, ch, &minx, &maxx, &miny, &maxy, &advance)
-
-			line_width += advance
-			prev_ch = ch
-		}
-
-		if f32(line_width) > max_w do max_w = f32(line_width)
+		if f32(w) > max_w do max_w = f32(w)
 	}
 
 	return max_w
@@ -495,10 +496,9 @@ ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 
 	line_height := f32(ttf.FontHeight(el.resolved_font))
 
-	// Measure the advance of a single space character
-	_, _, _, _, space_adv: i32
-	ttf.GlyphMetrics32(el.resolved_font, ' ', nil, nil, nil, nil, &space_adv)
-	space_width := f32(space_adv)
+	space_w, space_h: i32
+	ttf.SizeUTF8(el.resolved_font, " ", &space_w, &space_h)
+	space_width := f32(space_w)
 
 	total_lines: f32 = 0.0
 	explicit_lines := strings.split(text, "\n", context.temp_allocator)
@@ -513,6 +513,7 @@ ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 				if prev_ch != 0 {
 					cursor_x += f32(ttf.GetFontKerningSizeGlyphs32(el.resolved_font, prev_ch, r))
 				}
+
 				_, _, _, _, adv: i32
 				ttf.GlyphMetrics32(el.resolved_font, r, nil, nil, nil, nil, &adv)
 				rune_width := f32(adv)
@@ -520,30 +521,24 @@ ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 				if cursor_x + rune_width > max_width && cursor_x > 0 {
 					cursor_x = 0
 					total_lines += 1.0
-					prev_ch = 0 // Kerning breaks on a new line
+					prev_ch = 0
 				} else {
 					prev_ch = r
 				}
 				cursor_x += rune_width
 			}
 		} else {
-			// .WORD Wrap
 			words := strings.split(explicit_line, " ", context.temp_allocator)
 			for word in words {
-				word_width: f32 = 0.0
-				word_prev_ch: rune = 0
-
-				for r in word {
-					if word_prev_ch != 0 {
-						word_width += f32(
-							ttf.GetFontKerningSizeGlyphs32(el.resolved_font, word_prev_ch, r),
-						)
-					}
-					_, _, _, _, adv: i32
-					ttf.GlyphMetrics32(el.resolved_font, r, nil, nil, nil, nil, &adv)
-					word_width += f32(adv)
-					word_prev_ch = r
+				if len(word) == 0 {
+					cursor_x += space_width
+					continue
 				}
+
+				c_word := fmt.ctprintf("%s", word)
+				w, h: i32
+				ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
+				word_width := f32(w)
 
 				if el.resolved_text_wrap == .WORD &&
 				   cursor_x + word_width > max_width &&
@@ -972,8 +967,7 @@ render_box :: proc(
 
 	// Draw Cached Text
 	if text, ok := box.text.?; ok {
-		if el.resolved_font != nil { 	// Prevent Segfault if font is missing!
-
+		if el.resolved_font != nil {
 			text_x := box.x + box.padding[lc.Side.LEFT] + box.border[lc.Side.LEFT]
 			text_y := box.y + box.padding[lc.Side.TOP] + box.border[lc.Side.TOP]
 
@@ -990,7 +984,7 @@ render_box :: proc(
 			line_height := f32(ttf.FontHeight(el.resolved_font))
 
 			cursor_y := text_y
-			global_char_idx := 0 // Track exact string index across wrapped lines
+			global_char_idx := 0
 			explicit_lines := strings.split(text, "\n", context.temp_allocator)
 
 			for explicit_line in explicit_lines {
@@ -1001,7 +995,6 @@ render_box :: proc(
 						end_idx := start_idx
 						line_width: f32 = 0.0
 
-						// Measure how many runes fit on this line
 						for end_idx < len(runes) {
 							buf: [5]u8
 							bytes, n := utf8.encode_rune(runes[end_idx])
@@ -1019,7 +1012,6 @@ render_box :: proc(
 							end_idx += 1
 						}
 
-						// Align the line horizontally
 						start_x := text_x
 						if el.resolved_text_align == .CENTER {
 							start_x += max((inner_width - line_width) / 2.0, 0.0)
@@ -1028,7 +1020,6 @@ render_box :: proc(
 						}
 						cursor_x := start_x
 
-						// Draw the cached runes
 						for i in start_idx ..< end_idx {
 							buf: [5]u8
 							bytes, n := utf8.encode_rune(runes[i])
@@ -1039,7 +1030,6 @@ render_box :: proc(
 							w, h: i32
 							ttf.SizeUTF8(el.resolved_font, cstring(&buf[0]), &w, &h)
 
-							// --- DRAW SELECTION HIGHLIGHT ---
 							if s, ok1 := el.style.selection_start.?; ok1 {
 								if e, ok2 := el.style.selection_end.?; ok2 {
 									if global_char_idx >= min(s, e) &&
@@ -1052,6 +1042,7 @@ render_box :: proc(
 												0.4,
 											}
 										set_render_color(renderer, sel_col)
+
 										bg_rect := sdl.Rect {
 											i32(cursor_x),
 											i32(cursor_y),
@@ -1065,6 +1056,7 @@ render_box :: proc(
 
 							text_color := el.resolved_text_color
 							text_color[3] *= el.resolved_opacity
+
 							draw_ui_text(
 								ui_ctx,
 								renderer,
@@ -1088,7 +1080,6 @@ render_box :: proc(
 						end_idx := start_idx
 						line_width: f32 = 0.0
 
-						// Measure how many words fit on this line
 						for end_idx < len(words) {
 							word_width: f32 = 0.0
 							if len(words[end_idx]) > 0 {
@@ -1108,7 +1099,6 @@ render_box :: proc(
 
 						if end_idx > start_idx do line_width -= space_width
 
-						// Align the line horizontally
 						start_x := text_x
 						if el.resolved_text_align == .CENTER {
 							start_x += max((inner_width - line_width) / 2.0, 0.0)
@@ -1117,7 +1107,6 @@ render_box :: proc(
 						}
 						cursor_x := start_x
 
-						// Draw the cached words
 						for i in start_idx ..< end_idx {
 							if len(words[i]) > 0 {
 								word_runes := utf8.string_to_runes(
@@ -1130,7 +1119,6 @@ render_box :: proc(
 								w, h: i32
 								ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
 
-								// --- DRAW SELECTION HIGHLIGHT ---
 								if s, ok1 := el.style.selection_start.?; ok1 {
 									if e, ok2 := el.style.selection_end.?; ok2 {
 										s_idx, e_idx := min(s, e), max(s, e)
@@ -1151,9 +1139,8 @@ render_box :: proc(
 												context.temp_allocator,
 											)
 
-											pre_w: i32 = 0
+											pre_w, hl_w: i32 = 0, 0
 											if len(pre_str) > 0 do ttf.SizeUTF8(el.resolved_font, fmt.ctprintf("%s", pre_str), &pre_w, nil)
-											hl_w: i32
 											ttf.SizeUTF8(
 												el.resolved_font,
 												fmt.ctprintf("%s", hl_str),
@@ -1169,6 +1156,7 @@ render_box :: proc(
 													0.4,
 												}
 											set_render_color(renderer, sel_col)
+
 											bg_rect := sdl.Rect {
 												i32(cursor_x) + pre_w,
 												i32(cursor_y),
@@ -1182,6 +1170,7 @@ render_box :: proc(
 
 								text_color := el.resolved_text_color
 								text_color[3] *= el.resolved_opacity
+
 								draw_ui_text(
 									ui_ctx,
 									renderer,
@@ -1193,17 +1182,16 @@ render_box :: proc(
 								)
 
 								cursor_x += f32(w) + space_width
-								global_char_idx += word_len + 1 // Advance by word length + trailing space
+								global_char_idx += word_len + 1
 							} else {
 								cursor_x += space_width
-								global_char_idx += 1 // Empty string in split means consecutive spaces
+								global_char_idx += 1
 							}
 						}
-
 						cursor_y += line_height
 						start_idx = end_idx
 					}
-					global_char_idx += 1 // Advance +1 for the newline character skipped by strings.split
+					global_char_idx += 1
 				}
 			}
 		}
@@ -1309,6 +1297,14 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 	delete(ctx.fonts)
 	delete(ctx.videos)
 	free(ctx)
+
+	when ODIN_DEBUG {
+		for _, name in lc.g_debug_id_registry do delete(name)
+		delete(lc.g_debug_id_registry)
+
+		for _, name in g_debug_class_registry do delete(name)
+		delete(g_debug_class_registry)
+	}
 }
 
 ui_begin_frame :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, screen_w, screen_h: i32) {
