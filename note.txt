@@ -1,134 +1,126 @@
-element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	// --- VIDEO FRAME ---
-	final_frame := frame_style
-	// Inherit rounded corners from the wrapper so the video perfectly clips
-	if final_frame.border_radius == nil do final_frame.border_radius = final_wrapper.border_radius
-
-	el := element_open(ui_ctx, Element{style = final_frame})
-	if player != nil && player.texture != nil {
-		if player.playback_time > 0.1 {
-			el.resolved_bg_image = player.texture
-		}
-	}
-	element_close(ui_ctx) // close video frame
-
-	// --- CONTROLS OVERLAY ---
-	if player != nil {
-		overlay_id := lc.ID(fmt.tprintf("%d_overlay", root_id))
-
-		// Determine if it SHOULD be open (using the tree hover fix!)
-		should_show := is_tree_hovered(ui_ctx, ev_ctx, root_id) || is_scrubbing^
-
-		// Fire the animation ONLY when the state changes
-		if should_show != overlay_active^ {
-			overlay_active^ = should_show
-
-			anim.to(
-				&anim_ctx.engine,
-				anim.Tween_Vars {
-					duration   = 0.35, // 350ms feels smooth for a UI slide
-					ease_func  = anim.ease_out_exp,
-					properties = {{target = overlay_anim, to = should_show ? 1.0 : 0.0}},
+		{
+			// 1. Root Container
+			renderer.element_open(
+				ui_ctx,
+				{
+					style = {
+						direction = .COLUMN,
+						gap = 20,
+						width = lc.ViewPercent{100},
+						height = lc.ViewPercent{100},
+						justify_content = .CENTER,
+						align_items = .CENTER,
+						bg_color = renderer.Color{0.95, 0.95, 0.97, 1},
+					},
 				},
 			)
-		}
+			defer renderer.element_close(ui_ctx)
 
-		// Only render the overlay if the animation is actually visible
-		if overlay_anim^ > 0.001 {
-			final_overlay := overlay_style
+			// 2. Standard Components
+			renderer.dropdown(
+				ui_ctx,
+				&ev_ctx,
+				"Select a role...",
+				my_options,
+				&my_selected_idx,
+				&my_dropdown_open,
+				wrapper_style = {
+					width = lc.Fixed{250},
+					padding = renderer.space_2(12, 16),
+					border = renderer.space(1),
+					border_radius = renderer.space(6),
+					bg_color = renderer.Color{1, 1, 1, 1},
+				},
+			)
 
-			if final_overlay.border_radius == nil {
-				if br, ok := final_wrapper.border_radius.?; ok {
-					final_overlay.border_radius = [4]f32{0, 0, br[2], br[3]}
+			renderer.switch_toggle(ui_ctx, &ev_ctx, "Dark Mode", &my_switch_val)
+
+			renderer.multi_select(
+				ui_ctx,
+				&ev_ctx,
+				"Permissions",
+				my_options,
+				my_multi_states,
+				&my_multi_open,
+				wrapper_style = {
+					width = lc.Fixed{250},
+					padding = renderer.space_2(12, 16),
+					border = renderer.space(1),
+					border_radius = renderer.space(6),
+					bg_color = renderer.Color{1, 1, 1, 1},
+				},
+			)
+
+			// Combobox needs a fixed width to prevent 0-width collapse in centered flex layouts!
+			renderer.combobox(
+				ui_ctx,
+				&ev_ctx,
+				"Search roles...",
+				my_options,
+				&my_combo_buf,
+				&my_combo_idx,
+				&my_combo_open,
+				wrapper_style = {
+					width = lc.Fixed{250},
+					height = lc.Fixed{50},
+					padding = renderer.space(8),
+					border = renderer.space(2),
+					border_radius = renderer.space(6),
+					bg_color = renderer.Color{1, 1, 1, 1},
+				},
+			)
+
+			if renderer.button(ui_ctx, &ev_ctx, "Open Modal") {
+				my_modal_open = true
+			}
+
+			// 3. Modal
+			if renderer.modal_begin(ui_ctx, &ev_ctx, &my_modal_open) {
+				defer renderer.modal_end(ui_ctx, my_modal_open)
+
+				renderer.text(
+					ui_ctx,
+					&ev_ctx,
+					"Are you sure you want to delete this?",
+					user_style = {font_size = 24},
+				)
+
+				renderer.element_open(
+					ui_ctx,
+					{
+						style = {
+							direction = .ROW,
+							gap = 12,
+							justify_content = .END,
+							width = lc.Percent{100},
+						},
+					},
+				)
+				defer renderer.element_close(ui_ctx)
+
+				if renderer.button(ui_ctx, &ev_ctx, "Cancel") do my_modal_open = false
+				if renderer.button(
+					ui_ctx,
+					&ev_ctx,
+					"Delete",
+					user_style = {bg_color = renderer.Color{0.9, 0.2, 0.2, 1}},
+				) {
+					my_modal_open = false
 				}
 			}
 
-			// --- ANIMATION MAGIC ---
-
-			// Slide down by 55 pixels when hiding (adjust based on your actual height)
-			offset_y := 55.0 * (1.0 - overlay_anim^)
-			final_overlay.bottom = -offset_y
-
-			// Fade out the dark background overlay
-			if bg, ok := final_overlay.bg_color.?; ok {
-				final_overlay.bg_color = Color{bg[0], bg[1], bg[2], bg[3] * overlay_anim^}
-			}
-
-			element_open(ui_ctx, Element{_box = {id = overlay_id}, style = final_overlay})
-
-
-			// Play/Pause Button
-			icon := player.is_playing ? pause_icon : play_icon
-			if image_button(
+			// 4. Context Menu
+			if renderer.context_menu_begin(
 				ui_ctx,
-				ev_ctx,
-				sdl_rend,
-				icon,
-				user_style = play_btn_style,
-				salt = fmt.tprintf("%s_play", salt),
+				&ev_ctx,
+				my_context_x,
+				my_context_y,
+				&my_context_open,
 			) {
-				player.is_playing = !player.is_playing
-				sdl.PauseAudioDevice(player.audio_dev, !player.is_playing)
+				defer renderer.context_menu_end(ui_ctx, true)
+				if renderer.button(ui_ctx, &ev_ctx, "Edit", user_style = {text_align = .LEFT}) do my_context_open = false
+				if renderer.button(ui_ctx, &ev_ctx, "Duplicate", user_style = {text_align = .LEFT}) do my_context_open = false
+				if renderer.button(ui_ctx, &ev_ctx, "Delete", user_style = {text_align = .LEFT, text_color = renderer.Color{0.9, 0.2, 0.2, 1}}) do my_context_open = false
 			}
-
-			// Scrubbing Logic
-			mouse_state := sdl.GetMouseState(nil, nil)
-			is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
-
-			slider_val^ = is_scrubbing^ ? scrub_time^ : f32(player.playback_time)
-
-			final_slider_wrapper := slider_wrapper_style
-			final_slider_wrapper.width = lc.Grow{1}
-
-			slider_changed, scrub_target := slider(
-				ui_ctx,
-				ev_ctx,
-				anim_ctx,
-				slider_val,
-				0.0,
-				f32(player.duration),
-				wrapper_style = final_slider_wrapper, // <--- Clean alignment!
-				track_style = slider_track_style,
-				fill_style = slider_fill_style,
-				thumb_style = slider_thumb_style,
-				salt = fmt.tprintf("%s_slider", salt),
-			)
-
-			// Handle state transitions based on instant feedback
-			if slider_changed {
-				scrub_time^ = scrub_target
-				if is_mouse_down {
-					is_scrubbing^ = true
-				} else {
-					video_player_seek(player, f64(scrub_time^))
-					is_scrubbing^ = false
-				}
-			} else if is_scrubbing^ {
-				if !is_mouse_down {
-					video_player_seek(player, f64(scrub_time^))
-					is_scrubbing^ = false
-				}
-			}
-
-			// Time Formatting
-			display_time := is_scrubbing^ ? f64(scrub_time^) : player.playback_time
-			curr_m := int(display_time) / 60
-			curr_s := int(display_time) % 60
-			tot_m := int(player.duration) / 60
-			tot_s := int(player.duration) % 60
-			time_str := fmt.tprintf("%02d:%02d / %02d:%02d", curr_m, curr_s, tot_m, tot_s)
-
-			text(
-				ui_ctx,
-				ev_ctx,
-				time_str,
-				user_style = time_style,
-				salt = fmt.tprintf("%s_time", salt),
-			)
-
-			element_close(ui_ctx) // close overlay
 		}
-	}
-
-	element_close(ui_ctx) // close relative wrapper

@@ -1325,23 +1325,18 @@ ui_compute :: proc(ctx: ^UI_Context) {
 
 
 element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) -> ^Element {
-	// Allocate the element for this frame
 	el := new(Element, lc.frame_allocator(ctx.layout))
 	el^ = el_val
 
-	// Auto-generate an ID based on the call site if one wasn't provided
+	// Auto-generate an ID if omitted, natively tracking it in layout_calc
 	if el._box.id == 0 {
-		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
-		el._box.id = lc.Box_ID(hash.fnv32(transmute([]byte)loc_str))
+		el._box.id = lc.ID(loc)
 	}
 
-	// Resolve cascading styles
 	apply_styles(el, ctx)
-
-	// Bind the styled element to the layout box
 	el._box.user_data = el
-
 	lc.box_open(ctx.layout, el._box, loc)
+
 	return el
 }
 

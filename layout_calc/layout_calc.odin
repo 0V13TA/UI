@@ -1,5 +1,6 @@
 package layout_calc
 
+import "base:runtime"
 import "core:fmt"
 import "core:hash"
 import "core:mem"
@@ -294,19 +295,37 @@ chained_arena_allocator :: proc(ca: ^Layout_Chained_Arena) -> mem.Allocator {
 
 // --- Helper Functions ---
 
-ID :: proc(id: string) -> Box_ID {
-	hash_val := Box_ID(hash.fnv32(transmute([]byte)id))
+ID :: proc {
+	id_from_loc,
+	id_from_string,
+	id_from_child,
+}
+
+// Generate from the caller's location + an optional salt
+id_from_loc :: proc(loc: runtime.Source_Code_Location, salt: string = "") -> Box_ID {
+	if salt == "" do return id_from_string(fmt.tprintf("%s:%d", loc.file_path, loc.line))
+	return id_from_string(fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt))
+}
+
+// Generate from an explicit string
+id_from_string :: proc(str: string) -> Box_ID {
+	hash_val := Box_ID(hash.fnv32(transmute([]byte)str))
 
 	when ODIN_DEBUG {
 		if hash_val not_in g_debug_id_registry {
-			// Clone it so temp strings (fmt.tprintf) don't corrupt the registry
-			g_debug_id_registry[hash_val] = strings.clone(id)
+			// Clone the string so it survives past the frame's temp allocator
+			g_debug_id_registry[hash_val] = strings.clone(str)
 		}
 	}
 
 	return hash_val
 }
 
+// Generate a sub-component ID from a Parent ID
+id_from_child :: proc(parent: Box_ID, suffix: string) -> Box_ID {
+	hash_input := fmt.tprintf("%d_%s", parent, suffix)
+	return id_from_string(hash_input)
+}
 // Add a quick helper to safely fetch the name
 get_debug_name :: proc(id: Box_ID) -> string {
 	when ODIN_DEBUG {

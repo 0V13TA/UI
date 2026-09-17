@@ -5,6 +5,7 @@ import "../events"
 import lc "../layout_calc"
 import "core:fmt"
 import "core:hash"
+import "core:strings"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 
@@ -272,12 +273,9 @@ checkbox :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
-	hash_input := id
-	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-
-	root_id := lc.ID(hash_input)
-	box_id := lc.ID(fmt.tprintf("%d_box", root_id))
-	text_id := lc.ID(fmt.tprintf("%d_text", root_id))
+	root_id := id != "" ? lc.ID(id) : lc.ID(loc, salt)
+	box_id := lc.ID(root_id, "box")
+	text_id := lc.ID(root_id, "text")
 
 	events.register(ev_ctx, root_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
@@ -419,12 +417,11 @@ slider :: proc(
 ) -> (
 	changed: bool,
 	new_target: f32,
-) { 	// <-- UPDATED SIGNATURE
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	root_id := lc.ID(hash_input)
-	track_id := lc.ID(fmt.tprintf("%d_track", root_id))
-	fill_id := lc.ID(fmt.tprintf("%d_fill", root_id))
-	thumb_id := lc.ID(fmt.tprintf("%d_thumb", root_id))
+) {
+	root_id := lc.ID(loc, salt)
+	fill_id := lc.ID(root_id, "fill")
+	track_id := lc.ID(root_id, "track")
+	thumb_id := lc.ID(root_id, "thumb")
 
 	events.register(ev_ctx, root_id, events.Event_Callbacks{focusable = true})
 
@@ -694,11 +691,8 @@ text_input :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
-	hash_input := id
-	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-
-	root_id := lc.ID(hash_input)
-	string_id := lc.ID(fmt.tprintf("%d_text", root_id))
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+	string_id := lc.ID(root_id, "text")
 
 	events.register(
 		ev_ctx,
@@ -1315,9 +1309,9 @@ popover_begin :: proc(
 	// This catches all clicks outside the popover content.
 	events.register(ev_ctx, backdrop_id, events.Event_Callbacks{focusable = true})
 
-	if ev_ctx.clicked_this_frame[backdrop_id] or_else false {
+	if ev_ctx.hovered_id == backdrop_id && (ev_ctx.clicked_this_frame[backdrop_id] or_else false) {
 		is_open^ = false
-		return false // Abort rendering this frame since it was just closed
+		return false
 	}
 
 	element_open(
@@ -1419,9 +1413,13 @@ dropdown :: proc(
 			width = lc.Fit(true),
 			direction = .COLUMN,
 			bg_color = Color{1, 1, 1, 1},
+			border_radius = space(6),
+			border = space(1),
+			border_color = Color{0.8, 0.8, 0.8, 1},
+			padding = space_2(4, 4),
 		},
 	) {
-		defer popover_end(ui_ctx, is_open^)
+		defer popover_end(ui_ctx, true)
 
 		for opt, i in options {
 			opt_id := lc.ID(fmt.tprintf("%d_opt_%d", root_id, i))
@@ -1449,5 +1447,368 @@ dropdown :: proc(
 		}
 	}
 
+	return changed
+}
+
+DEFAULT_MODAL_BACKDROP_STYLE :: Style {
+	position        = .FIXED,
+	top             = 0,
+	left            = 0,
+	width           = lc.ViewPercent{100},
+	height          = lc.ViewPercent{100},
+	bg_color        = Color{0, 0, 0, 0.6}, // Darkened overlay
+	z_index         = 2000,
+	direction       = .COLUMN,
+	justify_content = .CENTER, // Centers children vertically
+	align_items     = .CENTER, // Centers children horizontally
+}
+
+DEFAULT_MODAL_STYLE :: Style {
+	direction     = .COLUMN,
+	bg_color      = Color{1, 1, 1, 1},
+	border_radius = [4]f32{8, 8, 8, 8},
+	padding       = [4]f32{24, 24, 24, 24},
+	width         = lc.Fixed{400},
+	height        = lc.Fit(true),
+	gap           = 16,
+}
+
+modal_begin :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	is_open: ^bool,
+	dismiss_on_click_outside: bool = true,
+	backdrop_style: Style = DEFAULT_MODAL_BACKDROP_STYLE,
+	modal_style: Style = DEFAULT_MODAL_STYLE,
+	salt := "",
+	loc := #caller_location,
+) -> bool {
+	if !is_open^ do return false
+
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	root_id := lc.ID(hash_input)
+	backdrop_id := lc.ID(fmt.tprintf("%d_backdrop", root_id))
+	content_id := lc.ID(fmt.tprintf("%d_content", root_id))
+
+	// The Full-Screen Backdrop
+	events.register(ev_ctx, backdrop_id, events.Event_Callbacks{focusable = true})
+
+	if dismiss_on_click_outside &&
+	   ev_ctx.hovered_id == backdrop_id &&
+	   (ev_ctx.clicked_this_frame[backdrop_id] or_else false) {
+		is_open^ = false
+		return false
+	}
+
+	element_open(ui_ctx, Element{_box = {id = backdrop_id}, style = backdrop_style}, loc)
+
+	// The Modal Content Container (Catches clicks so they don't hit the backdrop)
+	events.register(ev_ctx, content_id, events.Event_Callbacks{focusable = true})
+	element_open(ui_ctx, Element{_box = {id = content_id}, style = modal_style}, loc)
+
+	return true
+}
+
+modal_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
+	if is_open {
+		element_close(ui_ctx) // Close Content
+		element_close(ui_ctx) // Close Backdrop
+	}
+}
+
+DEFAULT_CONTEXT_MENU_STYLE :: Style {
+	direction     = .COLUMN,
+	align_items   = .STRETCH, // Forces children (buttons) to match the widest item
+	bg_color      = Color{1, 1, 1, 1},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	border_radius = [4]f32{4, 4, 4, 4},
+	padding       = [4]f32{4, 4, 4, 4},
+	width         = lc.Fit(true),
+	height        = lc.Fit(true),
+}
+
+context_menu_begin :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	x, y: f32,
+	is_open: ^bool,
+	user_style: Style = DEFAULT_CONTEXT_MENU_STYLE,
+	salt := "",
+	loc := #caller_location,
+) -> bool {
+	if !is_open^ do return false
+
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	root_id := lc.ID(hash_input)
+	backdrop_id := lc.ID(fmt.tprintf("%d_backdrop", root_id))
+	content_id := lc.ID(fmt.tprintf("%d_content", root_id))
+
+	// Invisible Click Shield
+	events.register(ev_ctx, backdrop_id, events.Event_Callbacks{focusable = true})
+	if ev_ctx.hovered_id == backdrop_id && (ev_ctx.clicked_this_frame[backdrop_id] or_else false) {
+		is_open^ = false
+		return false
+	}
+
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = backdrop_id},
+			style = {
+				position = .FIXED,
+				top = 0,
+				left = 0,
+				width = lc.ViewPercent{100},
+				height = lc.ViewPercent{100},
+				z_index = 3000,
+				bg_color = Color{0, 0, 0, 0},
+			},
+		},
+		loc,
+	)
+	element_close(ui_ctx)
+
+	// The Menu Container
+	final_style := user_style
+	final_style.position = .FIXED
+	final_style.left = x
+	final_style.top = y
+	final_style.z_index = 3001
+
+	events.register(ev_ctx, content_id, events.Event_Callbacks{focusable = true})
+	element_open(ui_ctx, Element{_box = {id = content_id}, style = final_style}, loc)
+
+	return true
+}
+
+context_menu_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
+	if is_open do element_close(ui_ctx)
+}
+
+DEFAULT_SWITCH_WRAPPER_STYLE :: Style {
+	width         = lc.Fit(true),
+	height        = lc.Fit(true),
+	direction     = .ROW,
+	align_items   = .CENTER,
+	gap           = 12,
+	padding       = [4]f32{8, 12, 8, 12},
+	border_radius = [4]f32{6, 6, 6, 6},
+	bg_color      = Color{0, 0, 0, 0},
+}
+
+DEFAULT_SWITCH_TRACK_STYLE :: Style {
+	width         = lc.Fixed{44},
+	height        = lc.Fixed{24},
+	border_radius = [4]f32{12, 12, 12, 12}, // Fully rounded pill
+	border        = [4]f32{2, 2, 2, 2},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+}
+
+DEFAULT_SWITCH_THUMB_STYLE :: Style {
+	position      = .ABSOLUTE,
+	top           = 2, // 2px inset from the top border
+	width         = lc.Fixed{16},
+	height        = lc.Fixed{16},
+	border_radius = [4]f32{8, 8, 8, 8},
+	bg_color      = Color{1, 1, 1, 1},
+}
+
+switch_toggle :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	label: string,
+	state: ^bool,
+	wrapper_style: Style = DEFAULT_SWITCH_WRAPPER_STYLE,
+	track_style: Style = DEFAULT_SWITCH_TRACK_STYLE,
+	thumb_style: Style = DEFAULT_SWITCH_THUMB_STYLE,
+	text_style: Style = DEFAULT_CHECKBOX_TEXT_STYLE,
+	active_color: Color = {0.2, 0.8, 0.4, 1.0}, // Green for ON
+	inactive_color: Color = {0.8, 0.8, 0.8, 1.0}, // Gray for OFF
+	hover_bg_color: Color = {0.9, 0.9, 0.92, 1.0},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+	track_id := lc.ID(root_id, "track")
+	thumb_id := lc.ID(root_id, "thumb")
+	text_id := lc.ID(root_id, "text")
+
+	events.register(ev_ctx, root_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
+
+	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
+
+	final_wrapper := wrapper_style
+	if is_hovered do final_wrapper.bg_color = hover_bg_color
+
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	final_track := track_style
+	final_track.bg_color = state^ ? active_color : inactive_color
+	final_track.border_color = state^ ? active_color : Color{0.7, 0.7, 0.7, 1.0}
+
+	element_open(ui_ctx, Element{_box = {id = track_id}, style = final_track})
+
+	final_thumb := thumb_style
+	// Slide thumb: 2px inset on the left, or 2px inset from the right (44 width - 16 thumb - 2 = 26)
+	final_thumb.left = state^ ? 26.0 : 2.0
+
+	element_open(ui_ctx, Element{_box = {id = thumb_id}, style = final_thumb})
+	element_close(ui_ctx) // close thumb
+
+	element_close(ui_ctx) // close track
+
+	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = text_style})
+	element_close(ui_ctx)
+
+	element_close(ui_ctx) // close wrapper
+	return ev_ctx.clicked_this_frame[root_id] or_else false
+}
+
+// --- MULTI-SELECT ---
+multi_select :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	label: string,
+	options: []string,
+	selected_states: []bool,
+	is_open: ^bool,
+	wrapper_style: Style = DEFAULT_DROPDOWN_STYLE,
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	changed := false
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+
+	selected_count := 0
+	for s in selected_states do if s do selected_count += 1
+
+	display_text := label
+	if selected_count > 0 do display_text = fmt.tprintf("%s (%d)", label, selected_count)
+
+	if button(ui_ctx, ev_ctx, display_text, user_style = wrapper_style, id = root_id) do is_open^ = !is_open^
+
+	if popover_begin(
+		ui_ctx,
+		ev_ctx,
+		root_id,
+		is_open,
+		salt = salt,
+		loc = loc,
+		user_style = {
+			align_items = .STRETCH,
+			width = lc.Fit(true),
+			direction = .COLUMN,
+			bg_color = Color{1, 1, 1, 1},
+			border_radius = space(6),
+			border = space(1),
+			border_color = Color{0.8, 0.8, 0.8, 1},
+			padding = space_2(4, 4),
+		},
+	) {
+		defer popover_end(ui_ctx, is_open^)
+
+		for opt, i in options {
+			cb_salt := fmt.tprintf("%s_opt_%d", salt, i)
+			// Pass loc so it combines nicely with the salt!
+			if checkbox(ui_ctx, ev_ctx, opt, &selected_states[i], salt = cb_salt, loc = loc) do changed = true
+		}
+	}
+	return changed
+}
+
+combobox :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	placeholder: string,
+	options: []string,
+	buffer: ^[dynamic]u8,
+	selected_idx: ^int,
+	is_open: ^bool,
+	wrapper_style: Style = DEFAULT_TEXT_INPUT_WRAPPER_STYLE,
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	changed := false
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+
+	// Create a stable salt for the inner text input
+	input_salt := fmt.tprintf("%s_input", salt)
+	input_id := lc.ID(loc, input_salt)
+
+	is_focused := text_input(
+		ui_ctx,
+		ev_ctx,
+		buffer,
+		placeholder = placeholder,
+		wrapper_style = wrapper_style,
+		salt = input_salt,
+		loc = loc,
+	)
+
+	if ev_ctx.clicked_this_frame[input_id] or_else false do is_open^ = true
+
+	// Safe dereference for the dynamic array
+	search_str := strings.to_lower(string(buffer^[:]), context.temp_allocator)
+
+	if popover_begin(
+		ui_ctx,
+		ev_ctx,
+		input_id,
+		is_open,
+		salt = salt,
+		loc = loc,
+		user_style = {
+			align_items = .STRETCH,
+			width = lc.Fit(true),
+			direction = .COLUMN,
+			bg_color = Color{1, 1, 1, 1},
+			border_radius = space(6),
+			border = space(1),
+			border_color = Color{0.8, 0.8, 0.8, 1},
+			padding = space_2(4, 4),
+		},
+	) {
+		defer popover_end(ui_ctx, is_open^)
+
+		for opt, i in options {
+			opt_lower := strings.to_lower(opt, context.temp_allocator)
+
+			if strings.contains(opt_lower, search_str) || len(search_str) == 0 {
+				opt_id := lc.ID(root_id, fmt.tprintf("opt_%d", i))
+				is_selected := selected_idx^ == i
+
+				opt_bg := Color{0.15, 0.4, 0.8, 1.0} if is_selected else Color{0, 0, 0, 0}
+				opt_text := Color{1, 1, 1, 1} if is_selected else Color{0.2, 0.2, 0.2, 1}
+
+				if button(
+					ui_ctx,
+					ev_ctx,
+					opt,
+					id = opt_id,
+					user_style = {
+						bg_color = opt_bg,
+						text_color = opt_text,
+						text_align = .LEFT,
+						border_radius = space(4),
+					},
+				) {
+					selected_idx^ = i
+					is_open^ = false
+					changed = true
+
+					clear(buffer)
+					for c in opt do append(buffer, u8(c))
+
+					ev_ctx.text_cursors[input_id] = len(buffer^)
+					ev_ctx.text_selection[input_id] = len(buffer^)
+				}
+			}
+		}
+	}
 	return changed
 }
