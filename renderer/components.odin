@@ -216,9 +216,28 @@ scroll_end :: proc(ctx: ^UI_Context) {
 }
 
 // --- CHECKBOX ---
-DEFAULT_CHECKBOX_WRAPPER_STYLE :: Style{ width = lc.Fit(true), height = lc.Fit(true), direction = .ROW, align_items = .CENTER, gap = 12, padding = [4]f32{8, 12, 8, 12}, border_radius = [4]f32{6, 6, 6, 6}, bg_color = Color{0, 0, 0, 0} }
-DEFAULT_CHECKBOX_BOX_STYLE     :: Style{ width = lc.Fixed{24}, height = lc.Fixed{24}, border_radius = [4]f32{6, 6, 6, 6}, border = [4]f32{2, 2, 2, 2}, border_color = Color{0.8, 0.8, 0.8, 1}, bg_color = Color{1, 1, 1, 1} }
-DEFAULT_CHECKBOX_TEXT_STYLE    :: Style{ font_size = 18, text_color = Color{0.2, 0.2, 0.2, 1} }
+DEFAULT_CHECKBOX_WRAPPER_STYLE :: Style {
+	width         = lc.Fit(true),
+	height        = lc.Fit(true),
+	direction     = .ROW,
+	align_items   = .CENTER,
+	gap           = 12,
+	padding       = [4]f32{8, 12, 8, 12},
+	border_radius = [4]f32{6, 6, 6, 6},
+	bg_color      = Color{0, 0, 0, 0},
+}
+DEFAULT_CHECKBOX_BOX_STYLE :: Style {
+	width         = lc.Fixed{24},
+	height        = lc.Fixed{24},
+	border_radius = [4]f32{6, 6, 6, 6},
+	border        = [4]f32{2, 2, 2, 2},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	bg_color      = Color{1, 1, 1, 1},
+}
+DEFAULT_CHECKBOX_TEXT_STYLE :: Style {
+	font_size  = 18,
+	text_color = Color{0.2, 0.2, 0.2, 1},
+}
 
 checkbox :: proc(
 	ui_ctx: ^UI_Context,
@@ -226,14 +245,17 @@ checkbox :: proc(
 	label: string,
 	state: ^bool,
 	wrapper_style: Style = DEFAULT_CHECKBOX_WRAPPER_STYLE,
-	box_style: Style     = DEFAULT_CHECKBOX_BOX_STYLE,
-	text_style: Style    = DEFAULT_CHECKBOX_TEXT_STYLE,
-	checked_color: Color  = {0.15, 0.4, 0.8, 1.0},
+	box_style: Style = DEFAULT_CHECKBOX_BOX_STYLE,
+	text_style: Style = DEFAULT_CHECKBOX_TEXT_STYLE,
+	checked_color: Color = {0.15, 0.4, 0.8, 1.0},
 	hover_bg_color: Color = {0.9, 0.9, 0.92, 1.0},
 	salt := "",
+	id: string = "",
 	loc := #caller_location,
 ) -> bool {
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	hash_input := id
+	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+
 	root_id := lc.ID(hash_input)
 	box_id := lc.ID(fmt.tprintf("%d_box", root_id))
 	text_id := lc.ID(fmt.tprintf("%d_text", root_id))
@@ -261,21 +283,40 @@ checkbox :: proc(
 
 	final_box := box_style
 	if state^ do final_box.bg_color = checked_color
-	
+
 	element_open(ui_ctx, Element{_box = {id = box_id}, style = final_box})
 	element_close(ui_ctx)
 
 	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = text_style})
 	element_close(ui_ctx)
-	
+
 	element_close(ui_ctx)
 	return ev_ctx.clicked_this_frame[root_id] or_else false
 }
 
 // --- RADIO BUTTON ---
-DEFAULT_RADIO_WRAPPER_STYLE :: Style{ width = lc.Fit(true), height = lc.Fit(true), direction = .ROW, align_items = .CENTER, gap = 12, padding = [4]f32{8, 12, 8, 12}, border_radius = [4]f32{6, 6, 6, 6}, bg_color = Color{0, 0, 0, 0} }
-DEFAULT_RADIO_BUTTON_STYLE  :: Style{ width = lc.Fixed{24}, height = lc.Fixed{24}, border_radius = [4]f32{12, 12, 12, 12}, border = [4]f32{2, 2, 2, 2}, border_color = Color{0.8, 0.8, 0.8, 1.0}, bg_color = Color{1, 1, 1, 1} }
-DEFAULT_RADIO_TEXT_STYLE    :: Style{ font_size = 18, text_color = Color{0.2, 0.2, 0.2, 1} }
+DEFAULT_RADIO_WRAPPER_STYLE :: Style {
+	width         = lc.Fit(true),
+	height        = lc.Fit(true),
+	direction     = .ROW,
+	align_items   = .CENTER,
+	gap           = 12,
+	padding       = [4]f32{8, 12, 8, 12},
+	border_radius = [4]f32{6, 6, 6, 6},
+	bg_color      = Color{0, 0, 0, 0},
+}
+DEFAULT_RADIO_BUTTON_STYLE :: Style {
+	width         = lc.Fixed{24},
+	height        = lc.Fixed{24},
+	border_radius = [4]f32{12, 12, 12, 12},
+	border        = [4]f32{2, 2, 2, 2},
+	border_color  = Color{0.8, 0.8, 0.8, 1.0},
+	bg_color      = Color{1, 1, 1, 1},
+}
+DEFAULT_RADIO_TEXT_STYLE :: Style {
+	font_size  = 18,
+	text_color = Color{0.2, 0.2, 0.2, 1},
+}
 
 radio :: proc(
 	ui_ctx: ^UI_Context,
@@ -284,14 +325,17 @@ radio :: proc(
 	state: ^$T,
 	value: T,
 	wrapper_style: Style = DEFAULT_RADIO_WRAPPER_STYLE,
-	button_style: Style  = DEFAULT_RADIO_BUTTON_STYLE,
-	text_style: Style    = DEFAULT_RADIO_TEXT_STYLE,
-	active_color: Color   = {0.15, 0.4, 0.8, 1.0},
+	button_style: Style = DEFAULT_RADIO_BUTTON_STYLE,
+	text_style: Style = DEFAULT_RADIO_TEXT_STYLE,
+	active_color: Color = {0.15, 0.4, 0.8, 1.0},
 	hover_bg_color: Color = {0.9, 0.9, 0.92, 1.0},
 	salt := "",
+	id: string = "",
 	loc := #caller_location,
 ) -> bool {
-	hash_input := fmt.tprintf("%s:%d:%s:%v", loc.file_path, loc.line, salt, value)
+	hash_input := id
+	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+
 	root_id := lc.ID(hash_input)
 	button_id := lc.ID(fmt.tprintf("%d_btn", root_id))
 	text_id := lc.ID(fmt.tprintf("%d_text", root_id))
@@ -328,16 +372,39 @@ radio :: proc(
 
 	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = text_style})
 	element_close(ui_ctx)
-	
+
 	element_close(ui_ctx)
 	return ev_ctx.clicked_this_frame[root_id] or_else false
 }
 
 // --- SLIDER ---
-DEFAULT_SLIDER_WRAPPER_STYLE :: Style{ width = lc.Percent{100}, height = lc.Fixed{30}, justify_content = .START, align_items = .CENTER }
-DEFAULT_SLIDER_TRACK_STYLE   :: Style{ width = lc.Percent{100}, height = lc.Fixed{8}, bg_color = Color{0.85, 0.85, 0.85, 1}, border_radius = [4]f32{4, 4, 4, 4} }
-DEFAULT_SLIDER_FILL_STYLE    :: Style{ height = lc.Percent{100}, bg_color = Color{0.15, 0.4, 0.8, 1.0}, border_radius = [4]f32{4, 4, 4, 4} }
-DEFAULT_SLIDER_THUMB_STYLE   :: Style{ position = .ABSOLUTE, top = 5.0, width = lc.Fixed{20}, height = lc.Fixed{20}, bg_color = Color{1, 1, 1, 1}, border_radius = [4]f32{10, 10, 10, 10}, border = [4]f32{2, 2, 2, 2}, border_color = Color{0.15, 0.4, 0.8, 1.0} }
+DEFAULT_SLIDER_WRAPPER_STYLE :: Style {
+	width           = lc.Percent{100},
+	height          = lc.Fixed{30},
+	justify_content = .START,
+	align_items     = .CENTER,
+}
+DEFAULT_SLIDER_TRACK_STYLE :: Style {
+	width         = lc.Percent{100},
+	height        = lc.Fixed{8},
+	bg_color      = Color{0.85, 0.85, 0.85, 1},
+	border_radius = [4]f32{4, 4, 4, 4},
+}
+DEFAULT_SLIDER_FILL_STYLE :: Style {
+	height        = lc.Percent{100},
+	bg_color      = Color{0.15, 0.4, 0.8, 1.0},
+	border_radius = [4]f32{4, 4, 4, 4},
+}
+DEFAULT_SLIDER_THUMB_STYLE :: Style {
+	position      = .ABSOLUTE,
+	top           = 5.0,
+	width         = lc.Fixed{20},
+	height        = lc.Fixed{20},
+	bg_color      = Color{1, 1, 1, 1},
+	border_radius = [4]f32{10, 10, 10, 10},
+	border        = [4]f32{2, 2, 2, 2},
+	border_color  = Color{0.15, 0.4, 0.8, 1.0},
+}
 
 slider :: proc(
 	ui_ctx: ^UI_Context,
@@ -346,21 +413,26 @@ slider :: proc(
 	value: ^f32,
 	min_val, max_val: f32,
 	wrapper_style: Style = DEFAULT_SLIDER_WRAPPER_STYLE,
-	track_style: Style   = DEFAULT_SLIDER_TRACK_STYLE,
-	fill_style: Style    = DEFAULT_SLIDER_FILL_STYLE,
-	thumb_style: Style   = DEFAULT_SLIDER_THUMB_STYLE,
+	track_style: Style = DEFAULT_SLIDER_TRACK_STYLE,
+	fill_style: Style = DEFAULT_SLIDER_FILL_STYLE,
+	thumb_style: Style = DEFAULT_SLIDER_THUMB_STYLE,
 	salt := "",
 	loc := #caller_location,
-) -> bool {
+) -> (
+	changed: bool,
+	new_target: f32,
+) { 	// <-- UPDATED SIGNATURE
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 	root_id := lc.ID(hash_input)
 	track_id := lc.ID(fmt.tprintf("%d_track", root_id))
-	fill_id  := lc.ID(fmt.tprintf("%d_fill", root_id))
+	fill_id := lc.ID(fmt.tprintf("%d_fill", root_id))
 	thumb_id := lc.ID(fmt.tprintf("%d_thumb", root_id))
-	
+
 	events.register(ev_ctx, root_id, events.Event_Callbacks{focusable = true})
 
-	changed := false
+	changed = false
+	target_val := value^ // <-- FALLBACK TO CURRENT VALUE
+
 	is_pressed := ev_ctx.pressed_id == root_id
 	was_pressed := ev_ctx.prev_pressed_id == root_id
 	just_pressed := is_pressed && !was_pressed
@@ -376,7 +448,6 @@ slider :: proc(
 
 			if new_val != value^ {
 				if just_pressed {
-					// Slower, expressive tween for the initial jump
 					anim.to(
 						&anim_ctx.engine,
 						anim.Tween_Vars {
@@ -386,7 +457,6 @@ slider :: proc(
 						},
 					)
 				} else if is_dragging {
-					// Fast tween for dragging to override the click animation
 					anim.to(
 						&anim_ctx.engine,
 						anim.Tween_Vars {
@@ -397,46 +467,56 @@ slider :: proc(
 					)
 				}
 				changed = true
+				target_val = new_val // <-- CAPTURE RAW INTENT
 			}
 		}
 	}
 
 	fill_percent := clamp((value^ - min_val) / (max_val - min_val), 0.0, 1.0)
 
-	// 1. Wrapper
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = wrapper_style}, loc)
-
-	// 2. Track
 	element_open(ui_ctx, Element{_box = {id = track_id}, style = track_style})
-	
-	// 3. Fill
+
 	dynamic_fill := fill_style
 	dynamic_fill.width = lc.Percent{fill_percent * 100.0}
 	element_open(ui_ctx, Element{_box = {id = fill_id}, style = dynamic_fill})
-	element_close(ui_ctx) // close fill
-	
-	element_close(ui_ctx) // close track
+	element_close(ui_ctx)
+
+	element_close(ui_ctx)
 
 	thumb_x: f32 = 0.0
 	if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
 		thumb_x = (fill_percent * prev.computed_width) - 10.0
 	}
 
-	// 4. Thumb
 	dynamic_thumb := thumb_style
 	dynamic_thumb.position = .ABSOLUTE
 	dynamic_thumb.left = thumb_x
 	element_open(ui_ctx, Element{_box = {id = thumb_id}, style = dynamic_thumb})
-	element_close(ui_ctx) // close thumb
-	
-	element_close(ui_ctx) // close wrapper
-	
-	return changed
+	element_close(ui_ctx)
+
+	element_close(ui_ctx)
+
+	return changed, target_val // <-- RETURN BOTH
 }
 
 // --- TEXT INPUT ---
-DEFAULT_TEXT_INPUT_WRAPPER_STYLE :: Style{ width = lc.Percent{100}, height = lc.Fixed{50}, padding = [4]f32{5, 5, 5, 5}, border_radius = [4]f32{6, 6, 6, 6}, border = [4]f32{2, 2, 2, 2}, border_color = Color{0.8, 0.8, 0.8, 1}, bg_color = Color{1, 1, 1, 1} }
-DEFAULT_TEXT_INPUT_TEXT_STYLE    :: Style{ width = lc.Fit(true), height = lc.Fit(true), font_size = 18, text_wrap = .NONE, text_color = Color{0.1, 0.1, 0.1, 1} }
+DEFAULT_TEXT_INPUT_WRAPPER_STYLE :: Style {
+	width         = lc.Percent{100},
+	height        = lc.Fixed{50},
+	padding       = [4]f32{5, 5, 5, 5},
+	border_radius = [4]f32{6, 6, 6, 6},
+	border        = [4]f32{2, 2, 2, 2},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	bg_color      = Color{1, 1, 1, 1},
+}
+DEFAULT_TEXT_INPUT_TEXT_STYLE :: Style {
+	width      = lc.Fit(true),
+	height     = lc.Fit(true),
+	font_size  = 18,
+	text_wrap  = .NONE,
+	text_color = Color{0.1, 0.1, 0.1, 1},
+}
 
 @(private)
 _delete_selection :: proc(
@@ -609,19 +689,22 @@ text_input :: proc(
 	buffer: ^[dynamic]u8,
 	placeholder := "",
 	wrapper_style: Style = DEFAULT_TEXT_INPUT_WRAPPER_STYLE,
-	text_style: Style    = DEFAULT_TEXT_INPUT_TEXT_STYLE,
+	text_style: Style = DEFAULT_TEXT_INPUT_TEXT_STYLE,
 	focused_border_color: Color = {0.15, 0.4, 0.8, 1},
-	placeholder_color: Color    = {0.6, 0.6, 0.6, 1},
+	placeholder_color: Color = {0.6, 0.6, 0.6, 1},
 	salt := "",
+	id: string = "",
 	loc := #caller_location,
 ) -> bool {
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.ID(hash_input)
-	string_id := lc.ID(fmt.tprintf("%d_text", id))
+	hash_input := id
+	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+
+	root_id := lc.ID(hash_input)
+	string_id := lc.ID(fmt.tprintf("%d_text", root_id))
 
 	events.register(
 		ev_ctx,
-		id,
+		root_id,
 		events.Event_Callbacks {
 			cursor = .IBEAM,
 			focusable = true,
@@ -631,26 +714,26 @@ text_input :: proc(
 		},
 	)
 
-	is_focused := ev_ctx.focused_id == id
+	is_focused := ev_ctx.focused_id == root_id
 
 	if is_focused {
 		sdl.StartTextInput()
 		ev_ctx.focused_buffer = buffer
 
-		if id not_in ev_ctx.text_cursors {
-			ev_ctx.text_cursors[id] = len(buffer)
+		if root_id not_in ev_ctx.text_cursors {
+			ev_ctx.text_cursors[root_id] = len(buffer)
 		}
 
 		// Start/restart the blink timer when focus is gained.
-		if id not_in ev_ctx.cursor_blink_start {
-			ev_ctx.cursor_blink_start[id] = u64(sdl.GetTicks())
+		if root_id not_in ev_ctx.cursor_blink_start {
+			ev_ctx.cursor_blink_start[root_id] = u64(sdl.GetTicks())
 		}
 	} else if ev_ctx.focused_buffer == buffer {
 		sdl.StopTextInput()
 		ev_ctx.focused_buffer = nil
 	}
 
-	cursor := clamp(ev_ctx.text_cursors[id], 0, len(buffer))
+	cursor := clamp(ev_ctx.text_cursors[root_id], 0, len(buffer))
 
 	// Dummy element used to measure text.
 	dummy_el := Element {
@@ -664,8 +747,8 @@ text_input :: proc(
 	// ------------------------------------------------------------
 	// Mouse click & Drag -> cursor position
 	// ------------------------------------------------------------
-	is_pressed := ev_ctx.pressed_id == id
-	was_pressed := ev_ctx.prev_pressed_id == id
+	is_pressed := ev_ctx.pressed_id == root_id
+	was_pressed := ev_ctx.prev_pressed_id == root_id
 	just_pressed := is_pressed && !was_pressed
 
 	if is_pressed {
@@ -683,18 +766,18 @@ text_input :: proc(
 				if local_x < (x + next_x) * 0.5 {best_cursor = i; break}
 			}
 
-			ev_ctx.text_cursors[id] = best_cursor
+			ev_ctx.text_cursors[root_id] = best_cursor
 			cursor = best_cursor
 
 			// Anchor the text highlight the exact frame the mouse goes down
 			if just_pressed {
-				ev_ctx.text_selection[id] = best_cursor
-				ev_ctx.cursor_blink_start[id] = u64(sdl.GetTicks())
+				ev_ctx.text_selection[root_id] = best_cursor
+				ev_ctx.cursor_blink_start[root_id] = u64(sdl.GetTicks())
 			}
 
 			// ADD CLAMP HERE
-			anchor := clamp(ev_ctx.text_selection[id], 0, len(buffer))
-			ev_ctx.text_selection[id] = anchor // Keep state in sync
+			anchor := clamp(ev_ctx.text_selection[root_id], 0, len(buffer))
+			ev_ctx.text_selection[root_id] = anchor // Keep state in sync
 		}
 	}
 
@@ -709,21 +792,21 @@ text_input :: proc(
 		// this frame, restart blinking.
 		//
 		// Store the last known cursor position in the same map.
-		if id not_in ev_ctx.cursor_last_position {
-			ev_ctx.cursor_last_position[id] = cursor
+		if root_id not_in ev_ctx.cursor_last_position {
+			ev_ctx.cursor_last_position[root_id] = cursor
 		}
 
-		if ev_ctx.cursor_last_position[id] != cursor {
-			ev_ctx.cursor_last_position[id] = cursor
-			ev_ctx.cursor_blink_start[id] = u64(sdl.GetTicks())
+		if ev_ctx.cursor_last_position[root_id] != cursor {
+			ev_ctx.cursor_last_position[root_id] = cursor
+			ev_ctx.cursor_blink_start[root_id] = u64(sdl.GetTicks())
 		}
 	}
 
 	current_len := len(buffer^)
 
 	// Clamp BOTH the cursor and the selection anchor
-	cursor = clamp(ev_ctx.text_cursors[id], 0, current_len)
-	anchor := clamp(ev_ctx.text_selection[id], 0, current_len)
+	cursor = clamp(ev_ctx.text_cursors[root_id], 0, current_len)
+	anchor := clamp(ev_ctx.text_selection[root_id], 0, current_len)
 
 	// ------------------------------------------------------------
 	// Calculate cursor position
@@ -736,8 +819,8 @@ text_input :: proc(
 	// Auto-scroll so cursor stays visible
 	// ------------------------------------------------------------
 	if is_focused {
-		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
-			scroll_x := ev_ctx.scroll_offsets_x[id]
+		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
+			scroll_x := ev_ctx.scroll_offsets_x[root_id]
 
 			padding_left := prev_outer.padding[3]
 			border_left := prev_outer.border[3]
@@ -758,9 +841,9 @@ text_input :: proc(
 
 			// Cursor has gone past the left side.
 			if cursor_left < scroll_x + margin {
-				ev_ctx.scroll_offsets_x[id] = max(cursor_left - margin, 0)
+				ev_ctx.scroll_offsets_x[root_id] = max(cursor_left - margin, 0)
 			} else if cursor_right > scroll_x + viewport_width - margin {
-				ev_ctx.scroll_offsets_x[id] = cursor_right - viewport_width + margin
+				ev_ctx.scroll_offsets_x[root_id] = cursor_right - viewport_width + margin
 			}
 
 			// CLAMP SCROLL: Prevent the text from floating away from the right edge
@@ -768,11 +851,15 @@ text_input :: proc(
 			total_text_width := ui_text_width(&dummy_box, string(buffer^[:]))
 			max_scroll := max(total_text_width + 15.0 - viewport_width, 0.0)
 
-			ev_ctx.scroll_offsets_x[id] = clamp(ev_ctx.scroll_offsets_x[id], 0.0, max_scroll)
+			ev_ctx.scroll_offsets_x[root_id] = clamp(
+				ev_ctx.scroll_offsets_x[root_id],
+				0.0,
+				max_scroll,
+			)
 
 			// Mutate the previous frame's box so the layout engine
 			// copies THIS new value instead of restoring the old one.
-			prev_outer.offset_x = ev_ctx.scroll_offsets_x[id]
+			prev_outer.offset_x = ev_ctx.scroll_offsets_x[root_id]
 		}
 	}
 
@@ -791,7 +878,7 @@ text_input :: proc(
 	cursor_visible := false
 
 	if is_focused {
-		elapsed := u64(sdl.GetTicks()) - ev_ctx.cursor_blink_start[id]
+		elapsed := u64(sdl.GetTicks()) - ev_ctx.cursor_blink_start[root_id]
 
 		// Visible for 500ms, invisible for 500ms.
 		cursor_visible = (elapsed % 1000) < 500
@@ -807,7 +894,7 @@ text_input :: proc(
 	scroll_begin(
 		ui_ctx,
 		ev_ctx,
-		id = id,
+		id = root_id,
 		scroll_y = false,
 		scroll_x = true,
 		user_style = final_wrapper,
@@ -851,11 +938,7 @@ text_input :: proc(
 
 	element_open(
 		ui_ctx,
-		Element {
-			_box = {id = string_id},
-			text = display_text,
-			style = final_text,
-		},
+		Element{_box = {id = string_id}, text = display_text, style = final_text},
 		loc,
 	)
 
@@ -946,38 +1029,188 @@ image_path :: proc(
 	image_texture(ui_ctx, tex, user_style, loc)
 }
 
+// --- VIDEO PLAYER ---
+DEFAULT_VIDEO_WRAPPER_STYLE :: Style {
+	width  = lc.Percent{100},
+	height = lc.Fixed{250},
+}
+DEFAULT_VIDEO_FRAME_STYLE :: Style {
+	width      = lc.Percent{100},
+	height     = lc.Percent{100},
+	object_fit = .COVER,
+}
+DEFAULT_VIDEO_OVERLAY_STYLE :: Style {
+	position    = .ABSOLUTE,
+	bottom      = 0,
+	left        = 0,
+	width       = lc.Percent{100},
+	direction   = .ROW,
+	align_items = .CENTER,
+	gap         = 15,
+	padding     = [4]f32{10, 10, 10, 10},
+	bg_color    = Color{0, 0, 0, 0.7},
+}
+DEFAULT_VIDEO_TIME_STYLE :: Style {
+	font_size  = 14,
+	text_color = Color{1, 1, 1, 1},
+}
+
 video :: proc(
-	ctx: ^UI_Context,
-	rend: ^sdl.Renderer,
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	anim_ctx: ^anim.Context,
+	sdl_rend: ^sdl.Renderer,
 	path: string,
 	dt: f64,
-	user_style: Style = {},
-	id: lc.Box_ID = 0,
+	is_scrubbing: ^bool,
+	scrub_time: ^f32,
+	slider_val: ^f32,
+	wrapper_style: Style = DEFAULT_VIDEO_WRAPPER_STYLE,
+	frame_style: Style = DEFAULT_VIDEO_FRAME_STYLE,
+	overlay_style: Style = DEFAULT_VIDEO_OVERLAY_STYLE,
+	play_btn_style: Style = {}, // Falls back to button() defaults if empty
+	time_style: Style = DEFAULT_VIDEO_TIME_STYLE,
+	slider_wrapper_style: Style = DEFAULT_SLIDER_WRAPPER_STYLE,
+	slider_track_style: Style = DEFAULT_SLIDER_TRACK_STYLE,
+	slider_fill_style: Style = DEFAULT_SLIDER_FILL_STYLE,
+	slider_thumb_style: Style = DEFAULT_SLIDER_THUMB_STYLE,
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
 ) {
-	// Cache Layer: Init if it doesn't exist
-	if path not_in ctx.videos {
-		// Note: Use strings.clone_to_cstring(path, context.temp_allocator)
-		// if your init function strictly requires a cstring.
-		ctx.videos[path] = video_player_init(rend, path)
-	}
+	hash_input := id
+	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	root_id := lc.ID(hash_input)
 
-	player := ctx.videos[path]
+	// Cache Layer: Init if it doesn't exist
+	if path not_in ui_ctx.videos {
+		ui_ctx.videos[path] = video_player_init(sdl_rend, path)
+	}
+	player := ui_ctx.videos[path]
 
 	// Playback Layer: Advance the media clocks
 	if player != nil && player.is_playing {
 		video_player_update(player, dt)
 	}
 
-	// Presentation Layer: Emit the layout node
-	// (Mirror exactly how your existing `image` component works)
-	el := element_open(ctx, {id = id, style = user_style})
+	// --- 1. RELATIVE WRAPPER ---
+	final_wrapper := wrapper_style
+	final_wrapper.position = .RELATIVE
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
+	// --- 2. VIDEO FRAME ---
+	final_frame := frame_style
+	// Inherit rounded corners from the wrapper so the video perfectly clips
+	if final_frame.border_radius == nil do final_frame.border_radius = final_wrapper.border_radius
+
+	el := element_open(ui_ctx, Element{style = final_frame})
 	if player != nil && player.texture != nil {
-		// Prevent the green FFmpeg startup flash
 		if player.playback_time > 0.1 {
-			el.resolved_bg_image = player.texture // Attach the decoded frame
+			el.resolved_bg_image = player.texture
+		}
+	}
+	element_close(ui_ctx) // close video frame
+
+	// --- 3. CONTROLS OVERLAY ---
+	if player != nil {
+		overlay_id := lc.ID(fmt.tprintf("%d_overlay", root_id))
+
+		// Robust spatial hover check to auto-hide controls
+		is_hovered := false
+		if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
+			mx, my: i32
+			sdl.GetMouseState(&mx, &my)
+			f_mx, f_my := f32(mx), f32(my)
+			is_hovered =
+				f_mx >= prev.x &&
+				f_mx <= prev.x + prev.computed_width &&
+				f_my >= prev.y &&
+				f_my <= prev.y + prev.computed_height
+		}
+
+		// Only draw controls if hovered (or if actively dragging the slider)
+		if is_hovered || is_scrubbing^ {
+
+			final_overlay := overlay_style
+			// Inherit bottom border radii so the dark overlay perfectly matches the wrapper corners
+			if final_overlay.border_radius == nil {
+				if br, ok := final_wrapper.border_radius.?; ok {
+					final_overlay.border_radius = [4]f32{0, 0, br[2], br[3]}
+				}
+			}
+
+			element_open(ui_ctx, Element{_box = {id = overlay_id}, style = final_overlay})
+
+			// Play/Pause Button
+			btn_text := player.is_playing ? "Pause" : "Play"
+			if button(
+				ui_ctx,
+				ev_ctx,
+				btn_text,
+				user_style = play_btn_style,
+				salt = fmt.tprintf("%s_play", salt),
+			) {
+				player.is_playing = !player.is_playing
+				sdl.PauseAudioDevice(player.audio_dev, !player.is_playing)
+			}
+
+			// Scrubbing Logic
+			mouse_state := sdl.GetMouseState(nil, nil)
+			is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
+
+			slider_val^ = is_scrubbing^ ? scrub_time^ : f32(player.playback_time)
+
+			element_open(ui_ctx, Element{style = {width = lc.Grow{1}}})
+			slider_changed, scrub_target := slider(
+				ui_ctx, // <-- GRAB IMMEDIATE RETURNS
+				ev_ctx,
+				anim_ctx,
+				slider_val,
+				0.0,
+				f32(player.duration),
+				wrapper_style = slider_wrapper_style,
+				track_style = slider_track_style,
+				fill_style = slider_fill_style,
+				thumb_style = slider_thumb_style,
+				salt = fmt.tprintf("%s_slider", salt),
+			)
+			element_close(ui_ctx)
+
+			// Handle state transitions based on instant feedback
+			if slider_changed {
+				scrub_time^ = scrub_target
+				if is_mouse_down {
+					is_scrubbing^ = true
+				} else {
+					video_player_seek(player, f64(scrub_time^))
+					is_scrubbing^ = false
+				}
+			} else if is_scrubbing^ {
+				if !is_mouse_down {
+					video_player_seek(player, f64(scrub_time^))
+					is_scrubbing^ = false
+				}
+			}
+
+			// Time Formatting
+			display_time := is_scrubbing^ ? f64(scrub_time^) : player.playback_time
+			curr_m := int(display_time) / 60
+			curr_s := int(display_time) % 60
+			tot_m := int(player.duration) / 60
+			tot_s := int(player.duration) % 60
+			time_str := fmt.tprintf("%02d:%02d / %02d:%02d", curr_m, curr_s, tot_m, tot_s)
+
+			text(
+				ui_ctx,
+				ev_ctx,
+				time_str,
+				user_style = time_style,
+				salt = fmt.tprintf("%s_time", salt),
+			)
+
+			element_close(ui_ctx) // close overlay
 		}
 	}
 
-	element_close(ctx)
+	element_close(ui_ctx) // close relative wrapper
 }

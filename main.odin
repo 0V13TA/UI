@@ -43,7 +43,7 @@ main :: proc() {
 
 	sdl.SetRenderDrawBlendMode(sdl_rend, .BLEND)
 
-	font := ttf.OpenFont("font/CaacupeOne-Regular.ttf", 24)
+	font := ttf.OpenFont("assets/font/CaacupeOne-Regular.ttf", 24)
 	defer ttf.CloseFont(font)
 
 	ui_ctx := renderer.ui_context_create(1024, 768)
@@ -287,106 +287,24 @@ main :: proc() {
 
 		// Fetch the player from the cache
 		video_path := "assets/Two 2-minute Rules to Beat Procrastination (in 2 minutes).mp4"
-		player := ui_ctx.videos[video_path]
 
-		// The RELATIVE Wrapper
-		renderer.element_open(
-			ui_ctx,
-			{style = {position = .RELATIVE, width = lc.Percent{100}, height = lc.Fixed{250}}},
-		)
-
-		// The Video Component
 		renderer.video(
 			ui_ctx,
+			&ev_ctx,
+			&anim_ctx,
 			sdl_rend,
 			video_path,
 			dt,
-			user_style = {width = lc.Percent{100}, height = lc.Percent{100}, object_fit = .COVER},
+			&is_scrubbing,
+			&scrub_time,
+			&slider_val,
+			wrapper_style = {
+				width         = lc.Percent{100},
+				height        = lc.Fixed{250},
+				object_fit    = .COVER,
+				border_radius = renderer.space(8), // Automatically applied to the video AND the overlay!
+			},
 		)
-
-		if player != nil {
-			// The ABSOLUTE Controls Overlay
-			renderer.element_open(
-				ui_ctx,
-				{
-					style = {
-						position    = .ABSOLUTE,
-						direction   = .ROW,
-						align_items = .CENTER,
-						gap         = 15,
-						padding     = renderer.space(10),
-						width       = lc.Percent{100},
-						bg_color    = renderer.Color{0, 0, 0, 0.7}, // Semi-transparent backdrop
-					},
-				},
-			)
-
-			// Play/Pause
-			btn_text := player.is_playing ? "Pause" : "Play"
-			if renderer.button(ui_ctx, &ev_ctx, btn_text) {
-				player.is_playing = !player.is_playing
-				sdl.PauseAudioDevice(player.audio_dev, !player.is_playing)
-			}
-
-			// --- SCRUBBING & SEEK LOGIC ---
-			mouse_state := sdl.GetMouseState(nil, nil)
-			is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
-
-			// 1. Feed the stable slider_val either the paused scrub time or the real playback time
-			slider_val = is_scrubbing ? scrub_time : f32(player.playback_time)
-			old_val := slider_val
-
-			renderer.element_open(ui_ctx, {style = {width = lc.Grow{1}}})
-			// Pass the STABLE pointer to the slider so it doesn't lose mouse focus
-			renderer.slider(ui_ctx, &ev_ctx, &anim_ctx, &slider_val, 0.0, f32(player.duration))
-			renderer.element_close(ui_ctx)
-
-			// 2. Handle Slider Interactions & State Transitions
-			if slider_val != old_val {
-				// The slider value was changed by the user (either dragged or fast-clicked)
-				scrub_time = slider_val
-
-				if is_mouse_down {
-					// User is holding down the mouse, start/continue scrubbing
-					is_scrubbing = true
-				} else {
-					// Fast click: mouse went down and up in the exact same frame
-					renderer.video_player_seek(player, f64(scrub_time))
-					player.playback_time = f64(scrub_time) // Prevent visual snap-back
-					is_scrubbing = false
-				}
-			} else if is_scrubbing {
-				// We were scrubbing, but the value didn't move this frame.
-				if !is_mouse_down {
-					// The user finally released the mouse after a sustained drag
-					renderer.video_player_seek(player, f64(scrub_time))
-					player.playback_time = f64(scrub_time) // Prevent visual snap-back
-					is_scrubbing = false
-				} else {
-					// User is holding the slider perfectly still
-					scrub_time = slider_val
-				}
-			}
-
-			// --- TIME FORMATTING ---
-			// Use display_time so the text updates instantly while scrubbing
-			display_time := is_scrubbing ? f64(scrub_time) : player.playback_time
-
-			curr_m := int(display_time) / 60
-			curr_s := int(display_time) % 60
-			tot_m := int(player.duration) / 60
-			tot_s := int(player.duration) % 60
-
-			time_str := fmt.tprintf("%02d:%02d / %02d:%02d", curr_m, curr_s, tot_m, tot_s)
-			renderer.text(
-				ui_ctx,
-				&ev_ctx,
-				time_str,
-				{font_size = 14, text_color = renderer.Color{1, 1, 1, 1}},
-			)
-			renderer.element_close(ui_ctx) // Close Overlay
-		}
-		renderer.element_close(ui_ctx) // Close Relative Wrapper
 
 		renderer.image(
 			ui_ctx,

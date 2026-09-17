@@ -292,12 +292,6 @@ video_player_seek :: proc(player: ^Video_Player, time_sec: f64) {
 	sync.lock(&player.queue_mutex)
 	player.seek_target = time_sec
 	player.seek_req = true
-
-	// Instantly update the visual clock so the slider feels responsive
-	player.audio_clock_offset = time_sec
-	player.total_audio_bytes_queued = 0
-	sdl.ClearQueuedAudio(player.audio_dev)
-
 	sync.unlock(&player.queue_mutex)
 }
 
@@ -316,7 +310,9 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 	stream := player.fmt_ctx.streams[player.video_stream_idx]
 	time_base := f64(stream.time_base.numerator) / f64(stream.time_base.denominator)
 
-	for player.is_playing { 	// or your standard thread loop
+	just_sought := false
+
+	for player.is_playing {
 		sync.lock(&player.queue_mutex)
 		if player.seek_req {
 			target_ts := i64(player.seek_target * 1000000.0) // AV_TIME_BASE
@@ -326,12 +322,23 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 			if player.audio_codec_ctx != nil do avcodec.flush_buffers(player.audio_codec_ctx)
 
 			clear(&player.frame_queue)
+
+			if player.audio_dev > 0 {
+				sdl.ClearQueuedAudio(player.audio_dev)
+			}
+			player.total_audio_bytes_queued = 0
+
 			player.seek_req = false
+			just_sought = true
 		}
 		sync.unlock(&player.queue_mutex)
 
 		for !player.quit_flag {
 			sync.lock(&player.queue_mutex)
+			if player.seek_req {
+				sync.unlock(&player.queue_mutex)
+				break
+			}
 			queue_len := len(player.frame_queue)
 			sync.unlock(&player.queue_mutex)
 
@@ -342,6 +349,32 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 
 			if avformat.read_frame(player.fmt_ctx, pkt) < 0 do break
 			defer avcodec.packet_unref(pkt)
+
+			// --- SYNC MASTER CLOCK TO THE EXACT KEYFRAME WE LANDED ON ---
+			if just_sought {
+				if pkt.stream_index == player.audio_stream_idx && player.audio_dev > 0 {
+					// Check for valid PTS (AV_NOPTS_VALUE is minimum i64)
+					if pkt.pts != -9223372036854775808 {
+						a_stream := player.fmt_ctx.streams[player.audio_stream_idx]
+						a_tb :=
+							f64(a_stream.time_base.numerator) / f64(a_stream.time_base.denominator)
+
+						sync.lock(&player.queue_mutex)
+						player.audio_clock_offset = f64(pkt.pts) * a_tb
+						sync.unlock(&player.queue_mutex)
+						just_sought = false
+					}
+				} else if pkt.stream_index == player.video_stream_idx &&
+				   player.audio_stream_idx == -1 {
+					// Fallback clock sync for silent video tracks
+					if pkt.pts != -9223372036854775808 {
+						sync.lock(&player.queue_mutex)
+						player.playback_time = f64(pkt.pts) * time_base
+						sync.unlock(&player.queue_mutex)
+						just_sought = false
+					}
+				}
+			}
 
 			if pkt.stream_index == player.video_stream_idx {
 				if avcodec.send_packet(player.codec_ctx, pkt) == 0 {
