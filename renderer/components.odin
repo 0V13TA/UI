@@ -216,24 +216,34 @@ scroll_end :: proc(ctx: ^UI_Context) {
 }
 
 // --- CHECKBOX ---
+DEFAULT_CHECKBOX_WRAPPER_STYLE :: Style{ width = lc.Fit(true), height = lc.Fit(true), direction = .ROW, align_items = .CENTER, gap = 12, padding = [4]f32{8, 12, 8, 12}, border_radius = [4]f32{6, 6, 6, 6}, bg_color = Color{0, 0, 0, 0} }
+DEFAULT_CHECKBOX_BOX_STYLE     :: Style{ width = lc.Fixed{24}, height = lc.Fixed{24}, border_radius = [4]f32{6, 6, 6, 6}, border = [4]f32{2, 2, 2, 2}, border_color = Color{0.8, 0.8, 0.8, 1}, bg_color = Color{1, 1, 1, 1} }
+DEFAULT_CHECKBOX_TEXT_STYLE    :: Style{ font_size = 18, text_color = Color{0.2, 0.2, 0.2, 1} }
+
 checkbox :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
 	label: string,
 	state: ^bool,
+	wrapper_style: Style = DEFAULT_CHECKBOX_WRAPPER_STYLE,
+	box_style: Style     = DEFAULT_CHECKBOX_BOX_STYLE,
+	text_style: Style    = DEFAULT_CHECKBOX_TEXT_STYLE,
+	checked_color: Color  = {0.15, 0.4, 0.8, 1.0},
+	hover_bg_color: Color = {0.9, 0.9, 0.92, 1.0},
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.ID(hash_input)
+	root_id := lc.ID(hash_input)
+	box_id := lc.ID(fmt.tprintf("%d_box", root_id))
+	text_id := lc.ID(fmt.tprintf("%d_text", root_id))
 
-
-	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true, cursor = .HAND})
-	if ev_ctx.clicked_this_frame[id] or_else false do state^ = !state^
+	events.register(ev_ctx, root_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
 
 	// Robust spatial hover check that ignores children blocking the raycast
 	is_hovered := false
-	if prev, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+	if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
 		mx, my: i32
 		sdl.GetMouseState(&mx, &my)
 		f_mx, f_my := f32(mx), f32(my)
@@ -244,70 +254,54 @@ checkbox :: proc(
 			f_my <= prev.y + prev.computed_height
 	}
 
-	// STRICT ELEMENT INIT: Pass ID into the internal _box
-	element_open(
-		ui_ctx,
-		Element {
-			_box = {id = id},
-			style = {
-				width         = lc.Fit(true),
-				height        = lc.Fit(true), // Prevents squishing
-				direction     = .ROW,
-				align_items   = .CENTER,
-				gap           = 12,
-				padding       = space_2(8, 12),
-				border_radius = space(6),
-				bg_color      = is_hovered ? Color{0.9, 0.9, 0.92, 1.0} : Color{0, 0, 0, 0},
-			},
-		},
-		loc,
-	)
+	final_wrapper := wrapper_style
+	if is_hovered do final_wrapper.bg_color = hover_bg_color
 
-	box_bg := state^ ? Color{0.15, 0.4, 0.8, 1.0} : Color{1, 1, 1, 1}
-	element_open(
-		ui_ctx,
-		Element {
-			style = {
-				width = lc.Fixed{24},
-				height = lc.Fixed{24},
-				border_radius = space(6),
-				border = space(2),
-				border_color = Color{0.8, 0.8, 0.8, 1},
-				bg_color = box_bg,
-			},
-		},
-	)
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	final_box := box_style
+	if state^ do final_box.bg_color = checked_color
+	
+	element_open(ui_ctx, Element{_box = {id = box_id}, style = final_box})
 	element_close(ui_ctx)
 
-	element_open(
-		ui_ctx,
-		Element{text = label, style = {font_size = 18, text_color = Color{0.2, 0.2, 0.2, 1}}},
-	)
+	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = text_style})
 	element_close(ui_ctx)
+	
 	element_close(ui_ctx)
-
-	return ev_ctx.clicked_this_frame[id] or_else false
+	return ev_ctx.clicked_this_frame[root_id] or_else false
 }
 
 // --- RADIO BUTTON ---
+DEFAULT_RADIO_WRAPPER_STYLE :: Style{ width = lc.Fit(true), height = lc.Fit(true), direction = .ROW, align_items = .CENTER, gap = 12, padding = [4]f32{8, 12, 8, 12}, border_radius = [4]f32{6, 6, 6, 6}, bg_color = Color{0, 0, 0, 0} }
+DEFAULT_RADIO_BUTTON_STYLE  :: Style{ width = lc.Fixed{24}, height = lc.Fixed{24}, border_radius = [4]f32{12, 12, 12, 12}, border = [4]f32{2, 2, 2, 2}, border_color = Color{0.8, 0.8, 0.8, 1.0}, bg_color = Color{1, 1, 1, 1} }
+DEFAULT_RADIO_TEXT_STYLE    :: Style{ font_size = 18, text_color = Color{0.2, 0.2, 0.2, 1} }
+
 radio :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
 	label: string,
 	state: ^$T,
 	value: T,
+	wrapper_style: Style = DEFAULT_RADIO_WRAPPER_STYLE,
+	button_style: Style  = DEFAULT_RADIO_BUTTON_STYLE,
+	text_style: Style    = DEFAULT_RADIO_TEXT_STYLE,
+	active_color: Color   = {0.15, 0.4, 0.8, 1.0},
+	hover_bg_color: Color = {0.9, 0.9, 0.92, 1.0},
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s:%v", loc.file_path, loc.line, salt, value)
-	id := lc.ID(hash_input)
+	root_id := lc.ID(hash_input)
+	button_id := lc.ID(fmt.tprintf("%d_btn", root_id))
+	text_id := lc.ID(fmt.tprintf("%d_text", root_id))
 
-	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true, cursor = .HAND})
-	if ev_ctx.clicked_this_frame[id] or_else false do state^ = value
+	events.register(ev_ctx, root_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = value
 	is_active := state^ == value
 
 	is_hovered := false
-	if prev, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+	if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
 		mx, my: i32
 		sdl.GetMouseState(&mx, &my)
 		f_mx, f_my := f32(mx), f32(my)
@@ -318,72 +312,62 @@ radio :: proc(
 			f_my <= prev.y + prev.computed_height
 	}
 
-	element_open(
-		ui_ctx,
-		Element {
-			_box = {id = id},
-			style = {
-				width         = lc.Fit(true),
-				height        = lc.Fit(true), // Prevents overlapping text
-				direction     = .ROW,
-				align_items   = .CENTER,
-				gap           = 12,
-				padding       = space_2(8, 12),
-				border_radius = space(6),
-				bg_color      = is_hovered ? Color{0.9, 0.9, 0.92, 1.0} : Color{0, 0, 0, 0},
-			},
-		},
-		loc,
-	)
+	final_wrapper := wrapper_style
+	if is_hovered do final_wrapper.bg_color = hover_bg_color
 
-	border_col := is_active ? Color{0.15, 0.4, 0.8, 1.0} : Color{0.8, 0.8, 0.8, 1.0}
-	element_open(
-		ui_ctx,
-		Element {
-			style = {
-				width = lc.Fixed{24},
-				height = lc.Fixed{24},
-				border_radius = space(12),
-				border = space(is_active ? 7 : 2),
-				border_color = border_col,
-				bg_color = Color{1, 1, 1, 1},
-			},
-		},
-	)
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	final_button := button_style
+	if is_active {
+		final_button.border_color = active_color
+		final_button.border = [4]f32{7, 7, 7, 7}
+	}
+
+	element_open(ui_ctx, Element{_box = {id = button_id}, style = final_button})
 	element_close(ui_ctx)
 
-	element_open(
-		ui_ctx,
-		Element{text = label, style = {font_size = 18, text_color = Color{0.2, 0.2, 0.2, 1}}},
-	)
+	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = text_style})
 	element_close(ui_ctx)
+	
 	element_close(ui_ctx)
-
-	return ev_ctx.clicked_this_frame[id] or_else false
+	return ev_ctx.clicked_this_frame[root_id] or_else false
 }
 
 // --- SLIDER ---
+DEFAULT_SLIDER_WRAPPER_STYLE :: Style{ width = lc.Percent{100}, height = lc.Fixed{30}, justify_content = .START, align_items = .CENTER }
+DEFAULT_SLIDER_TRACK_STYLE   :: Style{ width = lc.Percent{100}, height = lc.Fixed{8}, bg_color = Color{0.85, 0.85, 0.85, 1}, border_radius = [4]f32{4, 4, 4, 4} }
+DEFAULT_SLIDER_FILL_STYLE    :: Style{ height = lc.Percent{100}, bg_color = Color{0.15, 0.4, 0.8, 1.0}, border_radius = [4]f32{4, 4, 4, 4} }
+DEFAULT_SLIDER_THUMB_STYLE   :: Style{ position = .ABSOLUTE, top = 5.0, width = lc.Fixed{20}, height = lc.Fixed{20}, bg_color = Color{1, 1, 1, 1}, border_radius = [4]f32{10, 10, 10, 10}, border = [4]f32{2, 2, 2, 2}, border_color = Color{0.15, 0.4, 0.8, 1.0} }
+
 slider :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
 	anim_ctx: ^anim.Context,
 	value: ^f32,
 	min_val, max_val: f32,
+	wrapper_style: Style = DEFAULT_SLIDER_WRAPPER_STYLE,
+	track_style: Style   = DEFAULT_SLIDER_TRACK_STYLE,
+	fill_style: Style    = DEFAULT_SLIDER_FILL_STYLE,
+	thumb_style: Style   = DEFAULT_SLIDER_THUMB_STYLE,
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.ID(hash_input)
-	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
+	root_id := lc.ID(hash_input)
+	track_id := lc.ID(fmt.tprintf("%d_track", root_id))
+	fill_id  := lc.ID(fmt.tprintf("%d_fill", root_id))
+	thumb_id := lc.ID(fmt.tprintf("%d_thumb", root_id))
+	
+	events.register(ev_ctx, root_id, events.Event_Callbacks{focusable = true})
 
 	changed := false
-	is_pressed := ev_ctx.pressed_id == id
-	was_pressed := ev_ctx.prev_pressed_id == id
+	is_pressed := ev_ctx.pressed_id == root_id
+	was_pressed := ev_ctx.prev_pressed_id == root_id
 	just_pressed := is_pressed && !was_pressed
 	is_dragging := is_pressed && was_pressed
 
 	if is_pressed {
-		if prev_box, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+		if prev_box, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
 			mx, my: i32
 			sdl.GetMouseState(&mx, &my)
 			local_x := f32(mx) - prev_box.x
@@ -419,72 +403,41 @@ slider :: proc(
 
 	fill_percent := clamp((value^ - min_val) / (max_val - min_val), 0.0, 1.0)
 
-	element_open(
-		ui_ctx,
-		Element {
-			_box = {id = id},
-			style = {
-				width = lc.Percent{100},
-				height = lc.Fixed{30},
-				justify_content = .START,
-				align_items = .CENTER,
-			},
-		},
-		loc,
-	)
+	// 1. Wrapper
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = wrapper_style}, loc)
 
-	element_open(
-		ui_ctx,
-		Element {
-			style = {
-				width = lc.Percent{100},
-				height = lc.Fixed{8},
-				bg_color = Color{0.85, 0.85, 0.85, 1},
-				border_radius = space(4),
-			},
-		},
-	)
-	element_open(
-		ui_ctx,
-		Element {
-			style = {
-				width = lc.Percent{fill_percent * 100.0},
-				height = lc.Percent{100},
-				bg_color = Color{0.15, 0.4, 0.8, 1.0},
-				border_radius = space(4),
-			},
-		},
-	)
-	element_close(ui_ctx)
-	element_close(ui_ctx)
+	// 2. Track
+	element_open(ui_ctx, Element{_box = {id = track_id}, style = track_style})
+	
+	// 3. Fill
+	dynamic_fill := fill_style
+	dynamic_fill.width = lc.Percent{fill_percent * 100.0}
+	element_open(ui_ctx, Element{_box = {id = fill_id}, style = dynamic_fill})
+	element_close(ui_ctx) // close fill
+	
+	element_close(ui_ctx) // close track
 
 	thumb_x: f32 = 0.0
-	if prev, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+	if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
 		thumb_x = (fill_percent * prev.computed_width) - 10.0
 	}
 
-	element_open(
-		ui_ctx,
-		Element {
-			style = {
-				position      = .ABSOLUTE,
-				left          = thumb_x,
-				top           = 5.0, // Fix: Centered vertically (30px track - 20px thumb / 2)
-				width         = lc.Fixed{20},
-				height        = lc.Fixed{20},
-				bg_color      = Color{1, 1, 1, 1},
-				border_radius = space(10),
-				border        = space(2),
-				border_color  = Color{0.15, 0.4, 0.8, 1.0},
-			},
-		},
-	)
-	element_close(ui_ctx)
-	element_close(ui_ctx)
+	// 4. Thumb
+	dynamic_thumb := thumb_style
+	dynamic_thumb.position = .ABSOLUTE
+	dynamic_thumb.left = thumb_x
+	element_open(ui_ctx, Element{_box = {id = thumb_id}, style = dynamic_thumb})
+	element_close(ui_ctx) // close thumb
+	
+	element_close(ui_ctx) // close wrapper
+	
 	return changed
 }
 
 // --- TEXT INPUT ---
+DEFAULT_TEXT_INPUT_WRAPPER_STYLE :: Style{ width = lc.Percent{100}, height = lc.Fixed{50}, padding = [4]f32{5, 5, 5, 5}, border_radius = [4]f32{6, 6, 6, 6}, border = [4]f32{2, 2, 2, 2}, border_color = Color{0.8, 0.8, 0.8, 1}, bg_color = Color{1, 1, 1, 1} }
+DEFAULT_TEXT_INPUT_TEXT_STYLE    :: Style{ width = lc.Fit(true), height = lc.Fit(true), font_size = 18, text_wrap = .NONE, text_color = Color{0.1, 0.1, 0.1, 1} }
+
 @(private)
 _delete_selection :: proc(
 	buf: ^[dynamic]u8,
@@ -655,14 +608,16 @@ text_input :: proc(
 	ev_ctx: ^events.Event_Context,
 	buffer: ^[dynamic]u8,
 	placeholder := "",
+	wrapper_style: Style = DEFAULT_TEXT_INPUT_WRAPPER_STYLE,
+	text_style: Style    = DEFAULT_TEXT_INPUT_TEXT_STYLE,
+	focused_border_color: Color = {0.15, 0.4, 0.8, 1},
+	placeholder_color: Color    = {0.6, 0.6, 0.6, 1},
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 	id := lc.ID(hash_input)
-
-	string_id_str := fmt.tprintf("%s:%d:%s1", loc.file_path, loc.line, salt)
-	string_id := lc.ID(string_id_str)
+	string_id := lc.ID(fmt.tprintf("%d_text", id))
 
 	events.register(
 		ev_ctx,
@@ -829,10 +784,6 @@ text_input :: proc(
 	if len(buffer) > 0 do display_text = string(buffer^[:])
 	else do display_text = placeholder
 
-	text_color := Color{}
-	if len(buffer) > 0 do text_color = Color{0.1, 0.1, 0.1, 1}
-	else do text_color = Color{0.6, 0.6, 0.6, 1}
-
 	// ------------------------------------------------------------
 	// Cursor blink
 	// ------------------------------------------------------------
@@ -850,21 +801,16 @@ text_input :: proc(
 	// Scroll container
 	// ------------------------------------------------------------
 
+	final_wrapper := wrapper_style
+	if is_focused do final_wrapper.border_color = focused_border_color
+
 	scroll_begin(
 		ui_ctx,
 		ev_ctx,
 		id = id,
 		scroll_y = false,
 		scroll_x = true,
-		user_style = {
-			width = lc.Percent{100},
-			height = lc.Fixed{50},
-			padding = space(5),
-			border_radius = space(6),
-			border = space(2),
-			border_color = is_focused ? Color{0.15, 0.4, 0.8, 1} : Color{0.8, 0.8, 0.8, 1},
-			bg_color = Color{1, 1, 1, 1},
-		},
+		user_style = final_wrapper,
 		loc = loc,
 	)
 
@@ -899,18 +845,16 @@ text_input :: proc(
 	// Text element
 	// ------------------------------------------------------------
 
+	final_text := text_style
+	if len(buffer) == 0 do final_text.text_color = placeholder_color
+	else do final_text.text_color = text_style.text_color
+
 	element_open(
 		ui_ctx,
 		Element {
 			_box = {id = string_id},
 			text = display_text,
-			style = {
-				width = lc.Fit(true),
-				height = lc.Fit(true),
-				font_size = 18,
-				text_wrap = .NONE,
-				text_color = text_color,
-			},
+			style = final_text,
 		},
 		loc,
 	)
