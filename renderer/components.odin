@@ -386,24 +386,24 @@ DEFAULT_SLIDER_WRAPPER_STYLE :: Style {
 }
 DEFAULT_SLIDER_TRACK_STYLE :: Style {
 	width         = lc.Percent{100},
-	height        = lc.Fixed{8},
-	bg_color      = Color{0.85, 0.85, 0.85, 1},
-	border_radius = [4]f32{4, 4, 4, 4},
+	height        = lc.Fixed{4}, // Slim down to 4px
+	bg_color      = Color{1, 1, 1, 0.25}, // Clean, translucent backdrop
+	border_radius = [4]f32{2, 2, 2, 2},
 }
+
 DEFAULT_SLIDER_FILL_STYLE :: Style {
 	height        = lc.Percent{100},
-	bg_color      = Color{0.15, 0.4, 0.8, 1.0},
-	border_radius = [4]f32{4, 4, 4, 4},
+	bg_color      = Color{0.9, 0.2, 0.2, 1.0}, // A sharp red (or swap to your accent color)
+	border_radius = [4]f32{2, 2, 2, 2},
 }
+
 DEFAULT_SLIDER_THUMB_STYLE :: Style {
 	position      = .ABSOLUTE,
-	top           = 5.0,
-	width         = lc.Fixed{20},
-	height        = lc.Fixed{20},
+	top           = 8.0, // Vertically centered: (30px wrapper - 14px thumb) / 2 = 8
+	width         = lc.Fixed{14},
+	height        = lc.Fixed{14},
 	bg_color      = Color{1, 1, 1, 1},
-	border_radius = [4]f32{10, 10, 10, 10},
-	border        = [4]f32{2, 2, 2, 2},
-	border_color  = Color{0.15, 0.4, 0.8, 1.0},
+	border_radius = [4]f32{7, 7, 7, 7}, // Perfect borderless circle
 }
 
 slider :: proc(
@@ -1093,6 +1093,9 @@ DEFAULT_VIDEO_OVERLAY_STYLE :: Style {
 DEFAULT_VIDEO_TIME_STYLE :: Style {
 	font_size  = 14,
 	text_color = Color{1, 1, 1, 1},
+	text_wrap  = .NONE,
+	text_align = .RIGHT,
+	width      = lc.Fixed{95},
 }
 
 video :: proc(

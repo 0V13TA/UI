@@ -233,29 +233,44 @@ video_player_update :: proc(player: ^Video_Player, dt: f64) {
 		player.playback_time += dt
 	}
 
+	valid_frame: Maybe(Video_Frame) = nil
+
 	sync.lock(&player.queue_mutex)
-	defer sync.unlock(&player.queue_mutex)
+	for len(player.frame_queue) > 0 {
+		// If the frame's presentation timestamp is in the past, it's ready to play
+		if player.playback_time >= player.frame_queue[0].pts {
+			// If we ALREADY extracted a frame this tick, we are dropping it to catch up
+			if prev_frame, ok := valid_frame.?; ok {
+				delete(prev_frame.y_plane)
+				delete(prev_frame.u_plane)
+				delete(prev_frame.v_plane)
+			}
 
-	if len(player.frame_queue) > 0 {
-		next_frame := player.frame_queue[0]
-
-		if player.playback_time >= next_frame.pts {
-			sdl.UpdateYUVTexture(
-				player.texture,
-				nil,
-				raw_data(next_frame.y_plane),
-				next_frame.y_pitch,
-				raw_data(next_frame.u_plane),
-				next_frame.u_pitch,
-				raw_data(next_frame.v_plane),
-				next_frame.v_pitch,
-			)
-
-			delete(next_frame.y_plane)
-			delete(next_frame.u_plane)
-			delete(next_frame.v_plane)
+			valid_frame = player.frame_queue[0]
 			ordered_remove(&player.frame_queue, 0)
+		} else {
+			// The frame at the front of the queue is in the future. Stop seeking.
+			break
 		}
+	}
+	sync.unlock(&player.queue_mutex)
+
+	if frame, ok := valid_frame.?; ok {
+		sdl.UpdateYUVTexture(
+			player.texture,
+			nil,
+			raw_data(frame.y_plane),
+			frame.y_pitch,
+			raw_data(frame.u_plane),
+			frame.u_pitch,
+			raw_data(frame.v_plane),
+			frame.v_pitch,
+		)
+
+		// Clean up the memory for the frame we just rendered
+		delete(frame.y_plane)
+		delete(frame.u_plane)
+		delete(frame.v_plane)
 	}
 }
 

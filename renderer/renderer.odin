@@ -463,11 +463,26 @@ ui_text_width :: proc(box: ^lc.Box, text: string) -> f32 {
 
 	for line in explicit_lines {
 		if len(line) == 0 do continue
-		c_str := fmt.ctprintf("%s", line)
-		w, h: i32
-		ttf.SizeUTF8(el.resolved_font, c_str, &w, &h)
 
-		if f32(w) > max_w do max_w = f32(w)
+		line_width: i32 = 0
+		prev_ch: rune = 0
+
+		for ch in line {
+			// Apply kerning between the previous character and current character
+			if prev_ch != 0 {
+				kerning := ttf.GetFontKerningSizeGlyphs32(el.resolved_font, prev_ch, ch)
+				line_width += kerning
+			}
+
+			// Retrieve metrics without rendering a texture
+			minx, maxx, miny, maxy, advance: i32
+			ttf.GlyphMetrics32(el.resolved_font, ch, &minx, &maxx, &miny, &maxy, &advance)
+
+			line_width += advance
+			prev_ch = ch
+		}
+
+		if f32(line_width) > max_w do max_w = f32(line_width)
 	}
 
 	return max_w
@@ -478,12 +493,12 @@ ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 	el := (^Element)(box.user_data)
 	if el == nil || el.resolved_font == nil do return 0
 
-	// SDL_ttf provides accurate line height directly from the font metrics
 	line_height := f32(ttf.FontHeight(el.resolved_font))
 
-	space_w, space_h: i32
-	ttf.SizeUTF8(el.resolved_font, " ", &space_w, &space_h)
-	space_width := f32(space_w)
+	// Measure the advance of a single space character
+	_, _, _, _, space_adv: i32
+	ttf.GlyphMetrics32(el.resolved_font, ' ', nil, nil, nil, nil, &space_adv)
+	space_width := f32(space_adv)
 
 	total_lines: f32 = 0.0
 	explicit_lines := strings.split(text, "\n", context.temp_allocator)
@@ -493,48 +508,55 @@ ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
 		cursor_x: f32 = 0.0
 
 		if el.resolved_text_wrap == .LETTER {
-			runes := utf8.string_to_runes(explicit_line, context.temp_allocator)
-			for r in runes {
-				buf: [5]u8
-				bytes, n := utf8.encode_rune(r)
-				for j in 0 ..< n do buf[j] = bytes[j]
-				buf[n] = 0
-
-				w, h: i32
-				ttf.SizeUTF8(el.resolved_font, cstring(&buf[0]), &w, &h)
-				rune_width := f32(w)
+			prev_ch: rune = 0
+			for r in explicit_line {
+				if prev_ch != 0 {
+					cursor_x += f32(ttf.GetFontKerningSizeGlyphs32(el.resolved_font, prev_ch, r))
+				}
+				_, _, _, _, adv: i32
+				ttf.GlyphMetrics32(el.resolved_font, r, nil, nil, nil, nil, &adv)
+				rune_width := f32(adv)
 
 				if cursor_x + rune_width > max_width && cursor_x > 0 {
 					cursor_x = 0
 					total_lines += 1.0
+					prev_ch = 0 // Kerning breaks on a new line
+				} else {
+					prev_ch = r
 				}
 				cursor_x += rune_width
 			}
 		} else {
+			// .WORD Wrap
 			words := strings.split(explicit_line, " ", context.temp_allocator)
 			for word in words {
 				word_width: f32 = 0.0
-				if len(word) > 0 {
-					c_word := fmt.ctprintf("%s", word)
-					w, h: i32
-					ttf.SizeUTF8(el.resolved_font, c_word, &w, &h)
-					word_width = f32(w)
+				word_prev_ch: rune = 0
 
-					if el.resolved_text_wrap == .WORD &&
-					   cursor_x + word_width > max_width &&
-					   cursor_x > 0 {
-						cursor_x = 0
-						total_lines += 1.0
+				for r in word {
+					if word_prev_ch != 0 {
+						word_width += f32(
+							ttf.GetFontKerningSizeGlyphs32(el.resolved_font, word_prev_ch, r),
+						)
 					}
+					_, _, _, _, adv: i32
+					ttf.GlyphMetrics32(el.resolved_font, r, nil, nil, nil, nil, &adv)
+					word_width += f32(adv)
+					word_prev_ch = r
+				}
+
+				if el.resolved_text_wrap == .WORD &&
+				   cursor_x + word_width > max_width &&
+				   cursor_x > 0 {
+					cursor_x = 0
+					total_lines += 1.0
 				}
 				cursor_x += word_width + space_width
 			}
 		}
 	}
-
 	return max(total_lines, 1.0) * line_height
 }
-
 
 @(private)
 default_styles :: proc(el: ^Element, ctx: ^UI_Context) {
