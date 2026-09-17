@@ -123,7 +123,7 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 	for box, i in boxes {
 		state := anim.get_state(anim_ctx, box.id)
 
-		// 1. Sync Width
+		// Sync Width
 		if !state.has_width {
 			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
 				state.width = prev.computed_width
@@ -132,12 +132,24 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 			}
 		}
 
-		// 2. Sync Height
+		// Sync Height
 		if !state.has_height {
 			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
 				state.height = prev.computed_height
 			} else if h, ok := box.height.(lc.Fixed); ok {
 				state.height = h.value
+			}
+		}
+
+		if !state.has_x {
+			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
+				state.x = prev.x
+			}
+		}
+
+		if !state.has_y {
+			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
+				state.y = prev.y
 			}
 		}
 
@@ -176,7 +188,7 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 	for box, i in boxes {
 		state := anim.get_state(anim_ctx, box.id)
 
-		// 1. Sync Width
+		// Sync Width
 		if !state.has_width {
 			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
 				state.width = prev.computed_width
@@ -185,7 +197,7 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 			}
 		}
 
-		// 2. Sync Height
+		// Sync Height
 		if !state.has_height {
 			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
 				state.height = prev.computed_height
@@ -207,6 +219,14 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 		}
 		if v, ok := props.opacity.?; ok {
 			append(&tweens, anim.Property_Tween{target = &state.opacity, from = v})
+		}
+		if v, ok := props.x.?; ok {
+			state.has_x = true
+			append(&tweens, anim.Property_Tween{target = &state.x, to = v}) // Use `from = v` in from()
+		}
+		if v, ok := props.y.?; ok {
+			state.has_y = true
+			append(&tweens, anim.Property_Tween{target = &state.y, to = v}) // Use `from = v` in from()
 		}
 
 		safe_ease := props.ease

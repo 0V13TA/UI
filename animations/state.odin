@@ -4,11 +4,15 @@ import lc "../layout_calc"
 
 Retained_State :: struct {
 	id:         lc.Box_ID,
-	has_width:  bool,
-	has_height: bool,
+	x:          f32,
+	y:          f32,
 	width:      f32,
 	height:     f32,
 	opacity:    f32,
+	has_x:      bool,
+	has_y:      bool,
+	has_width:  bool,
+	has_height: bool,
 }
 
 Context :: struct {

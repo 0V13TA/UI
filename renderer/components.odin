@@ -1029,6 +1029,46 @@ image_path :: proc(
 	image_texture(ui_ctx, tex, user_style, loc)
 }
 
+// --- IMAGE BUTTON ---
+image_button :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	sdl_rend: ^sdl.Renderer,
+	path: string,
+	user_style: Style = {},
+	salt := "",
+	loc := #caller_location,
+) -> bool {
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	id := lc.ID(hash_input)
+
+	is_clicked := ev_ctx.clicked_this_frame[id] or_else false
+	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+
+	// Cache & Load Texture (mirroring image_path)
+	path_hash := hash.fnv32(transmute([]byte)path)
+	tex, exists := ui_ctx.image_cache[path_hash]
+	if !exists {
+		c_path := fmt.ctprintf("%s", path)
+		tex = img.LoadTexture(sdl_rend, c_path)
+		if tex == nil do fmt.printfln("ERROR: Failed to load image '%s': %s", path, sdl.GetError())
+		ui_ctx.image_cache[path_hash] = tex
+	}
+
+	final_style := user_style
+	final_style.bg_image = tex
+
+	// Sensible default size for icons so they don't blow up the layout
+	if final_style.width == nil do final_style.width = lc.Fixed{28}
+	if final_style.height == nil do final_style.height = lc.Fixed{28}
+	if final_style.object_fit == nil do final_style.object_fit = .CONTAIN
+
+	element_open(ui_ctx, Element{_box = {id = id}, style = final_style}, loc)
+	element_close(ui_ctx)
+
+	return is_clicked
+}
+
 // --- VIDEO PLAYER ---
 DEFAULT_VIDEO_WRAPPER_STYLE :: Style {
 	width  = lc.Percent{100},
@@ -1065,6 +1105,8 @@ video :: proc(
 	is_scrubbing: ^bool,
 	scrub_time: ^f32,
 	slider_val: ^f32,
+	play_icon: string = "assets/pictures/play-button.png",
+	pause_icon: string = "assets/pictures/pause.png",
 	wrapper_style: Style = DEFAULT_VIDEO_WRAPPER_STYLE,
 	frame_style: Style = DEFAULT_VIDEO_FRAME_STYLE,
 	overlay_style: Style = DEFAULT_VIDEO_OVERLAY_STYLE,
@@ -1142,11 +1184,12 @@ video :: proc(
 			element_open(ui_ctx, Element{_box = {id = overlay_id}, style = final_overlay})
 
 			// Play/Pause Button
-			btn_text := player.is_playing ? "Pause" : "Play"
-			if button(
+			icon := player.is_playing ? pause_icon : play_icon
+			if image_button(
 				ui_ctx,
 				ev_ctx,
-				btn_text,
+				sdl_rend,
+				icon,
 				user_style = play_btn_style,
 				salt = fmt.tprintf("%s_play", salt),
 			) {
@@ -1160,21 +1203,22 @@ video :: proc(
 
 			slider_val^ = is_scrubbing^ ? scrub_time^ : f32(player.playback_time)
 
-			element_open(ui_ctx, Element{style = {width = lc.Grow{1}}})
+			final_slider_wrapper := slider_wrapper_style
+			final_slider_wrapper.width = lc.Grow{1}
+
 			slider_changed, scrub_target := slider(
-				ui_ctx, // <-- GRAB IMMEDIATE RETURNS
+				ui_ctx,
 				ev_ctx,
 				anim_ctx,
 				slider_val,
 				0.0,
 				f32(player.duration),
-				wrapper_style = slider_wrapper_style,
+				wrapper_style = final_slider_wrapper, // <--- Clean alignment!
 				track_style = slider_track_style,
 				fill_style = slider_fill_style,
 				thumb_style = slider_thumb_style,
 				salt = fmt.tprintf("%s_slider", salt),
 			)
-			element_close(ui_ctx)
 
 			// Handle state transitions based on instant feedback
 			if slider_changed {
