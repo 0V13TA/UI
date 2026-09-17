@@ -35,6 +35,7 @@ Layout_Context :: struct {
 	root_boxes:       [dynamic]^Box, // Need this because defer is block scope
 	prev_all_boxes:   map[Box_ID]^Box,
 	prev_root_boxes:  [dynamic]^Box,
+	warned_boxes:     map[Box_ID]bool,
 }
 
 Direction :: enum {
@@ -431,13 +432,12 @@ resolve_fixed_width :: proc(
 		case Percent:
 			if parent_is_fit || box.parent == nil {
 				box.computed_width = 0.0
-				if !box.warned {
+				if box.id not_in ctx.warned_boxes {
 					fmt.printfln(
-						"WARNING: Infinite flex-grow (width) loop on Box '%s' (%d). Breaking.",
+						"WARNING: Layout constraint violated on Box: %s",
 						get_debug_name(box.id),
-						box.id,
 					)
-					box.warned = true
+					ctx.warned_boxes[box.id] = true
 				}
 			} else {
 				parent_inner_width := max(
@@ -544,13 +544,12 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 				for {
 					iteration += 1
 					if iteration > 100 {
-						if !box.warned {
+						if box.id not_in ctx.warned_boxes {
 							fmt.printfln(
-								"WARNING: Infinite flex-grow (width) loop on Box '%s' (%d). Breaking.",
+								"WARNING: Layout constraint violated on Box: %s",
 								get_debug_name(box.id),
-								box.id,
 							)
-							box.warned = true
+							ctx.warned_boxes[box.id] = true
 						}
 						break
 					}
@@ -610,13 +609,12 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 				for {
 					iteration += 1
 					if iteration > 100 {
-						if !box.warned {
+						if box.id not_in ctx.warned_boxes {
 							fmt.printfln(
-								"WARNING: Infinite flex-grow (width) loop on Box '%s' (%d). Breaking.",
+								"WARNING: Layout constraint violated on Box: %s",
 								get_debug_name(box.id),
-								box.id,
 							)
-							box.warned = true
+							ctx.warned_boxes[box.id] = true
 						}
 						break
 					}
@@ -724,7 +722,12 @@ wrap_text :: proc(box: ^Box, ctx: ^Layout_Context) {
 	}
 }
 
-resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) {
+resolve_fixed_height :: proc(
+	ctx: ^Layout_Context,
+	box: ^Box,
+	viewport_dim: f32,
+	parent_is_fit: bool,
+) {
 	if box.computed_height != -1 do return
 
 	is_column := box.direction == .COLUMN || box.direction == .COLUMN_REVERSE
@@ -741,7 +744,7 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 		if is_column {
 			flow_count := 0
 			for child in box.children {
-				resolve_fixed_height(child, viewport_dim, true)
+				resolve_fixed_height(ctx, child, viewport_dim, true)
 
 				if child.position == .ABSOLUTE || child.position == .FIXED do continue
 
@@ -763,7 +766,7 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 				line_max_height: f32 = 0.0
 				for end < len(box.children) {
 					child := box.children[end]
-					resolve_fixed_height(child, viewport_dim, true)
+					resolve_fixed_height(ctx, child, viewport_dim, true)
 					if child.position == .ABSOLUTE || child.position == .FIXED {
 						end += 1
 						continue
@@ -798,13 +801,12 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 		case Percent:
 			if parent_is_fit || box.parent == nil {
 				box.computed_height = 0.0
-				if !box.warned {
+				if box.id not_in ctx.warned_boxes {
 					fmt.printfln(
-						"WARNING: Infinite flex-grow (width) loop on Box '%s' (%d). Breaking.",
+						"WARNING: Layout constraint violated on Box: %s",
 						get_debug_name(box.id),
-						box.id,
 					)
-					box.warned = true
+					ctx.warned_boxes[box.id] = true
 				}
 			} else {
 				parent_inner_height := max(
@@ -833,12 +835,12 @@ resolve_fixed_height :: proc(box: ^Box, viewport_dim: f32, parent_is_fit: bool) 
 		#partial switch _ in box.height {
 		case Grow, Shrink:
 		case:
-			for child in box.children do resolve_fixed_height(child, viewport_dim, false)
+			for child in box.children do resolve_fixed_height(ctx, child, viewport_dim, false)
 		}
 	}
 }
 
-grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
+grow_shrink_height :: proc(ctx: ^Layout_Context, box: ^Box, viewport_dim: f32) {
 	is_dynamic := false
 	if box.height != nil {
 		#partial switch _ in box.height {case Grow, Shrink, Percent:
@@ -860,7 +862,7 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 			if child.height != nil {
 				if _, is_pct := child.height.(Percent); is_pct {
 					child.computed_height = -1
-					resolve_fixed_height(child, viewport_dim, false)
+					resolve_fixed_height(ctx, child, viewport_dim, false)
 				}
 			}
 		}
@@ -869,7 +871,7 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 	if box.height != nil {
 		#partial switch _ in box.height {
 		case Grow, Shrink:
-			for child in box.children do resolve_fixed_height(child, viewport_dim, false)
+			for child in box.children do resolve_fixed_height(ctx, child, viewport_dim, false)
 		}
 	}
 
@@ -1063,7 +1065,7 @@ grow_shrink_height :: proc(box: ^Box, viewport_dim: f32) {
 		}
 	}
 
-	for child in box.children do grow_shrink_height(child, viewport_dim)
+	for child in box.children do grow_shrink_height(ctx, child, viewport_dim)
 }
 
 layout_position_pass :: proc(
@@ -1376,6 +1378,7 @@ layout_context_create :: proc(
 
 	ctx.parent_stack = make([dynamic]^Box, allocator)
 	ctx.draw_buffer = make([dynamic]^Box, allocator)
+	ctx.warned_boxes = make(map[Box_ID]bool)
 	return ctx
 }
 
@@ -1391,6 +1394,7 @@ layout_context_destroy :: proc(ctx: ^Layout_Context) {
 	delete(ctx.prev_root_boxes)
 	delete(ctx.parent_stack)
 	delete(ctx.draw_buffer)
+	delete(ctx.warned_boxes)
 	free(ctx, backing_alloc)
 }
 
@@ -1431,8 +1435,8 @@ end_layout :: proc(ctx: ^Layout_Context) {
 		wrap_text(root, ctx)
 
 		// --- Vertical Height Passes ---
-		resolve_fixed_height(root, ctx.screen_height, false)
-		grow_shrink_height(root, ctx.screen_height)
+		resolve_fixed_height(ctx, root, ctx.screen_height, false)
+		grow_shrink_height(ctx, root, ctx.screen_height)
 
 		// Pass 6: Calculate final absolute (X, Y) coordinates
 		layout_position_pass(root, ctx, 0.0, 0.0)

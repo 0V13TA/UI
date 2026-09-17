@@ -1407,7 +1407,20 @@ dropdown :: proc(
 	if button(ui_ctx, ev_ctx, display_text, user_style = wrapper_style, id = root_id) do is_open^ = !is_open^
 
 	// The Popover List
-	if popover_begin(ui_ctx, ev_ctx, root_id, is_open, salt = salt, loc = loc) {
+	if popover_begin(
+		ui_ctx,
+		ev_ctx,
+		root_id,
+		is_open,
+		salt = salt,
+		loc = loc,
+		user_style = {
+			align_items = .STRETCH,
+			width = lc.Fit(true),
+			direction = .COLUMN,
+			bg_color = Color{1, 1, 1, 1},
+		},
+	) {
 		defer popover_end(ui_ctx, is_open^)
 
 		for opt, i in options {
@@ -1417,26 +1430,21 @@ dropdown :: proc(
 			opt_bg := is_selected ? Color{0.15, 0.4, 0.8, 1.0} : Color{0, 0, 0, 0}
 			opt_text := is_selected ? Color{1, 1, 1, 1} : Color{0.2, 0.2, 0.2, 1}
 
-			// Using block scope for individual options just to be safe
-			{
-				if button(
-					ui_ctx,
-					ev_ctx,
-					opt,
-					id = opt_id,
-					user_style = {
-						width = lc.Percent{100},
-						height = lc.Fit(true),
-						bg_color = opt_bg,
-						text_color = opt_text,
-						text_align = .LEFT,
-						border_radius = space(4),
-					},
-				) {
-					selected_idx^ = i
-					is_open^ = false
-					changed = true
-				}
+			if button(
+				ui_ctx,
+				ev_ctx,
+				opt,
+				id = opt_id,
+				user_style = {
+					bg_color = opt_bg,
+					text_color = opt_text,
+					text_align = .LEFT,
+					border_radius = space(4),
+				},
+			) {
+				selected_idx^ = i
+				is_open^ = false
+				changed = true
 			}
 		}
 	}

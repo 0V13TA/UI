@@ -128,20 +128,15 @@ main :: proc() {
 			)
 			defer renderer.element_close(ui_ctx)
 
-			renderer.video(
+
+			renderer.dropdown(
 				ui_ctx,
 				&ev_ctx,
-				&anim_ctx,
-				sdl_rend,
-				"assets/Two 2-minute Rules to Beat Procrastination (in 2 minutes).mp4",
-				dt,
-				&is_scrubbing,
-				&scrub_time,
-				&slider_val,
-				&overlay_active,
-				&overlay_anim,
+				"life",
+				my_options,
+				&my_selected_idx,
+				&my_dropdown_open,
 			)
-
 		}
 
 
