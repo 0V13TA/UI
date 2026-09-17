@@ -108,6 +108,8 @@ main :: proc() {
 	is_scrubbing := false
 	scrub_time := f32(0)
 	slider_val := f32(0)
+	overlay_active := false
+	overlay_anim := f32(0.0)
 
 	USER_CARD_CLASS := renderer.Class_Name("user_card")
 
@@ -298,22 +300,12 @@ main :: proc() {
 			&is_scrubbing,
 			&scrub_time,
 			&slider_val,
+			&overlay_active,
+			&overlay_anim,
 			wrapper_style = {
-				width         = lc.Percent{100},
-				height        = lc.Fixed{250},
-				object_fit    = .COVER,
-				border_radius = renderer.space(8), // Automatically applied to the video AND the overlay!
-			},
-		)
-
-		renderer.image(
-			ui_ctx,
-			sdl_rend,
-			"/home/ovieta/Pictures/wallpapers/wallhaven-1pd22w_1600x900.png",
-			user_style = renderer.Style {
-				object_fit = .COVER,
 				width = lc.Percent{100},
-				height = lc.Fixed{150},
+				height = lc.Fixed{250},
+				object_fit = .COVER,
 				border_radius = renderer.space(8),
 			},
 		)

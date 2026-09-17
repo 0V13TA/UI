@@ -8,6 +8,25 @@ import "core:hash"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 
+is_tree_hovered :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	target_id: lc.Box_ID,
+) -> bool {
+	curr := ev_ctx.hovered_id
+	for curr != 0 {
+		if curr == target_id do return true
+
+		// Walk up the previous frame's layout tree
+		if prev, ok := ui_ctx.layout.prev_all_boxes[curr]; ok && prev.parent != nil {
+			curr = prev.parent.id
+		} else {
+			break
+		}
+	}
+	return false
+}
+
 text :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
@@ -93,7 +112,7 @@ button :: proc(
 		final_id = lc.ID(hash_input)
 	}
 
-	is_hovered := ev_ctx.hovered_id == final_id
+	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, final_id)
 	is_pressed := ev_ctx.pressed_id == final_id
 	is_clicked := ev_ctx.clicked_this_frame[final_id] or_else false
 
@@ -264,17 +283,7 @@ checkbox :: proc(
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
 
 	// Robust spatial hover check that ignores children blocking the raycast
-	is_hovered := false
-	if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
-		mx, my: i32
-		sdl.GetMouseState(&mx, &my)
-		f_mx, f_my := f32(mx), f32(my)
-		is_hovered =
-			f_mx >= prev.x &&
-			f_mx <= prev.x + prev.computed_width &&
-			f_my >= prev.y &&
-			f_my <= prev.y + prev.computed_height
-	}
+	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
 
 	final_wrapper := wrapper_style
 	if is_hovered do final_wrapper.bg_color = hover_bg_color
@@ -344,18 +353,7 @@ radio :: proc(
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = value
 	is_active := state^ == value
 
-	is_hovered := false
-	if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
-		mx, my: i32
-		sdl.GetMouseState(&mx, &my)
-		f_mx, f_my := f32(mx), f32(my)
-		is_hovered =
-			f_mx >= prev.x &&
-			f_mx <= prev.x + prev.computed_width &&
-			f_my >= prev.y &&
-			f_my <= prev.y + prev.computed_height
-	}
-
+	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
 	final_wrapper := wrapper_style
 	if is_hovered do final_wrapper.bg_color = hover_bg_color
 
@@ -1108,6 +1106,8 @@ video :: proc(
 	is_scrubbing: ^bool,
 	scrub_time: ^f32,
 	slider_val: ^f32,
+	overlay_active: ^bool,
+	overlay_anim: ^f32,
 	play_icon: string = "assets/pictures/play-button.png",
 	pause_icon: string = "assets/pictures/pause.png",
 	wrapper_style: Style = DEFAULT_VIDEO_WRAPPER_STYLE,
@@ -1138,12 +1138,13 @@ video :: proc(
 		video_player_update(player, dt)
 	}
 
-	// --- 1. RELATIVE WRAPPER ---
+	// --- RELATIVE WRAPPER ---
 	final_wrapper := wrapper_style
 	final_wrapper.position = .RELATIVE
+	final_wrapper.overflow_y = .HIDDEN
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	// --- 2. VIDEO FRAME ---
+	// --- VIDEO FRAME ---
 	final_frame := frame_style
 	// Inherit rounded corners from the wrapper so the video perfectly clips
 	if final_frame.border_radius == nil do final_frame.border_radius = final_wrapper.border_radius
@@ -1156,35 +1157,50 @@ video :: proc(
 	}
 	element_close(ui_ctx) // close video frame
 
-	// --- 3. CONTROLS OVERLAY ---
+	// --- CONTROLS OVERLAY ---
 	if player != nil {
 		overlay_id := lc.ID(fmt.tprintf("%d_overlay", root_id))
 
-		// Robust spatial hover check to auto-hide controls
-		is_hovered := false
-		if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
-			mx, my: i32
-			sdl.GetMouseState(&mx, &my)
-			f_mx, f_my := f32(mx), f32(my)
-			is_hovered =
-				f_mx >= prev.x &&
-				f_mx <= prev.x + prev.computed_width &&
-				f_my >= prev.y &&
-				f_my <= prev.y + prev.computed_height
+		// 1. Determine if it SHOULD be open (using the tree hover fix!)
+		should_show := is_tree_hovered(ui_ctx, ev_ctx, root_id) || is_scrubbing^
+
+		// 2. Fire the animation ONLY when the state changes
+		if should_show != overlay_active^ {
+			overlay_active^ = should_show
+
+			anim.to(
+				&anim_ctx.engine,
+				anim.Tween_Vars {
+					duration   = 0.35, // 350ms feels smooth for a UI slide
+					ease_func  = anim.ease_out_exp,
+					properties = {{target = overlay_anim, to = should_show ? 1.0 : 0.0}},
+				},
+			)
 		}
 
-		// Only draw controls if hovered (or if actively dragging the slider)
-		if is_hovered || is_scrubbing^ {
-
+		// 3. Only render the overlay if the animation is actually visible
+		if overlay_anim^ > 0.001 {
 			final_overlay := overlay_style
-			// Inherit bottom border radii so the dark overlay perfectly matches the wrapper corners
+
 			if final_overlay.border_radius == nil {
 				if br, ok := final_wrapper.border_radius.?; ok {
 					final_overlay.border_radius = [4]f32{0, 0, br[2], br[3]}
 				}
 			}
 
+			// --- ANIMATION MAGIC ---
+
+			// Slide down by 55 pixels when hiding (adjust based on your actual height)
+			offset_y := 55.0 * (1.0 - overlay_anim^)
+			final_overlay.bottom = -offset_y
+
+			// Fade out the dark background overlay
+			if bg, ok := final_overlay.bg_color.?; ok {
+				final_overlay.bg_color = Color{bg[0], bg[1], bg[2], bg[3] * overlay_anim^}
+			}
+
 			element_open(ui_ctx, Element{_box = {id = overlay_id}, style = final_overlay})
+
 
 			// Play/Pause Button
 			icon := player.is_playing ? pause_icon : play_icon
