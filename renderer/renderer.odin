@@ -117,6 +117,7 @@ Element :: struct {
 	// Font
 	resolved_font_spacing:  f32,
 	resolved_font_size:     f32,
+	resolved_font_name:     string,
 	resolved_font:          ^ttf.Font,
 	resolved_font_style:    ttf.StyleFlag,
 
@@ -653,6 +654,7 @@ default_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 		el.resolved_text_wrap = parent.resolved_text_wrap
 		el.resolved_opacity = parent.resolved_opacity
 
+		el.resolved_font_name = parent.resolved_font_name
 		el.resolved_font_size = parent.resolved_font_size
 		el.resolved_font_spacing = parent.resolved_font_spacing
 		el.resolved_font = parent.resolved_font
@@ -669,7 +671,7 @@ default_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 		el.resolved_text_wrap = .WORD
 		el.resolved_opacity = 1.0
 
-		el.resolved_font = get_font(ctx, "", el.resolved_font_size)
+		el.resolved_font = get_font(ctx, el.resolved_font_name, el.resolved_font_size)
 	}
 }
 
@@ -719,8 +721,20 @@ apply_style_block :: proc(el: ^Element, s: Style, ctx: ^UI_Context) {
 		el.resolved_text_align = v
 	}
 
+	font_changed := false
+
 	if v, ok := s.font_size.?; ok {
 		el.resolved_font_size = v
+		font_changed = true
+	}
+
+	if v, ok := s.font_name.?; ok {
+		el.resolved_font_name = v
+		font_changed = true
+	}
+
+	if font_changed {
+		el.resolved_font = get_font(ctx, el.resolved_font_name, el.resolved_font_size)
 	}
 
 	if v, ok := s.font_spacing.?; ok {

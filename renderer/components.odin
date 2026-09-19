@@ -62,8 +62,19 @@ text :: proc(
 		final_style.selection_end = ev_ctx.text_cursors[id]
 	}
 
-	font_path := final_style.font_name.? or_else ""
-	font_size := final_style.font_size.? or_else 16.0
+	parent_font_name := ""
+	parent_font_size: f32 = 16.0
+	if len(ui_ctx.layout.parent_stack) > 0 {
+		parent_box := ui_ctx.layout.parent_stack[len(ui_ctx.layout.parent_stack) - 1]
+		if parent_box.user_data != nil {
+			parent_el := (^Element)(parent_box.user_data)
+			parent_font_name = parent_el.resolved_font_name
+			parent_font_size = parent_el.resolved_font_size
+		}
+	}
+
+	font_path := final_style.font_name.? or_else parent_font_name
+	font_size := final_style.font_size.? or_else parent_font_size
 	active_font := get_font(ui_ctx, font_path, font_size)
 
 	if is_pressed {
@@ -398,7 +409,7 @@ DEFAULT_SLIDER_WRAPPER_STYLE :: Style {
 DEFAULT_SLIDER_TRACK_STYLE :: Style {
 	width         = lc.Percent{100},
 	height        = lc.Fixed{4}, // Slim down to 4px
-	bg_color      = Color{1, 1, 1, 0.25}, // Clean, translucent backdrop
+	bg_color      = Color{0.8, 0.8, 0.8, 0.25}, // Clean, translucent backdrop
 	border_radius = [4]f32{2, 2, 2, 2},
 }
 
@@ -413,7 +424,7 @@ DEFAULT_SLIDER_THUMB_STYLE :: Style {
 	top           = 8.0, // Vertically centered: (30px wrapper - 14px thumb) / 2 = 8
 	width         = lc.Fixed{14},
 	height        = lc.Fixed{14},
-	bg_color      = Color{1, 1, 1, 1},
+	bg_color      = Color{1, 0, 0, 1},
 	border_radius = [4]f32{7, 7, 7, 7}, // Perfect borderless circle
 }
 
@@ -523,7 +534,7 @@ DEFAULT_TEXT_INPUT_WRAPPER_STYLE :: Style {
 DEFAULT_TEXT_INPUT_TEXT_STYLE :: Style {
 	width      = lc.Fit(true),
 	height     = lc.Fit(true),
-	font_size  = 18,
+	font_size  = 28,
 	text_wrap  = .NONE,
 	text_color = Color{0.1, 0.1, 0.1, 1},
 }
@@ -742,11 +753,28 @@ text_input :: proc(
 
 	cursor := clamp(ev_ctx.text_cursors[root_id], 0, len(buffer))
 
-	// Dummy element used to measure text.
-	dummy_el := Element {
-		resolved_font = ui_ctx.fonts[hash.fnv32(transmute([]byte)string("default_font"))],
+	// --- DYNAMIC FONT RESOLUTION ---
+	final_text := merge_styles(DEFAULT_TEXT_INPUT_TEXT_STYLE, text_style)
+	// Resolve Inherited Font Properties
+	parent_font_name := ""
+	parent_font_size: f32 = 16.0
+	if len(ui_ctx.layout.parent_stack) > 0 {
+		parent_box := ui_ctx.layout.parent_stack[len(ui_ctx.layout.parent_stack) - 1]
+		if parent_box.user_data != nil {
+			parent_el := (^Element)(parent_box.user_data)
+			parent_font_name = parent_el.resolved_font_name
+			parent_font_size = parent_el.resolved_font_size
+		}
 	}
 
+	font_path := final_text.font_name.? or_else parent_font_name
+	font_size := final_text.font_size.? or_else parent_font_size
+	active_font := get_font(ui_ctx, font_path, font_size)
+
+	// Dummy element used to measure text accurately.
+	dummy_el := Element {
+		resolved_font = active_font,
+	}
 	dummy_box := lc.Box {
 		user_data = &dummy_el,
 	}
@@ -939,13 +967,17 @@ text_input :: proc(
 	// Text element
 	// ------------------------------------------------------------
 
-	final_text := text_style
 	if len(buffer) == 0 do final_text.text_color = placeholder_color
 	else do final_text.text_color = text_style.text_color
 
 	element_open(
 		ui_ctx,
-		Element{_box = {id = string_id}, text = display_text, style = final_text},
+		Element {
+			_box = {id = string_id},
+			text = display_text,
+			style = final_text,
+			resolved_font = active_font,
+		},
 		loc,
 	)
 
