@@ -1586,18 +1586,18 @@ DEFAULT_CONTEXT_MENU_BACKDROP_STYLE :: Style {
 	width    = lc.ViewPercent{100},
 	height   = lc.ViewPercent{100},
 	z_index  = 3000,
-	bg_color = Color{0, 0, 0, 0}, // Fully transparent click shield
+	bg_color = Color{0, 0, 0, 0},
 }
 
 DEFAULT_CONTEXT_MENU_STYLE :: Style {
 	direction     = .COLUMN,
 	align_items   = .STRETCH,
-	bg_color      = Color{1.0, 1.0, 1.0, 1.0}, // Clean white background
+	bg_color      = Color{1.0, 1.0, 1.0, 1.0},
 	border        = [4]f32{1, 1, 1, 1},
-	border_color  = Color{0.9, 0.9, 0.9, 1.0}, // Softer, more subtle border
-	border_radius = [4]f32{8, 8, 8, 8}, // Modern, rounder corners
-	padding       = [4]f32{8, 8, 8, 8}, // More breathable internal padding
-	gap           = 4, // Spacing between buttons so hover states don't collide
+	border_color  = Color{0.9, 0.9, 0.9, 1.0},
+	border_radius = [4]f32{8, 8, 8, 8},
+	padding       = [4]f32{8, 8, 8, 8},
+	gap           = 4,
 	width         = lc.Fit(true),
 	height        = lc.Fit(true),
 }
@@ -1611,8 +1611,11 @@ context_menu_begin :: proc(
 	user_style: Style = {},
 	salt := "",
 	loc := #caller_location,
-) -> bool {
-	if !is_open^ do return false
+) -> (
+	is_active: bool,
+	target_id: lc.Box_ID,
+) {
+	if !is_open^ do return false, 0
 
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 	root_id := lc.ID(hash_input)
@@ -1623,7 +1626,7 @@ context_menu_begin :: proc(
 	events.register(ev_ctx, backdrop_id, events.Event_Callbacks{focusable = true})
 	if ev_ctx.hovered_id == backdrop_id && (ev_ctx.clicked_this_frame[backdrop_id] or_else false) {
 		is_open^ = false
-		return false
+		return false, 0
 	}
 
 	final_backdrop := merge_styles(DEFAULT_CONTEXT_MENU_BACKDROP_STYLE, backdrop_style)
@@ -1642,7 +1645,8 @@ context_menu_begin :: proc(
 	events.register(ev_ctx, content_id, events.Event_Callbacks{focusable = true})
 	element_open(ui_ctx, Element{_box = {id = content_id}, style = final_style}, loc)
 
-	return true
+	// Return true along with the ID of the element that triggered the context menu
+	return true, ev_ctx.context_menu_target
 }
 
 context_menu_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {

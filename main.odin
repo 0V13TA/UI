@@ -509,13 +509,13 @@ main :: proc() {
 				)
 			}
 
-			if renderer.context_menu_begin(
+			if active, target := renderer.context_menu_begin(
 				ui_ctx,
 				&ev_ctx,
 				my_context_x,
 				my_context_y,
 				&my_context_open,
-			) {
+			); active {
 				defer renderer.context_menu_end(ui_ctx, true)
 				if renderer.button(ui_ctx, &ev_ctx, "Copy ID", user_style = {text_align = .LEFT}) do my_context_open = false
 				if renderer.button(ui_ctx, &ev_ctx, "Inspect Element", user_style = {text_align = .LEFT}) do my_context_open = false
