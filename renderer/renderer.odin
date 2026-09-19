@@ -408,17 +408,12 @@ draw_ui_box :: proc(
 	radii: [4]f32, // radii:  [TopLeft, TopRight, BottomRight, BottomLeft]
 ) {
 	has_border := border[0] > 0 || border[1] > 0 || border[2] > 0 || border[3] > 0
-
-	// 9-slice requires a uniform radius. We'll use the top-left radius.
 	corner_radius := i32(radii[0])
 
 	// Fast path for hard corners (No texture overhead needed)
 	if corner_radius <= 0 {
-		if has_border && border_color[3] > 0 {
-			set_render_color(renderer, border_color)
-			rect_copy := bounds
-			sdl.RenderFillRect(renderer, &rect_copy)
-		}
+
+		// 1. Draw Inner Background First
 		if bg_color[3] > 0 {
 			inner_bounds := sdl.Rect {
 				x = bounds.x + i32(border[3]),
@@ -428,6 +423,47 @@ draw_ui_box :: proc(
 			}
 			set_render_color(renderer, bg_color)
 			sdl.RenderFillRect(renderer, &inner_bounds)
+		}
+
+		// 2. Draw Borders as 4 separate lines so transparent backgrounds stay hollow
+		if has_border && border_color[3] > 0 {
+			set_render_color(renderer, border_color)
+
+			// Top
+			if border[0] > 0 {
+				r := sdl.Rect{bounds.x, bounds.y, bounds.w, i32(border[0])}
+				sdl.RenderFillRect(renderer, &r)
+			}
+			// Bottom
+			if border[2] > 0 {
+				r := sdl.Rect {
+					bounds.x,
+					bounds.y + bounds.h - i32(border[2]),
+					bounds.w,
+					i32(border[2]),
+				}
+				sdl.RenderFillRect(renderer, &r)
+			}
+			// Left
+			if border[3] > 0 {
+				r := sdl.Rect {
+					bounds.x,
+					bounds.y + i32(border[0]),
+					i32(border[3]),
+					bounds.h - i32(border[0] + border[2]),
+				}
+				sdl.RenderFillRect(renderer, &r)
+			}
+			// Right
+			if border[1] > 0 {
+				r := sdl.Rect {
+					bounds.x + bounds.w - i32(border[1]),
+					bounds.y + i32(border[0]),
+					i32(border[1]),
+					bounds.h - i32(border[0] + border[2]),
+				}
+				sdl.RenderFillRect(renderer, &r)
+			}
 		}
 		return
 	}
@@ -448,7 +484,6 @@ draw_ui_box :: proc(
 			h = bounds.h - i32(border[0] + border[2]),
 		}
 
-		// Calculate inner radius by subtracting the maximum border thickness
 		max_border := max(border[0], border[3])
 		inner_radius := i32(max(f32(corner_radius) - max_border, 0))
 
@@ -463,7 +498,6 @@ draw_ui_box :: proc(
 				sdl.Color{r, g, b, a},
 			)
 		} else {
-			// If pushing the border in eliminates the radius, draw a standard hard rect
 			set_render_color(renderer, bg_color)
 			sdl.RenderFillRect(renderer, &inner_bounds)
 		}

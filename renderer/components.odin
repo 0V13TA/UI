@@ -1683,7 +1683,7 @@ switch_toggle :: proc(
 	element_open(ui_ctx, Element{_box = {id = track_id}, style = final_track})
 
 	final_thumb := merge_styles(DEFAULT_SWITCH_THUMB_STYLE, thumb_style)
-	final_thumb.left = state^ ? 26.0 : 2.0
+	final_thumb.left = state^ ? 22.0 : 2.0
 
 	element_open(ui_ctx, Element{_box = {id = thumb_id}, style = final_thumb})
 	element_close(ui_ctx)
@@ -2073,10 +2073,10 @@ DEFAULT_TABS_WRAPPER_STYLE :: Style {
 }
 
 DEFAULT_TABS_TAB_STYLE :: Style {
-	bg_color      = Color{0, 0, 0, 0},
 	border        = [4]f32{0, 0, 3, 0},
 	border_radius = [4]f32{0, 0, 0, 0},
 	padding       = [4]f32{12, 16, 12, 16},
+	bg_color      = Color{0, 0, 0, 0},
 }
 
 tabs :: proc(
