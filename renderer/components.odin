@@ -5,6 +5,7 @@ import "../events"
 import lc "../layout_calc"
 import "core:fmt"
 import "core:hash"
+import "core:math"
 import "core:strings"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
@@ -34,10 +35,10 @@ text :: proc(
 	text: string,
 	user_style := Style{},
 	salt := "",
+	id: string = "",
 	loc := #caller_location,
 ) {
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := lc.ID(hash_input)
+	id := lc.ID(loc, id)
 
 	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
 
@@ -53,6 +54,18 @@ text :: proc(
 		ev_ctx.text_cursors[id] = 0
 	}
 
+
+	final_style := user_style
+	if user_style.text_wrap == nil do final_style.text_wrap = .WORD
+	if ev_ctx.text_cursors[id] != ev_ctx.text_selection[id] {
+		final_style.selection_start = ev_ctx.text_selection[id]
+		final_style.selection_end = ev_ctx.text_cursors[id]
+	}
+
+	font_path := final_style.font_name.? or_else ""
+	font_size := final_style.font_size.? or_else 16.0
+	active_font := get_font(ui_ctx, font_path, font_size)
+
 	if is_pressed {
 		if prev_box, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
 			mx, my: i32
@@ -60,7 +73,7 @@ text :: proc(
 			local_x := f32(mx) - prev_box.x
 
 			dummy_el := Element {
-				resolved_font = ui_ctx.fonts[hash.fnv32(transmute([]byte)string("default_font"))],
+				resolved_font = active_font,
 			}
 			dummy_box := lc.Box {
 				user_data = &dummy_el,
@@ -87,15 +100,18 @@ text :: proc(
 		}
 	}
 
-	final_style := user_style
-	if user_style.text_wrap == nil do final_style.text_wrap = .WORD
-	if ev_ctx.text_cursors[id] != ev_ctx.text_selection[id] {
-		final_style.selection_start = ev_ctx.text_selection[id]
-		final_style.selection_end = ev_ctx.text_cursors[id]
-	}
-
 	element_open(ui_ctx, Element{_box = {id = id}, text = text, style = final_style}, loc)
 	element_close(ui_ctx)
+}
+
+DEFAULT_BUTTON_STYLE :: Style {
+	padding       = [4]f32{12, 24, 12, 24},
+	border_radius = [4]f32{6, 6, 6, 6},
+	text_color    = Color{1, 1, 1, 1},
+	text_align    = .CENTER,
+	width         = lc.Fit(true),
+	height        = lc.Fit(true),
+	bg_color      = Color{0.15, 0.4, 0.8, 1.0},
 }
 
 button :: proc(
@@ -119,22 +135,23 @@ button :: proc(
 
 	events.register(ev_ctx, final_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
 
-	// Fall back to default theme colors if not provided
-	bg := user_style.bg_color.? or_else Color{0.15, 0.4, 0.8, 1.0}
-	if is_pressed {
-		bg = Color{bg[0] * 0.7, bg[1] * 0.7, bg[2] * 0.7, bg[3]}
-	} else if is_hovered {
-		bg = Color{min(bg[0] * 1.2, 1.0), min(bg[1] * 1.2, 1.0), min(bg[2] * 1.2, 1.0), bg[3]}
-	}
+	// 1. Establish base visuals mixed with user overrides
+	final_style := merge_styles(DEFAULT_BUTTON_STYLE, user_style)
 
-	final_style := user_style
-	final_style.bg_color = bg
-	if final_style.padding == nil do final_style.padding = space_2(12, 24)
-	if final_style.border_radius == nil do final_style.border_radius = space(6)
-	if final_style.text_color == nil do final_style.text_color = Color{1, 1, 1, 1}
-	if final_style.text_align == nil do final_style.text_align = .CENTER
-	if final_style.width == nil do final_style.width = lc.Fit(true)
-	if final_style.height == nil do final_style.height = lc.Fit(true)
+	// 2. Resolve dynamic interaction states
+	// We safely unwrap bg_color since merge_styles guarantees it falls back to the default
+	bg := final_style.bg_color.? or_else Color{0.15, 0.4, 0.8, 1.0}
+
+	if is_pressed {
+		final_style.bg_color = Color{bg[0] * 0.7, bg[1] * 0.7, bg[2] * 0.7, bg[3]}
+	} else if is_hovered {
+		final_style.bg_color = Color {
+			min(bg[0] * 1.2, 1.0),
+			min(bg[1] * 1.2, 1.0),
+			min(bg[2] * 1.2, 1.0),
+			bg[3],
+		}
+	}
 
 	element_open(ui_ctx, Element{_box = {id = final_id}, text = text, style = final_style}, loc)
 	element_close(ui_ctx)
@@ -143,17 +160,28 @@ button :: proc(
 }
 
 // --- TOOLTIP COMPONENT ---
+DEFAULT_TOOLTIP_STYLE :: Style {
+	position      = .FIXED,
+	z_index       = 1000,
+	direction     = .COLUMN,
+	bg_color      = Color{0.1, 0.1, 0.15, 0.95},
+	border_color  = Color{1, 1, 1, 0.1},
+	border        = [4]f32{1, 1, 1, 1},
+	border_radius = [4]f32{6, 6, 6, 6},
+	padding       = [4]f32{8, 12, 8, 12},
+	width         = lc.Fit(true),
+	height        = lc.Fit(true),
+}
+
 tooltip_begin :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
 	target_id: lc.Box_ID,
-	user_style := Style{},
+	user_style := Style{}, // Default is now empty
 	loc := #caller_location,
 ) -> bool {
-	// Immediate Mode Magic: If the target isn't hovered, we return false and skip rendering the children!
 	if ev_ctx.hovered_id != target_id do return false
 
-	// Fetch the target's position from the previous frame to anchor the tooltip
 	target_x, target_y, target_w, target_h: f32 = 0, 0, 0, 0
 	if prev, ok := ui_ctx.layout.prev_all_boxes[target_id]; ok {
 		target_x = prev.x
@@ -162,24 +190,11 @@ tooltip_begin :: proc(
 		target_h = prev.computed_height
 	}
 
-	final_style := user_style
-	final_style.position = .FIXED
-	final_style.z_index = 1000
+	final_style := merge_styles(DEFAULT_TOOLTIP_STYLE, user_style)
 
-	// Default positioning (Anchored below the target)
+	// Dynamic anchors only apply if the user didn't explicitly override them
 	if final_style.left == nil do final_style.left = target_x
 	if final_style.top == nil do final_style.top = target_y + target_h + 10.0
-	if final_style.z_index == nil do final_style.z_index = 1000
-
-	// Default Layout & Visuals
-	if final_style.direction == nil do final_style.direction = .COLUMN
-	if final_style.bg_color == nil do final_style.bg_color = Color{0.1, 0.1, 0.15, 0.95}
-	if final_style.border_color == nil do final_style.border_color = Color{1, 1, 1, 0.1}
-	if final_style.border == nil do final_style.border = space(1)
-	if final_style.border_radius == nil do final_style.border_radius = space(6)
-	if final_style.padding == nil do final_style.padding = space_2(8, 12)
-	if final_style.width == nil do final_style.width = lc.Fit(true)
-	if final_style.height == nil do final_style.height = lc.Fit(true)
 
 	tooltip_id := lc.Box_ID(hash.fnv32(transmute([]byte)fmt.tprintf("tooltip_%d", target_id)))
 	element_open(ui_ctx, Element{_box = {id = tooltip_id}, style = final_style}, loc)
@@ -264,9 +279,9 @@ checkbox :: proc(
 	ev_ctx: ^events.Event_Context,
 	label: string,
 	state: ^bool,
-	wrapper_style: Style = DEFAULT_CHECKBOX_WRAPPER_STYLE,
-	box_style: Style = DEFAULT_CHECKBOX_BOX_STYLE,
-	text_style: Style = DEFAULT_CHECKBOX_TEXT_STYLE,
+	wrapper_style: Style = {},
+	box_style: Style = {},
+	text_style: Style = {},
 	checked_color: Color = {0.15, 0.4, 0.8, 1.0},
 	hover_bg_color: Color = {0.9, 0.9, 0.92, 1.0},
 	salt := "",
@@ -280,21 +295,21 @@ checkbox :: proc(
 	events.register(ev_ctx, root_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
 
-	// Robust spatial hover check that ignores children blocking the raycast
 	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
 
-	final_wrapper := wrapper_style
+	final_wrapper := merge_styles(DEFAULT_CHECKBOX_WRAPPER_STYLE, wrapper_style)
 	if is_hovered do final_wrapper.bg_color = hover_bg_color
 
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	final_box := box_style
+	final_box := merge_styles(DEFAULT_CHECKBOX_BOX_STYLE, box_style)
 	if state^ do final_box.bg_color = checked_color
 
 	element_open(ui_ctx, Element{_box = {id = box_id}, style = final_box})
 	element_close(ui_ctx)
 
-	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = text_style})
+	final_text := merge_styles(DEFAULT_CHECKBOX_TEXT_STYLE, text_style)
+	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = final_text})
 	element_close(ui_ctx)
 
 	element_close(ui_ctx)
@@ -1103,15 +1118,15 @@ video :: proc(
 	overlay_anim: ^f32,
 	play_icon: string = "assets/pictures/play-button.png",
 	pause_icon: string = "assets/pictures/pause.png",
-	wrapper_style: Style = DEFAULT_VIDEO_WRAPPER_STYLE,
-	frame_style: Style = DEFAULT_VIDEO_FRAME_STYLE,
-	overlay_style: Style = DEFAULT_VIDEO_OVERLAY_STYLE,
-	play_btn_style: Style = {}, // Falls back to button() defaults if empty
-	time_style: Style = DEFAULT_VIDEO_TIME_STYLE,
-	slider_wrapper_style: Style = DEFAULT_SLIDER_WRAPPER_STYLE,
-	slider_track_style: Style = DEFAULT_SLIDER_TRACK_STYLE,
-	slider_fill_style: Style = DEFAULT_SLIDER_FILL_STYLE,
-	slider_thumb_style: Style = DEFAULT_SLIDER_THUMB_STYLE,
+	wrapper_style: Style = {},
+	frame_style: Style = {},
+	overlay_style: Style = {},
+	play_btn_style: Style = {},
+	time_style: Style = {},
+	slider_wrapper_style: Style = {},
+	slider_track_style: Style = {},
+	slider_fill_style: Style = {},
+	slider_thumb_style: Style = {},
 	salt := "",
 	id: string = "",
 	loc := #caller_location,
@@ -1132,7 +1147,7 @@ video :: proc(
 	}
 
 	// --- RELATIVE WRAPPER ---
-	final_wrapper := wrapper_style
+	final_wrapper := merge_styles(DEFAULT_VIDEO_WRAPPER_STYLE, wrapper_style)
 	final_wrapper.position = .RELATIVE
 	final_wrapper.overflow_y = .HIDDEN
 
@@ -1141,7 +1156,7 @@ video :: proc(
 		defer element_close(ui_ctx)
 
 		{
-			final_frame := frame_style
+			final_frame := merge_styles(DEFAULT_VIDEO_FRAME_STYLE, frame_style)
 			// Inherit rounded corners from the wrapper so the video perfectly clips
 			if final_frame.border_radius == nil do final_frame.border_radius = final_wrapper.border_radius
 
@@ -1175,7 +1190,7 @@ video :: proc(
 
 			// Only render the overlay if the animation is actually visible
 			if overlay_anim^ > 0.001 {
-				final_overlay := overlay_style
+				final_overlay := merge_styles(DEFAULT_VIDEO_OVERLAY_STYLE, overlay_style)
 
 				if final_overlay.border_radius == nil {
 					if br, ok := final_wrapper.border_radius.?; ok {
@@ -1184,7 +1199,6 @@ video :: proc(
 				}
 
 				// --- ANIMATION MAGIC ---
-
 				// Slide down by 55 pixels when hiding (adjust based on your actual height)
 				offset_y := 55.0 * (1.0 - overlay_anim^)
 				final_overlay.bottom = -offset_y
@@ -1221,11 +1235,13 @@ video :: proc(
 					tot_s := int(player.duration) % 60
 					time_str := fmt.tprintf("%02d:%02d / %02d:%02d", curr_m, curr_s, tot_m, tot_s)
 
+					final_time_style := merge_styles(DEFAULT_VIDEO_TIME_STYLE, time_style)
+
 					text(
 						ui_ctx,
 						ev_ctx,
 						time_str,
-						user_style = time_style,
+						user_style = final_time_style,
 						salt = fmt.tprintf("%s_time", salt),
 					)
 
@@ -1235,8 +1251,21 @@ video :: proc(
 
 					slider_val^ = is_scrubbing^ ? scrub_time^ : f32(player.playback_time)
 
-					final_slider_wrapper := slider_wrapper_style
+					final_slider_wrapper := merge_styles(
+						DEFAULT_SLIDER_WRAPPER_STYLE,
+						slider_wrapper_style,
+					)
 					final_slider_wrapper.width = lc.Grow{1}
+
+					final_slider_track := merge_styles(
+						DEFAULT_SLIDER_TRACK_STYLE,
+						slider_track_style,
+					)
+					final_slider_fill := merge_styles(DEFAULT_SLIDER_FILL_STYLE, slider_fill_style)
+					final_slider_thumb := merge_styles(
+						DEFAULT_SLIDER_THUMB_STYLE,
+						slider_thumb_style,
+					)
 
 					slider_changed, scrub_target := slider(
 						ui_ctx,
@@ -1245,10 +1274,10 @@ video :: proc(
 						slider_val,
 						0.0,
 						f32(player.duration),
-						wrapper_style = final_slider_wrapper, // <--- Clean alignment!
-						track_style = slider_track_style,
-						fill_style = slider_fill_style,
-						thumb_style = slider_thumb_style,
+						wrapper_style = final_slider_wrapper,
+						track_style = final_slider_track,
+						fill_style = final_slider_fill,
+						thumb_style = final_slider_thumb,
 						salt = fmt.tprintf("%s_slider", salt),
 					)
 
@@ -1267,12 +1296,9 @@ video :: proc(
 							is_scrubbing^ = false
 						}
 					}
-
-
 				}
 			}
 		}
-
 	}
 }
 
@@ -1293,7 +1319,7 @@ popover_begin :: proc(
 	ev_ctx: ^events.Event_Context,
 	target_id: lc.Box_ID,
 	is_open: ^bool,
-	user_style: Style = DEFAULT_POPOVER_STYLE,
+	user_style: Style = {},
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
@@ -1305,8 +1331,6 @@ popover_begin :: proc(
 	backdrop_id := lc.ID(fmt.tprintf("%d_backdrop", root_id))
 	content_id := lc.ID(fmt.tprintf("%d_content", root_id))
 
-	// The Invisible Backdrop
-	// This catches all clicks outside the popover content.
 	events.register(ev_ctx, backdrop_id, events.Event_Callbacks{focusable = true})
 
 	if ev_ctx.hovered_id == backdrop_id && (ev_ctx.clicked_this_frame[backdrop_id] or_else false) {
@@ -1320,19 +1344,18 @@ popover_begin :: proc(
 			_box = {id = backdrop_id},
 			style = {
 				position = .FIXED,
-				top      = 0,
-				left     = 0,
-				width    = lc.ViewPercent{100}, // Covers entire viewport
-				height   = lc.ViewPercent{100}, // Covers entire viewport
-				z_index  = 999, // Just below the popover content
-				bg_color = Color{0, 0, 0, 0}, // Fully transparent
+				top = 0,
+				left = 0,
+				width = lc.ViewPercent{100},
+				height = lc.ViewPercent{100},
+				z_index = 999,
+				bg_color = Color{0, 0, 0, 0},
 			},
 		},
 		loc,
 	)
 	element_close(ui_ctx)
 
-	// The Popover Content
 	target_x, target_y, target_w, target_h: f32 = 0, 0, 0, 0
 	if prev, ok := ui_ctx.layout.prev_all_boxes[target_id]; ok {
 		target_x = prev.x
@@ -1341,16 +1364,14 @@ popover_begin :: proc(
 		target_h = prev.computed_height
 	}
 
-	final_style := user_style
+	// Merge styles here
+	final_style := merge_styles(DEFAULT_POPOVER_STYLE, user_style)
 	final_style.position = .FIXED
 	final_style.z_index = 1000
 
-	// Default positioning anchors exactly below the target
 	if final_style.left == nil do final_style.left = target_x
 	if final_style.top == nil do final_style.top = target_y + target_h + 8.0
 
-	// register the content container so it acts as a shield.
-	// Clicks on the popover itself stop here and don't punch through to the backdrop.
 	events.register(ev_ctx, content_id, events.Event_Callbacks{focusable = true})
 
 	element_open(ui_ctx, Element{_box = {id = content_id}, style = final_style}, loc)
@@ -1373,6 +1394,17 @@ DEFAULT_DROPDOWN_STYLE :: Style {
 	text_color    = Color{0, 0, 0, 1},
 }
 
+DEFAULT_DROPDOWN_POPOVER_STYLE :: Style {
+	align_items   = .STRETCH,
+	width         = lc.Fit(true),
+	direction     = .COLUMN,
+	bg_color      = Color{1, 1, 1, 1},
+	border_radius = [4]f32{6, 6, 6, 6},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	padding       = [4]f32{4, 4, 4, 4},
+}
+
 // Returns true if the selection changed this frame
 dropdown :: proc(
 	ui_ctx: ^UI_Context,
@@ -1381,7 +1413,8 @@ dropdown :: proc(
 	options: []string,
 	selected_idx: ^int,
 	is_open: ^bool,
-	wrapper_style: Style = DEFAULT_DROPDOWN_STYLE,
+	wrapper_style: Style = {},
+	popover_style: Style = {},
 	salt := "",
 	id: string = "",
 	loc := #caller_location,
@@ -1397,8 +1430,12 @@ dropdown :: proc(
 		display_text = options[selected_idx^]
 	}
 
+	final_wrapper := merge_styles(DEFAULT_DROPDOWN_STYLE, wrapper_style)
+
 	// The Trigger Button
-	if button(ui_ctx, ev_ctx, display_text, user_style = wrapper_style, id = root_id) do is_open^ = !is_open^
+	if button(ui_ctx, ev_ctx, display_text, user_style = final_wrapper, id = root_id) do is_open^ = !is_open^
+
+	final_popover := merge_styles(DEFAULT_DROPDOWN_POPOVER_STYLE, popover_style)
 
 	// The Popover List
 	if popover_begin(
@@ -1408,16 +1445,7 @@ dropdown :: proc(
 		is_open,
 		salt = salt,
 		loc = loc,
-		user_style = {
-			align_items = .STRETCH,
-			width = lc.Fit(true),
-			direction = .COLUMN,
-			bg_color = Color{1, 1, 1, 1},
-			border_radius = space(6),
-			border = space(1),
-			border_color = Color{0.8, 0.8, 0.8, 1},
-			padding = space_2(4, 4),
-		},
+		user_style = final_popover,
 	) {
 		defer popover_end(ui_ctx, true)
 
@@ -1478,8 +1506,8 @@ modal_begin :: proc(
 	ev_ctx: ^events.Event_Context,
 	is_open: ^bool,
 	dismiss_on_click_outside: bool = true,
-	backdrop_style: Style = DEFAULT_MODAL_BACKDROP_STYLE,
-	modal_style: Style = DEFAULT_MODAL_STYLE,
+	backdrop_style: Style = {},
+	modal_style: Style = {},
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
@@ -1500,11 +1528,14 @@ modal_begin :: proc(
 		return false
 	}
 
-	element_open(ui_ctx, Element{_box = {id = backdrop_id}, style = backdrop_style}, loc)
+	final_backdrop := merge_styles(DEFAULT_MODAL_BACKDROP_STYLE, backdrop_style)
+	element_open(ui_ctx, Element{_box = {id = backdrop_id}, style = final_backdrop}, loc)
 
 	// The Modal Content Container (Catches clicks so they don't hit the backdrop)
 	events.register(ev_ctx, content_id, events.Event_Callbacks{focusable = true})
-	element_open(ui_ctx, Element{_box = {id = content_id}, style = modal_style}, loc)
+
+	final_modal := merge_styles(DEFAULT_MODAL_STYLE, modal_style)
+	element_open(ui_ctx, Element{_box = {id = content_id}, style = final_modal}, loc)
 
 	return true
 }
@@ -1516,14 +1547,25 @@ modal_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
 	}
 }
 
+DEFAULT_CONTEXT_MENU_BACKDROP_STYLE :: Style {
+	position = .FIXED,
+	top      = 0,
+	left     = 0,
+	width    = lc.ViewPercent{100},
+	height   = lc.ViewPercent{100},
+	z_index  = 3000,
+	bg_color = Color{0, 0, 0, 0}, // Fully transparent click shield
+}
+
 DEFAULT_CONTEXT_MENU_STYLE :: Style {
 	direction     = .COLUMN,
-	align_items   = .STRETCH, // Forces children (buttons) to match the widest item
-	bg_color      = Color{1, 1, 1, 1},
+	align_items   = .STRETCH,
+	bg_color      = Color{1.0, 1.0, 1.0, 1.0}, // Clean white background
 	border        = [4]f32{1, 1, 1, 1},
-	border_color  = Color{0.8, 0.8, 0.8, 1},
-	border_radius = [4]f32{4, 4, 4, 4},
-	padding       = [4]f32{4, 4, 4, 4},
+	border_color  = Color{0.9, 0.9, 0.9, 1.0}, // Softer, more subtle border
+	border_radius = [4]f32{8, 8, 8, 8}, // Modern, rounder corners
+	padding       = [4]f32{8, 8, 8, 8}, // More breathable internal padding
+	gap           = 4, // Spacing between buttons so hover states don't collide
 	width         = lc.Fit(true),
 	height        = lc.Fit(true),
 }
@@ -1533,7 +1575,8 @@ context_menu_begin :: proc(
 	ev_ctx: ^events.Event_Context,
 	x, y: f32,
 	is_open: ^bool,
-	user_style: Style = DEFAULT_CONTEXT_MENU_STYLE,
+	backdrop_style: Style = {},
+	user_style: Style = {},
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
@@ -1551,26 +1594,14 @@ context_menu_begin :: proc(
 		return false
 	}
 
-	element_open(
-		ui_ctx,
-		Element {
-			_box = {id = backdrop_id},
-			style = {
-				position = .FIXED,
-				top = 0,
-				left = 0,
-				width = lc.ViewPercent{100},
-				height = lc.ViewPercent{100},
-				z_index = 3000,
-				bg_color = Color{0, 0, 0, 0},
-			},
-		},
-		loc,
-	)
+	final_backdrop := merge_styles(DEFAULT_CONTEXT_MENU_BACKDROP_STYLE, backdrop_style)
+	element_open(ui_ctx, Element{_box = {id = backdrop_id}, style = final_backdrop}, loc)
 	element_close(ui_ctx)
 
 	// The Menu Container
-	final_style := user_style
+	final_style := merge_styles(DEFAULT_CONTEXT_MENU_STYLE, user_style)
+
+	// Force positioning constraints regardless of user overrides
 	final_style.position = .FIXED
 	final_style.left = x
 	final_style.top = y
@@ -1619,12 +1650,12 @@ switch_toggle :: proc(
 	ev_ctx: ^events.Event_Context,
 	label: string,
 	state: ^bool,
-	wrapper_style: Style = DEFAULT_SWITCH_WRAPPER_STYLE,
-	track_style: Style = DEFAULT_SWITCH_TRACK_STYLE,
-	thumb_style: Style = DEFAULT_SWITCH_THUMB_STYLE,
-	text_style: Style = DEFAULT_CHECKBOX_TEXT_STYLE,
-	active_color: Color = {0.2, 0.8, 0.4, 1.0}, // Green for ON
-	inactive_color: Color = {0.8, 0.8, 0.8, 1.0}, // Gray for OFF
+	wrapper_style: Style = {},
+	track_style: Style = {},
+	thumb_style: Style = {},
+	text_style: Style = {},
+	active_color: Color = {0.2, 0.8, 0.4, 1.0},
+	inactive_color: Color = {0.8, 0.8, 0.8, 1.0},
 	hover_bg_color: Color = {0.9, 0.9, 0.92, 1.0},
 	salt := "",
 	id: string = "",
@@ -1640,34 +1671,45 @@ switch_toggle :: proc(
 
 	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
 
-	final_wrapper := wrapper_style
+	final_wrapper := merge_styles(DEFAULT_SWITCH_WRAPPER_STYLE, wrapper_style)
 	if is_hovered do final_wrapper.bg_color = hover_bg_color
 
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	final_track := track_style
+	final_track := merge_styles(DEFAULT_SWITCH_TRACK_STYLE, track_style)
 	final_track.bg_color = state^ ? active_color : inactive_color
 	final_track.border_color = state^ ? active_color : Color{0.7, 0.7, 0.7, 1.0}
 
 	element_open(ui_ctx, Element{_box = {id = track_id}, style = final_track})
 
-	final_thumb := thumb_style
-	// Slide thumb: 2px inset on the left, or 2px inset from the right (44 width - 16 thumb - 2 = 26)
+	final_thumb := merge_styles(DEFAULT_SWITCH_THUMB_STYLE, thumb_style)
 	final_thumb.left = state^ ? 26.0 : 2.0
 
 	element_open(ui_ctx, Element{_box = {id = thumb_id}, style = final_thumb})
-	element_close(ui_ctx) // close thumb
-
-	element_close(ui_ctx) // close track
-
-	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = text_style})
+	element_close(ui_ctx)
 	element_close(ui_ctx)
 
-	element_close(ui_ctx) // close wrapper
+	final_text := merge_styles(DEFAULT_CHECKBOX_TEXT_STYLE, text_style)
+	element_open(ui_ctx, Element{_box = {id = text_id}, text = label, style = final_text})
+	element_close(ui_ctx)
+
+	element_close(ui_ctx)
 	return ev_ctx.clicked_this_frame[root_id] or_else false
 }
 
 // --- MULTI-SELECT ---
+
+DEFAULT_MULTI_SELECT_POPOVER_STYLE :: Style {
+	align_items   = .STRETCH,
+	width         = lc.Fit(true),
+	direction     = .COLUMN,
+	bg_color      = Color{1, 1, 1, 1},
+	border_radius = [4]f32{6, 6, 6, 6},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	padding       = [4]f32{4, 4, 4, 4},
+}
+
 multi_select :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
@@ -1675,7 +1717,8 @@ multi_select :: proc(
 	options: []string,
 	selected_states: []bool,
 	is_open: ^bool,
-	wrapper_style: Style = DEFAULT_DROPDOWN_STYLE,
+	wrapper_style: Style = {},
+	popover_style: Style = {},
 	salt := "",
 	id: string = "",
 	loc := #caller_location,
@@ -1689,7 +1732,11 @@ multi_select :: proc(
 	display_text := label
 	if selected_count > 0 do display_text = fmt.tprintf("%s (%d)", label, selected_count)
 
-	if button(ui_ctx, ev_ctx, display_text, user_style = wrapper_style, id = root_id) do is_open^ = !is_open^
+	final_wrapper := merge_styles(DEFAULT_DROPDOWN_STYLE, wrapper_style)
+
+	if button(ui_ctx, ev_ctx, display_text, user_style = final_wrapper, id = root_id) do is_open^ = !is_open^
+
+	final_popover := merge_styles(DEFAULT_MULTI_SELECT_POPOVER_STYLE, popover_style)
 
 	if popover_begin(
 		ui_ctx,
@@ -1698,16 +1745,7 @@ multi_select :: proc(
 		is_open,
 		salt = salt,
 		loc = loc,
-		user_style = {
-			align_items = .STRETCH,
-			width = lc.Fit(true),
-			direction = .COLUMN,
-			bg_color = Color{1, 1, 1, 1},
-			border_radius = space(6),
-			border = space(1),
-			border_color = Color{0.8, 0.8, 0.8, 1},
-			padding = space_2(4, 4),
-		},
+		user_style = final_popover,
 	) {
 		defer popover_end(ui_ctx, is_open^)
 
@@ -1720,6 +1758,17 @@ multi_select :: proc(
 	return changed
 }
 
+DEFAULT_COMBOBOX_POPOVER_STYLE :: Style {
+	align_items   = .STRETCH,
+	width         = lc.Fit(true),
+	direction     = .COLUMN,
+	bg_color      = Color{1, 1, 1, 1},
+	border_radius = [4]f32{6, 6, 6, 6},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	padding       = [4]f32{4, 4, 4, 4},
+}
+
 combobox :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
@@ -1728,7 +1777,8 @@ combobox :: proc(
 	buffer: ^[dynamic]u8,
 	selected_idx: ^int,
 	is_open: ^bool,
-	wrapper_style: Style = DEFAULT_TEXT_INPUT_WRAPPER_STYLE,
+	wrapper_style: Style = {},
+	popover_style: Style = {},
 	salt := "",
 	id: string = "",
 	loc := #caller_location,
@@ -1740,12 +1790,14 @@ combobox :: proc(
 	input_salt := fmt.tprintf("%s_input", salt)
 	input_id := lc.ID(loc, input_salt)
 
+	final_wrapper := merge_styles(DEFAULT_TEXT_INPUT_WRAPPER_STYLE, wrapper_style)
+
 	is_focused := text_input(
 		ui_ctx,
 		ev_ctx,
 		buffer,
 		placeholder = placeholder,
-		wrapper_style = wrapper_style,
+		wrapper_style = final_wrapper,
 		salt = input_salt,
 		loc = loc,
 	)
@@ -1755,6 +1807,8 @@ combobox :: proc(
 	// Safe dereference for the dynamic array
 	search_str := strings.to_lower(string(buffer^[:]), context.temp_allocator)
 
+	final_popover := merge_styles(DEFAULT_COMBOBOX_POPOVER_STYLE, popover_style)
+
 	if popover_begin(
 		ui_ctx,
 		ev_ctx,
@@ -1762,18 +1816,9 @@ combobox :: proc(
 		is_open,
 		salt = salt,
 		loc = loc,
-		user_style = {
-			align_items = .STRETCH,
-			width = lc.Fit(true),
-			direction = .COLUMN,
-			bg_color = Color{1, 1, 1, 1},
-			border_radius = space(6),
-			border = space(1),
-			border_color = Color{0.8, 0.8, 0.8, 1},
-			padding = space_2(4, 4),
-		},
+		user_style = final_popover,
 	) {
-		defer popover_end(ui_ctx, is_open^)
+		defer popover_end(ui_ctx, true)
 
 		for opt, i in options {
 			opt_lower := strings.to_lower(opt, context.temp_allocator)
@@ -1810,5 +1855,579 @@ combobox :: proc(
 			}
 		}
 	}
+	return changed
+}
+
+// --- PROGRESS BAR ---
+DEFAULT_PROGRESS_WRAPPER_STYLE :: Style {
+	width         = lc.Percent{100},
+	height        = lc.Fixed{8},
+	bg_color      = Color{0.85, 0.85, 0.85, 1.0},
+	border_radius = [4]f32{4, 4, 4, 4},
+}
+
+DEFAULT_PROGRESS_FILL_STYLE :: Style {
+	height        = lc.Percent{100},
+	bg_color      = Color{0.15, 0.4, 0.8, 1.0},
+	border_radius = [4]f32{4, 4, 4, 4},
+}
+
+progress_bar :: proc(
+	ui_ctx: ^UI_Context,
+	value: f32,
+	min_val: f32 = 0.0,
+	max_val: f32 = 1.0,
+	wrapper_style: Style = {},
+	fill_style: Style = {},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) {
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+	fill_id := lc.ID(root_id, "fill")
+
+	percent := clamp((value - min_val) / (max_val - min_val), 0.0, 1.0)
+
+	final_wrapper := merge_styles(DEFAULT_PROGRESS_WRAPPER_STYLE, wrapper_style)
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	dynamic_fill := merge_styles(DEFAULT_PROGRESS_FILL_STYLE, fill_style)
+	dynamic_fill.width = lc.Percent{percent * 100.0}
+
+	element_open(ui_ctx, Element{_box = {id = fill_id}, style = dynamic_fill})
+	element_close(ui_ctx)
+
+	element_close(ui_ctx)
+}
+
+// --- SPINNER ---
+DEFAULT_SPINNER_WRAPPER_STYLE :: Style {
+	width           = lc.Fit(true),
+	height          = lc.Fit(true),
+	direction       = .ROW,
+	gap             = 8,
+	align_items     = .CENTER,
+	justify_content = .CENTER,
+}
+
+DEFAULT_SPINNER_DOT_STYLE :: Style {
+	width         = lc.Fixed{12},
+	height        = lc.Fixed{12},
+	border_radius = [4]f32{6, 6, 6, 6},
+	bg_color      = Color{0.15, 0.4, 0.8, 1.0},
+}
+
+spinner :: proc(
+	ui_ctx: ^UI_Context,
+	wrapper_style: Style = {},
+	dot_style: Style = {},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) {
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+
+	final_wrapper := merge_styles(DEFAULT_SPINNER_WRAPPER_STYLE, wrapper_style)
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	time_ms := f32(sdl.GetTicks())
+
+	// Create a staggered sine wave for the 3 bouncing dots
+	for i in 0 ..< 3 {
+		dot_id := lc.ID(root_id, fmt.tprintf("dot_%d", i))
+
+		phase := (time_ms * 0.005) + (f32(i) * 1.5)
+		opacity := 0.2 + 0.8 * ((math.sin(phase) + 1.0) / 2.0)
+
+		dynamic_dot := merge_styles(DEFAULT_SPINNER_DOT_STYLE, dot_style)
+		if bg, ok := dynamic_dot.bg_color.?; ok {
+			dynamic_dot.bg_color = Color{bg[0], bg[1], bg[2], bg[3] * opacity}
+		}
+
+		element_open(ui_ctx, Element{_box = {id = dot_id}, style = dynamic_dot})
+		element_close(ui_ctx)
+	}
+
+	element_close(ui_ctx)
+}
+
+// --- TOAST NOTIFICATION ---
+Toast_Type :: enum {
+	INFO,
+	SUCCESS,
+	WARNING,
+	ERROR,
+}
+
+DEFAULT_TOAST_STYLE :: Style {
+	direction     = .ROW,
+	align_items   = .CENTER,
+	gap           = 16,
+	padding       = [4]f32{12, 16, 12, 16},
+	border_radius = [4]f32{6, 6, 6, 6},
+	width         = lc.Fixed{320},
+	height        = lc.Fit(true),
+	bg_color      = Color{1, 1, 1, 1},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+}
+
+toast :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	title: string,
+	message: string,
+	type: Toast_Type = .INFO,
+	is_open: ^bool,
+	wrapper_style: Style = {},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	if !is_open^ do return false
+	closed_this_frame := false
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+
+	indicator_color: Color
+	switch type {
+	case .INFO:
+		indicator_color = Color{0.2, 0.5, 0.9, 1.0}
+	case .SUCCESS:
+		indicator_color = Color{0.2, 0.8, 0.4, 1.0}
+	case .WARNING:
+		indicator_color = Color{0.9, 0.7, 0.1, 1.0}
+	case .ERROR:
+		indicator_color = Color{0.9, 0.2, 0.2, 1.0}
+	}
+
+	final_wrapper := merge_styles(DEFAULT_TOAST_STYLE, wrapper_style)
+
+	// Respect user-provided border_color, otherwise fallback to the calculated type color
+	final_wrapper.border_color = wrapper_style.border_color.? or_else indicator_color
+
+	// Thicken the left border to serve as a status indicator
+	if b, ok := final_wrapper.border.?; ok {
+		final_wrapper.border = [4]f32{b[0], b[1], b[2], b[3] + 4.0}
+	} else {
+		final_wrapper.border = [4]f32{1, 1, 1, 5}
+	}
+
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	// Content Column
+	content_id := lc.ID(root_id, "content")
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = content_id},
+			style = {direction = .COLUMN, gap = 4, width = lc.Grow{1}},
+		},
+	)
+
+	text(
+		ui_ctx,
+		ev_ctx,
+		title,
+		user_style = {font_size = 18, text_color = Color{0.1, 0.1, 0.1, 1}},
+		salt = "title",
+	)
+	if message != "" {
+		text(
+			ui_ctx,
+			ev_ctx,
+			message,
+			user_style = {font_size = 14, text_color = Color{0.4, 0.4, 0.4, 1}},
+			salt = "msg",
+		)
+	}
+	element_close(ui_ctx) // close content column
+
+	// Close Button
+	if button(
+		ui_ctx,
+		ev_ctx,
+		"x",
+		salt = "close",
+		user_style = {
+			bg_color = Color{0, 0, 0, 0},
+			text_color = Color{0.5, 0.5, 0.5, 1},
+			width = lc.Fixed{24},
+			height = lc.Fixed{24},
+			padding = space(0),
+		},
+	) {
+		is_open^ = false
+		closed_this_frame = true
+	}
+
+	element_close(ui_ctx) // close wrapper
+	return closed_this_frame
+}
+
+// --- TABS ---
+DEFAULT_TABS_WRAPPER_STYLE :: Style {
+	direction    = .ROW,
+	width        = lc.Percent{100},
+	border       = [4]f32{0, 0, 1, 0},
+	border_color = Color{0.8, 0.8, 0.8, 1},
+}
+
+DEFAULT_TABS_TAB_STYLE :: Style {
+	bg_color      = Color{0, 0, 0, 0},
+	border        = [4]f32{0, 0, 3, 0},
+	border_radius = [4]f32{0, 0, 0, 0},
+	padding       = [4]f32{12, 16, 12, 16},
+}
+
+tabs :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	labels: []string,
+	active_idx: ^int,
+	wrapper_style: Style = {},
+	tab_style: Style = {},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	changed := false
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+
+	// Tab header row
+	final_wrapper := merge_styles(DEFAULT_TABS_WRAPPER_STYLE, wrapper_style)
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	for label, i in labels {
+		tab_id := lc.ID(root_id, fmt.tprintf("tab_%d", i))
+		is_active := active_idx^ == i
+
+		final_tab := merge_styles(DEFAULT_TABS_TAB_STYLE, tab_style)
+
+		// Highlight the active tab with a thick colored bottom border (if not overridden)
+		active_text := Color{0.15, 0.4, 0.8, 1.0} if is_active else Color{0.4, 0.4, 0.4, 1.0}
+		active_border := Color{0.15, 0.4, 0.8, 1.0} if is_active else Color{0, 0, 0, 0}
+
+		if tab_style.text_color == nil do final_tab.text_color = active_text
+		if tab_style.border_color == nil do final_tab.border_color = active_border
+
+		if button(ui_ctx, ev_ctx, label, id = tab_id, user_style = final_tab) {
+			active_idx^ = i
+			changed = true
+		}
+	}
+
+	element_close(ui_ctx)
+	return changed
+}
+
+// --- ACCORDION ---
+DEFAULT_ACCORDION_WRAPPER_STYLE :: Style {
+	direction     = .COLUMN,
+	width         = lc.Percent{100},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	border_radius = [4]f32{6, 6, 6, 6},
+	bg_color      = Color{1, 1, 1, 1},
+	overflow_y    = .HIDDEN,
+}
+
+DEFAULT_ACCORDION_HEADER_STYLE :: Style {
+	direction       = .ROW,
+	width           = lc.Percent{100},
+	padding         = [4]f32{12, 16, 12, 16},
+	justify_content = .START, // Changed to START to neatly align the icon and text
+	align_items     = .CENTER,
+	gap             = 12, // Space between icon and title
+	bg_color        = Color{0.96, 0.96, 0.98, 1},
+	text_color      = Color{0.1, 0.1, 0.1, 1},
+	border_radius   = [4]f32{0, 0, 0, 0},
+}
+
+DEFAULT_ACCORDION_ICON_STYLE :: Style {
+	width      = lc.Fixed{16},
+	height     = lc.Fixed{16},
+	object_fit = .CONTAIN,
+}
+
+DEFAULT_ACCORDION_CONTENT_STYLE :: Style {
+	direction = .COLUMN,
+	width     = lc.Percent{100},
+	padding   = [4]f32{16, 16, 16, 16},
+	gap       = 12,
+}
+
+accordion_begin :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	sdl_rend: ^sdl.Renderer,
+	title: string,
+	is_expanded: ^bool,
+	expanded_icon: string = "assets/pictures/down.png",
+	collapsed_icon: string = "assets/pictures/play.png",
+	wrapper_style: Style = {},
+	header_style: Style = {},
+	content_style: Style = {},
+	icon_style: Style = {},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+	header_id := lc.ID(root_id, "header")
+	content_id := lc.ID(root_id, "content")
+
+	final_wrapper := merge_styles(DEFAULT_ACCORDION_WRAPPER_STYLE, wrapper_style)
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	// --- Interactive Header Container ---
+	events.register(ev_ctx, header_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+	if ev_ctx.clicked_this_frame[header_id] or_else false {
+		is_expanded^ = !is_expanded^
+	}
+
+	final_header := merge_styles(DEFAULT_ACCORDION_HEADER_STYLE, header_style)
+
+	// Apply a manual darkening effect when hovered to mimic the button hover state
+	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, header_id)
+	if is_hovered {
+		if bg, ok := final_header.bg_color.?; ok {
+			final_header.bg_color = Color {
+				max(bg[0] - 0.05, 0.0),
+				max(bg[1] - 0.05, 0.0),
+				max(bg[2] - 0.05, 0.0),
+				bg[3],
+			}
+		}
+	}
+
+	element_open(ui_ctx, Element{_box = {id = header_id}, style = final_header}, loc)
+
+	// Indicator Icon
+	icon_path := is_expanded^ ? expanded_icon : collapsed_icon
+	final_icon := merge_styles(DEFAULT_ACCORDION_ICON_STYLE, icon_style)
+	image_path(ui_ctx, sdl_rend, icon_path, user_style = final_icon)
+
+	// Title Text
+	text_col := final_header.text_color.? or_else Color{0.1, 0.1, 0.1, 1}
+	font_sz := final_header.font_size.? or_else 16
+	text(ui_ctx, ev_ctx, title, user_style = {text_color = text_col, font_size = font_sz})
+
+	element_close(ui_ctx) // close header container
+
+	// --- Content Block ---
+	if is_expanded^ {
+		final_content := merge_styles(DEFAULT_ACCORDION_CONTENT_STYLE, content_style)
+		element_open(ui_ctx, Element{_box = {id = content_id}, style = final_content})
+		return true
+	}
+
+	element_close(ui_ctx) // close wrapper early if collapsed
+	return false
+}
+
+accordion_end :: proc(ui_ctx: ^UI_Context, is_expanded: bool) {
+	if is_expanded {
+		element_close(ui_ctx) // close content block
+		element_close(ui_ctx) // close wrapper block
+	}
+}
+
+// --- DATA TABLE ---
+DEFAULT_TABLE_WRAPPER_STYLE :: Style {
+	direction     = .COLUMN,
+	width         = lc.Percent{100},
+	height        = lc.Fit(true),
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	border_radius = [4]f32{6, 6, 6, 6},
+	bg_color      = Color{1, 1, 1, 1},
+	overflow_y    = .HIDDEN,
+}
+
+DEFAULT_TABLE_HEADER_ROW_STYLE :: Style {
+	direction    = .ROW,
+	width        = lc.Percent{100},
+	bg_color     = Color{0.95, 0.95, 0.97, 1},
+	padding      = [4]f32{12, 16, 12, 16},
+	border       = [4]f32{0, 0, 1, 0},
+	border_color = Color{0.8, 0.8, 0.8, 1},
+}
+
+DEFAULT_TABLE_HEADER_TEXT_STYLE :: Style {
+	font_size  = 14,
+	text_color = Color{0.4, 0.4, 0.4, 1},
+}
+
+DEFAULT_TABLE_ROW_STYLE :: Style {
+	direction    = .ROW,
+	width        = lc.Percent{100},
+	padding      = [4]f32{12, 16, 12, 16},
+	border       = [4]f32{0, 0, 1, 0},
+	border_color = Color{0.9, 0.9, 0.9, 1},
+}
+
+DEFAULT_TABLE_CELL_TEXT_STYLE :: Style {
+	font_size  = 16,
+	text_color = Color{0.1, 0.1, 0.1, 1},
+}
+
+DEFAULT_TABLE_SCROLL_STYLE :: Style {
+	direction = .COLUMN,
+	width     = lc.Percent{100},
+	height    = lc.Grow{1},
+}
+
+table :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	headers: []string,
+	rows: [][]string,
+	col_widths: []lc.Sizing,
+	wrapper_style: Style = {},
+	header_row_style: Style = {},
+	header_text_style: Style = {},
+	row_style: Style = {},
+	cell_text_style: Style = {},
+	scroll_style: Style = {},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) {
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+	header_id := lc.ID(root_id, "header")
+	body_id := lc.ID(root_id, "body")
+
+	final_wrapper := merge_styles(DEFAULT_TABLE_WRAPPER_STYLE, wrapper_style)
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	// 1. Header Row
+	final_header_row := merge_styles(DEFAULT_TABLE_HEADER_ROW_STYLE, header_row_style)
+	element_open(ui_ctx, Element{_box = {id = header_id}, style = final_header_row})
+
+	final_header_text := merge_styles(DEFAULT_TABLE_HEADER_TEXT_STYLE, header_text_style)
+	for h, i in headers {
+		element_open(ui_ctx, Element{style = {width = col_widths[i], justify_content = .START}})
+		text(ui_ctx, ev_ctx, h, user_style = final_header_text)
+		element_close(ui_ctx)
+	}
+	element_close(ui_ctx)
+
+	// 2. Scrollable Body
+	final_scroll_style := merge_styles(DEFAULT_TABLE_SCROLL_STYLE, scroll_style)
+	scroll_begin(
+		ui_ctx,
+		ev_ctx,
+		id = body_id,
+		scroll_y = true,
+		scroll_x = false,
+		user_style = final_scroll_style,
+	)
+
+	final_cell_text := merge_styles(DEFAULT_TABLE_CELL_TEXT_STYLE, cell_text_style)
+
+	for row, r_idx in rows {
+		row_id := lc.ID(body_id, fmt.tprintf("row_%d", r_idx))
+		final_row := merge_styles(DEFAULT_TABLE_ROW_STYLE, row_style)
+
+		// Zebra striping for rows (only if user didn't explicitly set a row background color)
+		if row_style.bg_color == nil {
+			final_row.bg_color =
+				Color{0.98, 0.98, 0.98, 1} if r_idx % 2 == 1 else Color{1, 1, 1, 1}
+		}
+
+		element_open(ui_ctx, Element{_box = {id = row_id}, style = final_row})
+
+		for cell, c_idx in row {
+			element_open(
+				ui_ctx,
+				Element{style = {width = col_widths[c_idx], justify_content = .START}},
+			)
+			text(ui_ctx, ev_ctx, cell, user_style = final_cell_text)
+			element_close(ui_ctx)
+		}
+
+		element_close(ui_ctx)
+	}
+
+	scroll_end(ui_ctx)
+	element_close(ui_ctx) // close wrapper
+}
+
+// --- LIST VIEW ---
+DEFAULT_LIST_WRAPPER_STYLE :: Style {
+	direction     = .COLUMN,
+	width         = lc.Percent{100},
+	height        = lc.Grow{1},
+	border        = [4]f32{1, 1, 1, 1},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	border_radius = [4]f32{6, 6, 6, 6},
+	bg_color      = Color{1, 1, 1, 1},
+	overflow_y    = .HIDDEN,
+}
+
+DEFAULT_LIST_SCROLL_STYLE :: Style {
+	direction = .COLUMN,
+	width     = lc.Percent{100},
+	height    = lc.Percent{100},
+}
+
+DEFAULT_LIST_ITEM_STYLE :: Style {
+	width         = lc.Percent{100},
+	padding       = [4]f32{12, 16, 12, 16},
+	text_align    = .LEFT,
+	border_radius = [4]f32{0, 0, 0, 0},
+}
+
+list_view :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	items: []string,
+	selected_idx: ^int,
+	wrapper_style: Style = {},
+	scroll_style: Style = {},
+	item_style: Style = {},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	changed := false
+	root_id := lc.ID(id) if id != "" else lc.ID(loc, salt)
+	scroll_id := lc.ID(root_id, "scroll")
+
+	final_wrapper := merge_styles(DEFAULT_LIST_WRAPPER_STYLE, wrapper_style)
+	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
+
+	final_scroll := merge_styles(DEFAULT_LIST_SCROLL_STYLE, scroll_style)
+	scroll_begin(
+		ui_ctx,
+		ev_ctx,
+		id = scroll_id,
+		scroll_y = true,
+		scroll_x = false,
+		user_style = final_scroll,
+	)
+
+	for item, i in items {
+		item_id := lc.ID(scroll_id, fmt.tprintf("item_%d", i))
+		is_selected := selected_idx^ == i
+
+		final_item := merge_styles(DEFAULT_LIST_ITEM_STYLE, item_style)
+
+		// Determine dynamic states, respecting explicit user overrides
+		opt_bg := Color{0.15, 0.4, 0.8, 0.1} if is_selected else Color{0, 0, 0, 0}
+		opt_text := Color{0.15, 0.4, 0.8, 1.0} if is_selected else Color{0.3, 0.3, 0.3, 1.0}
+
+		if item_style.bg_color == nil do final_item.bg_color = opt_bg
+		if item_style.text_color == nil do final_item.text_color = opt_text
+
+		if button(ui_ctx, ev_ctx, item, id = item_id, user_style = final_item) {
+			selected_idx^ = i
+			changed = true
+		}
+	}
+
+	scroll_end(ui_ctx)
+	element_close(ui_ctx)
+
 	return changed
 }

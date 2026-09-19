@@ -39,6 +39,11 @@ Object_Fit :: enum {
 Color :: distinct [4]f32
 Class :: distinct u32
 
+Font_Key :: struct {
+	path_hash: u32,
+	size:      i32,
+}
+
 
 Style :: struct {
 	bg_color:        Maybe(Color),
@@ -149,6 +154,7 @@ UI_Context :: struct {
 	stylesheet:     map[Class]Style,
 	glyph_cache:    map[Glyph_Key]Glyph,
 	image_cache:    map[u32]^sdl.Texture,
+	font_cache:     map[Font_Key]^ttf.Font,
 	master_9slice:  ^sdl.Texture,
 	mask_texture:   ^sdl.Texture,
 	mask_texture_w: i32,
@@ -177,6 +183,38 @@ get_class_name :: proc(c: Class) -> string {
 	} else {
 		return ""
 	}
+}
+
+get_font :: proc(ctx: ^UI_Context, path: string, size: f32) -> ^ttf.Font {
+	// Fallback to a default font if none is specified
+	actual_path := path != "" ? path : "assets/font/CaacupeOne-Regular.ttf"
+	actual_size := size > 0 ? i32(size) : 16
+
+	key := Font_Key {
+		path_hash = hash.fnv32(transmute([]byte)actual_path),
+		size      = actual_size,
+	}
+
+	// Cache Hit
+	if font, ok := ctx.font_cache[key]; ok {
+		return font
+	}
+
+	// Cache Miss: Load from disk
+	c_path := strings.clone_to_cstring(actual_path, context.temp_allocator)
+	font := ttf.OpenFont(c_path, actual_size)
+
+	if font == nil {
+		fmt.printfln(
+			"ERROR: Failed to load font '%s' at size %d: %s",
+			actual_path,
+			actual_size,
+			sdl.GetError(),
+		)
+	}
+
+	ctx.font_cache[key] = font
+	return font
 }
 
 space_1 :: proc(all: f32) -> [4]f32 {
@@ -597,8 +635,7 @@ default_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 		el.resolved_text_wrap = .WORD
 		el.resolved_opacity = 1.0
 
-		DEFAULT_FONT_HASH := hash.fnv32(transmute([]byte)string("default_font"))
-		el.resolved_font = ctx.fonts[DEFAULT_FONT_HASH]
+		el.resolved_font = get_font(ctx, "", el.resolved_font_size)
 	}
 }
 
@@ -661,11 +698,9 @@ apply_style_block :: proc(el: ^Element, s: Style, ctx: ^UI_Context) {
 	}
 
 	if v, ok := s.font_name.?; ok {
-		font_hash := hash.fnv32(transmute([]byte)v)
-
-		if font, exists := ctx.fonts[font_hash]; exists {
-			el.resolved_font = font
-		}
+		// Fetch the font dynamically, inheriting size if omitted
+		font_size := s.font_size.? or_else el.resolved_font_size
+		el.resolved_font = get_font(ctx, v, font_size)
 	}
 
 	// ------------------------------------------------------------
@@ -796,6 +831,52 @@ apply_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 	}
 
 	apply_style_block(el, el.style, ctx)
+}
+
+// Merges a sparse override style on top of a base default style.
+merge_styles :: proc(base: Style, override: Style) -> Style {
+	result := base
+
+	// Sizing & Bounds
+	if override.width != nil do result.width = override.width
+	if override.height != nil do result.height = override.height
+	if override.min_width != nil do result.min_width = override.min_width
+	if override.max_width != nil do result.max_width = override.max_width
+	if override.min_height != nil do result.min_height = override.min_height
+	if override.max_height != nil do result.max_height = override.max_height
+
+	// Spacing
+	if override.padding != nil do result.padding = override.padding
+	if override.margin != nil do result.margin = override.margin
+	if override.border != nil do result.border = override.border
+	if override.gap != nil do result.gap = override.gap
+
+	// Flexbox
+	if override.direction != nil do result.direction = override.direction
+	if override.justify_content != nil do result.justify_content = override.justify_content
+	if override.align_items != nil do result.align_items = override.align_items
+	if override.wrap != nil do result.wrap = override.wrap
+
+	// Visuals
+	if override.bg_color != nil do result.bg_color = override.bg_color
+	if override.border_color != nil do result.border_color = override.border_color
+	if override.text_color != nil do result.text_color = override.text_color
+	if override.border_radius != nil do result.border_radius = override.border_radius
+
+	// Text
+	if override.font_size != nil do result.font_size = override.font_size
+	if override.text_align != nil do result.text_align = override.text_align
+	if override.text_wrap != nil do result.text_wrap = override.text_wrap
+
+	// Positioning
+	if override.position != nil do result.position = override.position
+	if override.top != nil do result.top = override.top
+	if override.left != nil do result.left = override.left
+	if override.right != nil do result.right = override.right
+	if override.bottom != nil do result.bottom = override.bottom
+	if override.z_index != nil do result.z_index = override.z_index
+
+	return result
 }
 
 @(private)
@@ -1274,6 +1355,7 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx.stylesheet = make(map[Class]Style)
 	ctx.fonts = make(map[u32]^ttf.Font)
 	ctx.videos = make(map[string]^Video_Player)
+	ctx.font_cache = make(map[Font_Key]^ttf.Font)
 	ctx.glyph_cache = make(map[Glyph_Key]Glyph)
 	ctx.image_cache = make(map[u32]^sdl.Texture)
 
@@ -1292,6 +1374,8 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 		if tex != nil do sdl.DestroyTexture(tex)
 	}
 	delete(ctx.image_cache)
+	for key, font in ctx.font_cache do ttf.CloseFont(font)
+	delete(ctx.font_cache)
 
 	delete(ctx.stylesheet)
 	delete(ctx.fonts)
