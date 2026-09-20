@@ -211,6 +211,21 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 				set_focus(ctx, 0)
 			}
 		}
+		if e.button.button == sdl.BUTTON_RIGHT {
+			// Snap the right click to the nearest interactive parent
+			target: lc.Box_ID = 0
+			curr := hovered_box
+			for curr != nil {
+				if cb, ok := ctx.listeners[curr.id]; ok && cb.focusable {
+					target = curr.id
+					break
+				}
+				curr = curr.parent
+			}
+			if target == 0 do target = current_hovered_id
+
+			ctx.context_menu_target = target
+		}
 
 	case .MOUSEBUTTONUP:
 		if e.button.button == sdl.BUTTON_LEFT {

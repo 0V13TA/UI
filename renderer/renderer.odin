@@ -904,17 +904,27 @@ merge_styles :: proc(base: Style, override: Style) -> Style {
 	if override.justify_content != nil do result.justify_content = override.justify_content
 	if override.align_items != nil do result.align_items = override.align_items
 	if override.wrap != nil do result.wrap = override.wrap
+	if override.basis != nil do result.basis = override.basis
 
 	// Visuals
 	if override.bg_color != nil do result.bg_color = override.bg_color
+	if override.bg_image != nil do result.bg_image = override.bg_image
+	if override.object_fit != nil do result.object_fit = override.object_fit
 	if override.border_color != nil do result.border_color = override.border_color
-	if override.text_color != nil do result.text_color = override.text_color
 	if override.border_radius != nil do result.border_radius = override.border_radius
+	if override.opacity != nil do result.opacity = override.opacity
 
-	// Text
-	if override.font_size != nil do result.font_size = override.font_size
+	// Text & Typography
+	if override.text_color != nil do result.text_color = override.text_color
 	if override.text_align != nil do result.text_align = override.text_align
 	if override.text_wrap != nil do result.text_wrap = override.text_wrap
+	if override.font_name != nil do result.font_name = override.font_name
+	if override.font_size != nil do result.font_size = override.font_size
+	if override.font_spacing != nil do result.font_spacing = override.font_spacing
+	if override.font_style != nil do result.font_style = override.font_style
+	if override.selection_start != nil do result.selection_start = override.selection_start
+	if override.selection_end != nil do result.selection_end = override.selection_end
+	if override.selection_color != nil do result.selection_color = override.selection_color
 
 	// Positioning
 	if override.position != nil do result.position = override.position
@@ -923,6 +933,10 @@ merge_styles :: proc(base: Style, override: Style) -> Style {
 	if override.right != nil do result.right = override.right
 	if override.bottom != nil do result.bottom = override.bottom
 	if override.z_index != nil do result.z_index = override.z_index
+
+	// Scrolling
+	if override.overflow_x != nil do result.overflow_x = override.overflow_x
+	if override.overflow_y != nil do result.overflow_y = override.overflow_y
 
 	return result
 }

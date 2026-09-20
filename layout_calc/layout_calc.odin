@@ -482,11 +482,7 @@ resolve_fixed_width :: proc(
 	if max_w := resolve_bound(box.max_width, viewport_dim); max_w >= 0 do box.computed_width = min(box.computed_width, max_w)
 
 	if !is_fit {
-		#partial switch _ in box.width {
-		case Grow, Shrink: // Skipped; sized in grow_shrink_width
-		case:
-			for child in box.children do resolve_fixed_width(child, ctx, viewport_dim, false)
-		}
+		for child in box.children do resolve_fixed_width(child, ctx, viewport_dim, false)
 	}
 }
 
@@ -841,8 +837,26 @@ resolve_fixed_height :: proc(
 			}
 		case Grow:
 			box.computed_height = 0.0
+			if parent_is_fit || box.parent == nil {
+				if box.id not_in ctx.warned_boxes {
+					fmt.printfln(
+						"WARNING: Layout constraint violated on Box: %s",
+						get_debug_name(box.id),
+					)
+					ctx.warned_boxes[box.id] = true
+				}
+			}
 		case Shrink:
 			box.computed_height = box.basis
+			if parent_is_fit || box.parent == nil {
+				if box.id not_in ctx.warned_boxes {
+					fmt.printfln(
+						"WARNING: Layout constraint violated on Box: %s",
+						get_debug_name(box.id),
+					)
+					ctx.warned_boxes[box.id] = true
+				}
+			}
 		case Fit: // Handled
 		}
 	}
@@ -851,11 +865,7 @@ resolve_fixed_height :: proc(
 	if max_h := resolve_bound(box.max_height, viewport_dim); max_h >= 0 do box.computed_height = min(box.computed_height, max_h)
 
 	if !is_fit {
-		#partial switch _ in box.height {
-		case Grow, Shrink:
-		case:
-			for child in box.children do resolve_fixed_height(ctx, child, viewport_dim, false)
-		}
+		for child in box.children do resolve_fixed_height(ctx, child, viewport_dim, false)
 	}
 }
 

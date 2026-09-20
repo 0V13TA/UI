@@ -10,22 +10,24 @@ Anim_Target :: union {
 	lc.Box_ID,
 }
 
-// The user-friendly GSAP-style payload
 Anim_Props :: struct {
 	duration, delay: f32,
 	ease:            anim.Easing,
 	stagger:         f32,
 
-	// Optional Target Properties
+	// Target Properties
 	width, height:   Maybe(f32),
 	opacity:         Maybe(f32),
-	x, y:            Maybe(f32), // Translates to left/top
+	x, y:            Maybe(f32),
+	bg_color:        Maybe([4]f32),
+	text_color:      Maybe([4]f32),
+	border_color:    Maybe([4]f32),
 }
 
 // --- TIMELINE ORCHESTRATION ---
 
 Timeline_Step :: struct {
-	is_from: bool, // Differentiates between 'to' and 'from' tweens
+	is_from: bool,
 	target:  Anim_Target,
 	props:   Anim_Props,
 	pos:     TL_Pos,
@@ -48,7 +50,6 @@ timeline :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context) -> Timeline {
 	return Timeline{ctx = ctx, anim_ctx = anim_ctx}
 }
 
-// Strictly Queue Instructions (No Math Here)
 tl_to :: proc(
 	tl: ^Timeline,
 	target: Anim_Target,
@@ -75,7 +76,6 @@ tl_from :: proc(
 	)
 }
 
-// Flush and Execute (Called after ui_end_frame)
 tl_play :: proc(tl: ^Timeline) {
 	cursor: f32 = 0.0
 	last_start_time: f32 = 0.0
@@ -95,14 +95,10 @@ tl_play :: proc(tl: ^Timeline) {
 		count := len(boxes)
 
 		if count > 0 {
-			// Calculate total block duration including staggers
 			total_duration := step.props.duration + (step.props.stagger * f32(count - 1))
-
-			// Adjust delay relative to the timeline
 			adjusted_props := step.props
 			adjusted_props.delay += start_time
 
-			// Route to the correct base tween function
 			if step.is_from {
 				from(tl.ctx, tl.anim_ctx, step.target, adjusted_props)
 			} else {
@@ -114,7 +110,6 @@ tl_play :: proc(tl: ^Timeline) {
 		}
 	}
 
-	// Clean up the dynamic array after flushing
 	delete(tl.steps)
 }
 
@@ -123,34 +118,24 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 	for box, i in boxes {
 		state := anim.get_state(anim_ctx, box.id)
 
-		// Sync Width
+		// 1. Read Current Frame, fallback to History, fallback to 0
 		if !state.has_width {
-			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
-				state.width = prev.computed_width
-			} else if w, ok := box.width.(lc.Fixed); ok {
-				state.width = w.value
-			}
+			if w, ok := box.width.(lc.Fixed); ok do state.width = w.value
+			else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.width = prev.computed_width
 		}
-
-		// Sync Height
 		if !state.has_height {
-			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
-				state.height = prev.computed_height
-			} else if h, ok := box.height.(lc.Fixed); ok {
-				state.height = h.value
-			}
+			if h, ok := box.height.(lc.Fixed); ok do state.height = h.value
+			else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.height = prev.computed_height
 		}
-
 		if !state.has_x {
-			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
-				state.x = prev.x
-			}
+			if l, ok := box.left.?; ok do state.x = l
+			else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.x = prev.left.? or_else 0.0
+			else do state.x = 0.0
 		}
-
 		if !state.has_y {
-			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
-				state.y = prev.y
-			}
+			if t, ok := box.top.?; ok do state.y = t
+			else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.y = prev.top.? or_else 0.0
+			else do state.y = 0.0
 		}
 
 		calculated_delay := props.delay + (props.stagger * f32(i))
@@ -158,14 +143,87 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 
 		if v, ok := props.width.?; ok {
 			state.has_width = true
-			append(&tweens, anim.Property_Tween{target = &state.width, to = v})
+			append(
+				&tweens,
+				anim.Property_Tween{target = &state.width, to = v, clear_flag = &state.has_width},
+			)
 		}
 		if v, ok := props.height.?; ok {
 			state.has_height = true
-			append(&tweens, anim.Property_Tween{target = &state.height, to = v})
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.height,
+					to = v,
+					clear_flag = &state.has_height,
+				},
+			)
 		}
 		if v, ok := props.opacity.?; ok {
 			append(&tweens, anim.Property_Tween{target = &state.opacity, to = v})
+		}
+		if v, ok := props.x.?; ok {
+			state.has_x = true
+			append(
+				&tweens,
+				anim.Property_Tween{target = &state.x, to = v, clear_flag = &state.has_x},
+			)
+		}
+		if v, ok := props.y.?; ok {
+			state.has_y = true
+			append(
+				&tweens,
+				anim.Property_Tween{target = &state.y, to = v, clear_flag = &state.has_y},
+			)
+		}
+
+		if v, ok := props.bg_color.?; ok {
+			if !state.has_bg_color && box.user_data != nil {
+				el := (^Element)(box.user_data)
+				c := el.style.bg_color.? or_else Color{0, 0, 0, 0}
+				state.bg_color = transmute([4]f32)c
+			}
+			state.has_bg_color = true
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.bg_color,
+					to_color = v,
+					clear_flag = &state.has_bg_color,
+				},
+			)
+		}
+		if v, ok := props.text_color.?; ok {
+			if !state.has_text_color && box.user_data != nil {
+				el := (^Element)(box.user_data)
+				c := el.style.text_color.? or_else Color{0, 0, 0, 1}
+				state.text_color = transmute([4]f32)c
+			}
+			state.has_text_color = true
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.text_color,
+					to_color = v,
+					clear_flag = &state.has_text_color,
+				},
+			)
+		}
+		if v, ok := props.border_color.?; ok {
+			if !state.has_border_color && box.user_data != nil {
+				el := (^Element)(box.user_data)
+				c := el.style.border_color.? or_else Color{0, 0, 0, 0}
+				state.border_color = transmute([4]f32)c
+			}
+			state.has_border_color = true
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.border_color,
+					to_color = v,
+					clear_flag = &state.has_border_color,
+				},
+			)
 		}
 
 		safe_ease := props.ease
@@ -188,22 +246,27 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 	for box, i in boxes {
 		state := anim.get_state(anim_ctx, box.id)
 
-		// Sync Width
-		if !state.has_width {
-			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
-				state.width = prev.computed_width
-			} else if w, ok := box.width.(lc.Fixed); ok {
-				state.width = w.value
-			}
-		}
+		// A 'from' tween ALWAYS targets the true layout position.
+		// We forcefully reset the state here to erase interrupted mid-tween coordinates.
+		if w, ok := box.width.(lc.Fixed); ok do state.width = w.value
+		else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.width = prev.computed_width
 
-		// Sync Height
-		if !state.has_height {
-			if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok {
-				state.height = prev.computed_height
-			} else if h, ok := box.height.(lc.Fixed); ok {
-				state.height = h.value
-			}
+		if h, ok := box.height.(lc.Fixed); ok do state.height = h.value
+		else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.height = prev.computed_height
+
+		if l, ok := box.left.?; ok do state.x = l
+		else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.x = prev.left.? or_else 0.0
+		else do state.x = 0.0
+
+		if t, ok := box.top.?; ok do state.y = t
+		else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.y = prev.top.? or_else 0.0
+		else do state.y = 0.0
+
+		if box.user_data != nil {
+			el := (^Element)(box.user_data)
+			if props.bg_color != nil do state.bg_color = transmute([4]f32)(el.style.bg_color.? or_else Color{0, 0, 0, 0})
+			if props.text_color != nil do state.text_color = transmute([4]f32)(el.style.text_color.? or_else Color{0, 0, 0, 1})
+			if props.border_color != nil do state.border_color = transmute([4]f32)(el.style.border_color.? or_else Color{0, 0, 0, 0})
 		}
 
 		calculated_delay := props.delay + (props.stagger * f32(i))
@@ -211,22 +274,76 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 
 		if v, ok := props.width.?; ok {
 			state.has_width = true
-			append(&tweens, anim.Property_Tween{target = &state.width, from = v})
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.width,
+					from = v,
+					clear_flag = &state.has_width,
+				},
+			)
 		}
 		if v, ok := props.height.?; ok {
 			state.has_height = true
-			append(&tweens, anim.Property_Tween{target = &state.height, from = v})
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.height,
+					from = v,
+					clear_flag = &state.has_height,
+				},
+			)
 		}
 		if v, ok := props.opacity.?; ok {
 			append(&tweens, anim.Property_Tween{target = &state.opacity, from = v})
 		}
 		if v, ok := props.x.?; ok {
 			state.has_x = true
-			append(&tweens, anim.Property_Tween{target = &state.x, to = v}) // Use `from = v` in from()
+			append(
+				&tweens,
+				anim.Property_Tween{target = &state.x, from = v, clear_flag = &state.has_x},
+			)
 		}
 		if v, ok := props.y.?; ok {
 			state.has_y = true
-			append(&tweens, anim.Property_Tween{target = &state.y, to = v}) // Use `from = v` in from()
+			append(
+				&tweens,
+				anim.Property_Tween{target = &state.y, from = v, clear_flag = &state.has_y},
+			)
+		}
+
+		if v, ok := props.bg_color.?; ok {
+			state.has_bg_color = true
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.bg_color,
+					from_color = v,
+					clear_flag = &state.has_bg_color,
+				},
+			)
+		}
+		if v, ok := props.text_color.?; ok {
+			state.has_text_color = true
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.text_color,
+					from_color = v,
+					clear_flag = &state.has_text_color,
+				},
+			)
+		}
+		if v, ok := props.border_color.?; ok {
+			state.has_border_color = true
+			append(
+				&tweens,
+				anim.Property_Tween {
+					target = &state.border_color,
+					from_color = v,
+					clear_flag = &state.has_border_color,
+				},
+			)
 		}
 
 		safe_ease := props.ease
@@ -255,14 +372,13 @@ _resolve_targets :: proc(ctx: ^UI_Context, target: Anim_Target) -> [dynamic]^lc.
 			append(&results, box)
 		}
 	case Class:
-		// Traverse deterministically via the root boxes
 		for root in ctx.layout.root_boxes {
 			_collect_by_class(root, t, &results)
 		}
 	case lc.Box_ID:
-		// Implement Box ID
-		for root in ctx.layout.root_boxes {
-			_collect_by_id(root, t, &results)
+		// NEW: Instantly resolve Box ID via the hashmap instead of recursing
+		if box, ok := ctx.layout.all_boxes[t]; ok {
+			append(&results, box)
 		}
 	}
 	return results
@@ -292,7 +408,7 @@ _collect_by_id :: proc(box: ^lc.Box, target: lc.Box_ID, results: ^[dynamic]^lc.B
 
 	if box.id == target {
 		append(results, box)
-		return // Uncomment this early return to optimize if your IDs are strictly unique
+		return
 	}
 
 	for child in box.children {

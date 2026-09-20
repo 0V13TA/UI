@@ -40,7 +40,6 @@ solve_cubic_bezier :: proc(x1, y1, x2, y2, x: f32) -> f32 {
 	upper: f32 = 1.0
 	t: f32 = x
 
-	// Binary search for parametric 't' given x
 	for _ in 0 ..< 15 {
 		current_x := _bezier_coord(x1, x2, t)
 		if math.abs(current_x - x) < 0.001 do break
@@ -58,11 +57,14 @@ solve_cubic_bezier :: proc(x1, y1, x2, y2, x: f32) -> f32 {
 Tween_Target :: union {
 	^f32,
 	^lc.Sizing,
+	^[4]f32,
 }
 
 Property_Tween :: struct {
-	target:   Tween_Target,
-	from, to: f32,
+	target:               Tween_Target,
+	from, to:             f32,
+	from_color, to_color: [4]f32,
+	clear_flag:           ^bool,
 }
 
 Tween_Vars :: struct {
@@ -73,13 +75,17 @@ Tween_Vars :: struct {
 }
 
 Tween :: struct {
-	target:   Tween_Target, // Updated to use the union
-	from, to: f32,
-	duration: f32,
-	delay:    f32, // Added for sequencing
-	elapsed:  f32,
-	easing:   Easing,
-	done:     bool,
+	delay:                f32,
+	elapsed:              f32,
+	from, to:             f32,
+	from_color, to_color: [4]f32,
+	duration:             f32,
+	done:                 bool,
+	is_from:              bool,
+	clear_flag:           ^bool,
+	easing:               Easing,
+	target:               Tween_Target,
+	on_complete:          Callback_Fn,
 }
 
 Engine :: struct {
@@ -89,19 +95,30 @@ Engine :: struct {
 update :: proc(engine: ^Engine, dt: f32) {
 	#reverse for &t, i in engine.tweens {
 		if t.done {
+			if t.elapsed >= t.duration && t.on_complete != nil {
+				t.on_complete(0, nil)
+			}
 			unordered_remove(&engine.tweens, i)
 			continue
 		}
 
-		// Handle delays
 		if t.delay > 0.0 {
 			t.delay -= dt
+			if t.is_from {
+				switch ptr in t.target {
+				case ^f32:
+					ptr^ = t.from
+				case ^lc.Sizing:
+					ptr^ = lc.Fixed{t.from}
+				case ^[4]f32:
+					ptr^ = t.from_color
+				}
+			}
 			continue
 		}
 
 		t.elapsed = min(t.elapsed + dt, t.duration)
 
-		// NEW: Unpack the Easing union
 		progress: f32 = 1.0
 		if t.duration > 0.0 {
 			ratio := t.elapsed / t.duration
@@ -113,24 +130,27 @@ update :: proc(engine: ^Engine, dt: f32) {
 			}
 		}
 
-		// The interpolated raw float
-		current_val := t.from + (t.to - t.from) * progress
-
-		// THE MAGIC: Write back to memory based on the target type
 		switch ptr in t.target {
 		case ^f32:
-			ptr^ = current_val
+			ptr^ = t.from + (t.to - t.from) * progress
 		case ^lc.Sizing:
-			ptr^ = lc.Fixed{current_val} // Force structural reflows to Fixed
+			ptr^ = lc.Fixed{t.from + (t.to - t.from) * progress}
+		case ^[4]f32:
+			ptr^[0] = t.from_color[0] + (t.to_color[0] - t.from_color[0]) * progress
+			ptr^[1] = t.from_color[1] + (t.to_color[1] - t.from_color[1]) * progress
+			ptr^[2] = t.from_color[2] + (t.to_color[2] - t.from_color[2]) * progress
+			ptr^[3] = t.from_color[3] + (t.to_color[3] - t.from_color[3]) * progress
 		}
 
-		if t.elapsed >= t.duration do t.done = true
+		if t.elapsed >= t.duration {
+			t.done = true
+			if t.clear_flag != nil do t.clear_flag^ = false
+		}
 	}
 }
 
-// animations/tween.odin
 @(private)
-get_current_val :: proc(target: Tween_Target) -> f32 {
+get_current_f32 :: proc(target: Tween_Target) -> f32 {
 	switch ptr in target {
 	case ^f32:
 		return ptr^
@@ -142,64 +162,68 @@ get_current_val :: proc(target: Tween_Target) -> f32 {
 			return v.value
 		case lc.ViewPercent:
 			return v.value
-		case:
-			return 0.0 // Fallback for Fit/Grow/Shrink
 		}
+	case ^[4]f32:
+		return 0.0
 	}
 	return 0.0
 }
 
-// gsap.to() - Starts at current memory value, animates to target
 to :: proc(engine: ^Engine, vars: Tween_Vars) {
 	for prop in vars.properties {
-		start_val := get_current_val(prop.target)
-		if start_val == prop.to do continue
-		_register_tween(engine, prop.target, start_val, prop.to, vars)
+		adjusted_prop := prop
+		switch ptr in prop.target {
+		case ^[4]f32:
+			start_val := ptr^
+			if start_val == prop.to_color do continue
+			adjusted_prop.from_color = start_val
+		case ^f32, ^lc.Sizing:
+			start_val := get_current_f32(prop.target)
+			if start_val == prop.to do continue
+			adjusted_prop.from = start_val
+		}
+		_register_tween(engine, adjusted_prop, vars, false)
 	}
 }
 
-// gsap.from() - Snaps to provided value, animates back to current memory state
 from :: proc(engine: ^Engine, vars: Tween_Vars) {
 	for prop in vars.properties {
-		end_val := get_current_val(prop.target)
-		if prop.from == end_val do continue
-
-		// Instantly snap the UI to the 'from' state
+		adjusted_prop := prop
 		switch ptr in prop.target {
-		case ^f32:
-			ptr^ = prop.from
-		case ^lc.Sizing:
-			ptr^ = lc.Fixed{prop.from}
+		case ^[4]f32:
+			end_val := ptr^
+			if prop.from_color == end_val do continue
+			adjusted_prop.to_color = end_val
+		case ^f32, ^lc.Sizing:
+			end_val := get_current_f32(prop.target)
+			if prop.from == end_val do continue
+			adjusted_prop.to = end_val
 		}
-
-		_register_tween(engine, prop.target, prop.from, end_val, vars)
+		_register_tween(engine, adjusted_prop, vars, true)
 	}
 }
 
-// gsap.fromTo() - Explicit start and end
 from_to :: proc(engine: ^Engine, vars: Tween_Vars) {
 	for prop in vars.properties {
-		if prop.from == prop.to do continue
-
 		switch ptr in prop.target {
-		case ^f32:
-			ptr^ = prop.from
-		case ^lc.Sizing:
-			ptr^ = lc.Fixed{prop.from}
+		case ^[4]f32:
+			if prop.from_color == prop.to_color do continue
+		case ^f32, ^lc.Sizing:
+			if prop.from == prop.to do continue
 		}
-
-		_register_tween(engine, prop.target, prop.from, prop.to, vars)
+		_register_tween(engine, prop, vars, true)
 	}
 }
 
-
 @(private)
-_register_tween :: proc(engine: ^Engine, target: Tween_Target, from, to: f32, vars: Tween_Vars) {
-	// Kill any existing tween already targeting this exact pointer — otherwise
-	// two tweens racing to write the same ^f32 every frame produces flicker/
-	// undefined-looking results, not a clean "latest one wins."
+_register_tween :: proc(
+	engine: ^Engine,
+	prop: Property_Tween,
+	vars: Tween_Vars,
+	is_from: bool = false,
+) {
 	for &existing in engine.tweens {
-		if existing.target == target {
+		if existing.target == prop.target {
 			existing.done = true
 		}
 	}
@@ -207,12 +231,17 @@ _register_tween :: proc(engine: ^Engine, target: Tween_Target, from, to: f32, va
 	append(
 		&engine.tweens,
 		Tween {
-			target = target,
-			from = from,
-			to = to,
+			target = prop.target,
+			from = prop.from,
+			to = prop.to,
+			from_color = prop.from_color,
+			to_color = prop.to_color,
 			duration = vars.duration,
 			delay = vars.delay,
 			easing = vars.ease_func,
+			is_from = is_from,
+			on_complete = vars.on_complete,
+			clear_flag = prop.clear_flag,
 		},
 	)
 }
