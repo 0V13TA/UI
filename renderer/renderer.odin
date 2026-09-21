@@ -135,6 +135,10 @@ Element :: struct {
 	resolved_bg_color:      Color,
 	resolved_object_fit:    Object_Fit,
 	resolved_bg_image:      ^sdl.Texture,
+
+  // Canvas Renderer Callback
+  custom_render:          proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr),
+	custom_render_data:     rawptr,
 }
 
 Glyph_Key :: struct {
@@ -1106,6 +1110,35 @@ render_box :: proc(
 			// Fallback to standard fast-path for non-rounded images
 			sdl.RenderCopy(renderer, el.resolved_bg_image, &src_rect, &dst_rect)
 		}
+	}
+
+  // --- Custom Canvas Rendering ---
+	if el.custom_render != nil {
+		// Calculate the inner bounds so custom drawings respect layout padding and borders
+		inner_bounds := sdl.Rect {
+			x = bounds.x + i32(box.border[3] + box.padding[3]),
+			y = bounds.y + i32(box.border[0] + box.padding[0]),
+			w = bounds.w - i32(box.border[3] + box.border[1] + box.padding[3] + box.padding[1]),
+			h = bounds.h - i32(box.border[0] + box.border[2] + box.padding[0] + box.padding[2]),
+		}
+
+		// Ensure raw SDL calls don't bleed outside the component or scroll-view bounds
+		current_sdl_clip: sdl.Rect
+		sdl.RenderGetClipRect(renderer, &current_sdl_clip)
+		has_clip := sdl.RenderIsClipEnabled(renderer)
+		
+		canvas_clip := inner_bounds
+		if has_clip {
+			sdl.IntersectRect(&current_sdl_clip, &canvas_clip, &canvas_clip)
+		}
+		sdl.RenderSetClipRect(renderer, &canvas_clip)
+
+		// Fire the custom drawing code!
+		el.custom_render(renderer, inner_bounds, el.custom_render_data)
+
+		// Restore the previous clipping state
+		if has_clip do sdl.RenderSetClipRect(renderer, &current_sdl_clip)
+		else do sdl.RenderSetClipRect(renderer, nil)
 	}
 
 	// Draw Cached Text

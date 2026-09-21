@@ -4,70 +4,75 @@ import anim "./animations"
 import ev "./events"
 import lc "./layout_calc"
 import "./renderer"
+import "core:fmt"
+import "core:strings"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 import ttf "vendor:sdl2/ttf"
 
-// ---------------------------------------------------------
-// --- 1. APPLICATION STATE
-// ---------------------------------------------------------
+// Global Fonts
+WALLPOET :: "./assets/font/Wallpoet-Regular.ttf"
+CAACUPEONE :: "./assets/font/CaacupeOne-Regular.ttf"
+SANKOFA_DISPLAY :: "./assets/font/SankofaDisplay-Regular.ttf"
+KABLAMMO :: "./assets/font/Kablammo-Regular-VariableFont_MORF.ttf"
 
+// Centralized Application State
 App_State :: struct {
+	sdl_rend:          ^sdl.Renderer,
+
+	// Navigation
 	list_items:        []string,
 	list_selected:     int,
 	main_router:       renderer.Router_State,
 
-	// Component Test States
-	test_switch:       bool,
-	test_color:        [4]f32,
-	color_picker_open: bool,
-	selected_date:     [3]int, // [YYYY, MM, DD]
-	date_picker_open:  bool,
+	// Tab State (Dashboard)
+	tab_labels:        []string,
+	active_tab:        int,
+	tab_router:        renderer.Router_State,
 
-	// Carousel State
-	sdl_rend:          ^sdl.Renderer,
+	// Dashboard Form State
+	my_options:        []string,
+	my_dropdown_open:  bool,
+	my_selected_idx:   int,
+	my_switch_val:     bool,
+	my_multi_open:     bool,
+	my_multi_states:   [4]bool,
+	my_combo_open:     bool,
+	my_combo_idx:      int,
+	my_combo_buf:      [dynamic]u8,
+	my_progress:       f32,
+	my_toast_open:     bool,
+
+	// Directory State
+	table_headers:     []string,
+	users:             [dynamic][4]string,
+	table_cols:        []lc.Sizing,
+	form_user_name:    [dynamic]u8,
+	target_user_id:    [dynamic]u8,
+	form_role_idx:     int,
+	form_status_idx:   int,
+	status_options:    []string,
+	create_modal_open: bool,
+	delete_modal_open: bool,
+	next_id:           int,
+
+	// Settings State
+	accordion_open:    bool,
+
+	// New Rapid-Fire Components
+	my_color:          [4]f32,
+	color_picker_open: bool,
 	carousel_idx:      int,
 	carousel_images:   []string,
+	selected_date:     [3]int, // [YYYY, MM, DD]
+	date_picker_open:  bool,
 }
 
 // ---------------------------------------------------------
-// --- 2. PAGE PROCEDURES
+// --- PAGE PROCEDURES
 // ---------------------------------------------------------
 
-page_home :: proc(
-	ui_ctx: ^renderer.UI_Context,
-	ev_ctx: ^ev.Event_Context,
-	anim_ctx: ^anim.Context,
-	raw_state: rawptr,
-) {
-	renderer.scroll_begin(
-		ui_ctx,
-		ev_ctx,
-		user_style = {
-			gap = 24,
-			width = lc.Percent{100},
-			height = lc.Percent{100},
-			padding = renderer.space(40),
-		},
-		salt = "home_scroll",
-	)
-	defer renderer.scroll_end(ui_ctx)
-
-	renderer.text(
-		ui_ctx,
-		ev_ctx,
-		"Welcome Home",
-		user_style = {font_size = 48, text_color = renderer.Color{0.1, 0.1, 0.1, 1}},
-	)
-	renderer.text(
-		ui_ctx,
-		ev_ctx,
-		"This is a minimal test of the isolated router component.",
-		user_style = {text_color = renderer.Color{0.4, 0.4, 0.4, 1}},
-	)
-}
-
-page_components :: proc(
+page_dashboard :: proc(
 	ui_ctx: ^renderer.UI_Context,
 	ev_ctx: ^ev.Event_Context,
 	anim_ctx: ^anim.Context,
@@ -82,51 +87,178 @@ page_components :: proc(
 			gap = 32,
 			width = lc.Percent{100},
 			height = lc.Percent{100},
-			padding = renderer.space(40),
+			padding = renderer.space(32, 48),
 		},
-		salt = "comp_scroll",
+		salt = "dash_scroll",
 	)
 	defer renderer.scroll_end(ui_ctx)
 
 	renderer.text(
 		ui_ctx,
 		ev_ctx,
-		"Interactive Widgets",
-		user_style = {font_size = 48, text_color = renderer.Color{0.1, 0.1, 0.1, 1}},
+		state.list_items[state.main_router.current_idx],
+		user_style = {font_size = 64, font_name = SANKOFA_DISPLAY},
 	)
 
-	// A flex row to hold our components side-by-side
-	renderer.element_open(ui_ctx, {style = {direction = .ROW, gap = 48, width = lc.Percent{100}}})
-	defer renderer.element_close(ui_ctx)
+	renderer.tabs(ui_ctx, ev_ctx, state.tab_labels, &state.active_tab)
 
-	// A flex column to stack them neatly on the left
-	renderer.element_open(ui_ctx, {style = {direction = .COLUMN, gap = 24, width = lc.Fit(true)}})
-	defer renderer.element_close(ui_ctx)
-
-	renderer.switch_toggle(ui_ctx, ev_ctx, anim_ctx, "Toggle Feature", &state.test_switch)
-
-	renderer.color_picker(
+	tab_pages := []renderer.Page_Proc{tab_controls, tab_statistics}
+	renderer.router_view(
 		ui_ctx,
 		ev_ctx,
 		anim_ctx,
-		"Theme Color",
-		&state.test_color,
-		&state.color_picker_open,
-		salt = "cp1",
-	)
-
-	renderer.date_picker(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx,
-		"Launch Date",
-		&state.selected_date,
-		&state.date_picker_open,
-		salt = "dp1",
+		&state.tab_router,
+		state.active_tab,
+		tab_pages,
+		state,
+		wrapper_style = {height = lc.Fit(true), gap = 32},
+		salt = "tab_router",
 	)
 }
 
-page_carousel :: proc(
+tab_controls :: proc(
+	ui_ctx: ^renderer.UI_Context,
+	ev_ctx: ^ev.Event_Context,
+	anim_ctx: ^anim.Context,
+	raw_state: rawptr,
+) {
+	state := (^App_State)(raw_state)
+
+	renderer.element_open(ui_ctx, {style = {direction = .ROW, gap = 24, width = lc.Percent{100}}})
+	defer renderer.element_close(ui_ctx) // Close Row
+
+	// --- Column 1 ---
+	{
+		renderer.element_open(
+			ui_ctx,
+			{style = {direction = .COLUMN, gap = 16, width = lc.Grow{1}}},
+		)
+		defer renderer.element_close(ui_ctx)
+
+		renderer.dropdown(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			"Select a role...",
+			state.my_options,
+			&state.my_selected_idx,
+			&state.my_dropdown_open,
+			wrapper_style = {
+				width = lc.Percent{100},
+				border = renderer.space(1),
+				padding = renderer.space(12, 16),
+				border_radius = renderer.space(6),
+				bg_color = renderer.Color{1, 1, 1, 1},
+				text_color = renderer.Color{0, 0, 0, 1},
+			},
+		)
+		renderer.combobox(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			"Search roles...",
+			state.my_options,
+			&state.my_combo_buf,
+			&state.my_combo_idx,
+			&state.my_combo_open,
+			wrapper_style = {
+				width = lc.Percent{100},
+				height = lc.Fixed{50},
+				padding = [4]f32{8, 8, 8, 8},
+				border = [4]f32{1, 1, 1, 1},
+				border_radius = [4]f32{6, 6, 6, 6},
+				bg_color = renderer.Color{1, 1, 1, 1},
+			},
+		)
+	}
+
+	// --- Column 2 ---
+	{
+		renderer.element_open(
+			ui_ctx,
+			{style = {direction = .COLUMN, gap = 16, width = lc.Grow{1}}},
+		)
+		defer renderer.element_close(ui_ctx)
+
+		renderer.multi_select(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			"Permissions",
+			state.my_options,
+			state.my_multi_states[:],
+			&state.my_multi_open,
+			wrapper_style = {
+				width = lc.Percent{100},
+				border = [4]f32{1, 1, 1, 1},
+				padding = [4]f32{12, 16, 12, 16},
+				border_radius = [4]f32{6, 6, 6, 6},
+				bg_color = renderer.Color{1, 1, 1, 1},
+				text_color = renderer.Color{0, 0, 0, 1},
+			},
+		)
+		renderer.switch_toggle(ui_ctx, ev_ctx, anim_ctx, "Dark Mode", &state.my_switch_val)
+	}
+
+	// --- Column 3 (New Components) ---
+	{
+		renderer.element_open(
+			ui_ctx,
+			{style = {direction = .COLUMN, gap = 16, width = lc.Grow{1}}},
+		)
+		defer renderer.element_close(ui_ctx)
+
+		renderer.color_picker(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			"Brand Accent",
+			&state.my_color,
+			&state.color_picker_open,
+			salt = "cp1",
+		)
+
+		// The exact 6-argument call required by components.odin
+		renderer.date_picker(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			"Launch Date",
+			&state.selected_date,
+			&state.date_picker_open,
+			salt = "dp1",
+		)
+
+		renderer.carousel_paths(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			state.sdl_rend,
+			state.carousel_images,
+			&state.carousel_idx,
+      wrapper_style = {width = lc.Percent{100}}, // Explicitly bound the Fit(true) parent
+			viewport_style = {width = lc.Percent{100}, height = lc.Fixed{160}},
+			arrow_style = {
+				width = lc.Fixed{32},
+				height = lc.Fixed{32},
+				padding = renderer.space(8),
+			},
+      auto_play = true,
+			salt = "carousel1",
+		)
+	}
+}
+
+tab_statistics :: proc(
+	ui_ctx: ^renderer.UI_Context,
+	ev_ctx: ^ev.Event_Context,
+	anim_ctx: ^anim.Context,
+	raw_state: rawptr,
+) {
+	renderer.text(ui_ctx, ev_ctx, "Statistics content goes here")
+}
+
+page_directory :: proc(
 	ui_ctx: ^renderer.UI_Context,
 	ev_ctx: ^ev.Event_Context,
 	anim_ctx: ^anim.Context,
@@ -141,52 +273,272 @@ page_carousel :: proc(
 			gap = 32,
 			width = lc.Percent{100},
 			height = lc.Percent{100},
-			padding = renderer.space(40),
+			padding = renderer.space(32, 48),
 		},
-		salt = "carousel_scroll",
+		salt = "dir_scroll",
 	)
 	defer renderer.scroll_end(ui_ctx)
 
 	renderer.text(
 		ui_ctx,
 		ev_ctx,
-		"Image Gallery",
-		user_style = {font_size = 48, text_color = renderer.Color{0.1, 0.1, 0.1, 1}},
+		state.list_items[state.main_router.current_idx],
+		user_style = {font_size = 64, font_name = SANKOFA_DISPLAY},
 	)
 
-	// Center the carousel horizontally
+	display_data := make([][]string, len(state.users), context.temp_allocator)
+	for i in 0 ..< len(state.users) {
+		display_data[i] = state.users[i][:]
+	}
+
+	renderer.table(
+		ui_ctx,
+		ev_ctx,
+		state.table_headers,
+		display_data,
+		state.table_cols,
+		cell_text_style = {font_name = WALLPOET},
+	)
+
 	renderer.element_open(
 		ui_ctx,
 		{
 			style = {
-				direction = .COLUMN,
-				align_items = .CENTER,
+				direction = .ROW,
+				justify_content = .END,
+				gap = 12,
 				width = lc.Percent{100},
-				padding = renderer.space(40, 0),
+				padding = renderer.space(16, 0, 0, 0),
 			},
 		},
 	)
 	defer renderer.element_close(ui_ctx)
 
-	// Massive Viewport
-	renderer.carousel_paths(
+	if renderer.button(
+		ui_ctx,
+		ev_ctx,
+		"Add User",
+		user_style = {bg_color = renderer.Color{0.2, 0.6, 0.3, 1}},
+	) {
+		state.create_modal_open = true
+		clear(&state.form_user_name)
+		state.form_role_idx = 0
+		state.form_status_idx = 0
+	}
+
+	if renderer.button(
+		ui_ctx,
+		ev_ctx,
+		"Delete User",
+		user_style = {bg_color = renderer.Color{0.9, 0.2, 0.2, 1}},
+	) {
+		state.delete_modal_open = true
+		clear(&state.target_user_id)
+	}
+
+	// Modals (Rendered Out-of-Flow)
+	if renderer.modal_begin(
+		ui_ctx,
+		ev_ctx,
+		anim_ctx,
+		&state.create_modal_open,
+		salt = "create_modal",
+	) {
+		defer renderer.modal_end(ui_ctx, true)
+		renderer.text(
+			ui_ctx,
+			ev_ctx,
+			"New User",
+			user_style = {font_size = 32, font_name = SANKOFA_DISPLAY},
+		)
+		renderer.text_input(
+			ui_ctx,
+			ev_ctx,
+			&state.form_user_name,
+			placeholder = "Enter Name...",
+			salt = "name_input",
+		)
+
+		@(static) role_open: bool
+		renderer.dropdown(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			"Role",
+			state.my_options,
+			&state.form_role_idx,
+			&role_open,
+			salt = "role_drop",
+		)
+
+		@(static) status_open: bool
+		renderer.dropdown(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			"Status",
+			state.status_options,
+			&state.form_status_idx,
+			&status_open,
+			salt = "status_drop",
+		)
+
+		renderer.element_open(
+			ui_ctx,
+			{
+				style = {
+					direction = .ROW,
+					gap = 12,
+					justify_content = .END,
+					width = lc.Percent{100},
+					padding = [4]f32{16, 0, 0, 0},
+				},
+			},
+		)
+		defer renderer.element_close(ui_ctx)
+
+		if renderer.button(ui_ctx, ev_ctx, "Cancel", user_style = {bg_color = renderer.Color{0.9, 0.9, 0.9, 1}, text_color = renderer.Color{0.1, 0.1, 0.1, 1}}) do state.create_modal_open = false
+
+		if renderer.button(
+			ui_ctx,
+			ev_ctx,
+			"Save User",
+			user_style = {bg_color = renderer.Color{0.15, 0.4, 0.8, 1}},
+		) {
+			new_id := fmt.tprintf("%d", state.next_id)
+			state.next_id += 1
+			cloned_name := strings.clone(string(state.form_user_name[:]))
+			append(
+				&state.users,
+				[4]string {
+					new_id,
+					cloned_name,
+					state.my_options[state.form_role_idx],
+					state.status_options[state.form_status_idx],
+				},
+			)
+			state.create_modal_open = false
+			state.my_toast_open = true
+		}
+	}
+
+	if renderer.modal_begin(
+		ui_ctx,
+		ev_ctx,
+		anim_ctx,
+		&state.delete_modal_open,
+		salt = "del_modal",
+	) {
+		defer renderer.modal_end(ui_ctx, true)
+		renderer.text(
+			ui_ctx,
+			ev_ctx,
+			"Delete User",
+			user_style = {font_size = 32, font_name = SANKOFA_DISPLAY},
+		)
+		renderer.text(
+			ui_ctx,
+			ev_ctx,
+			"Enter the ID of the user you want to permanently delete.",
+			user_style = {text_color = renderer.Color{0.4, 0.4, 0.4, 1}},
+		)
+		renderer.text_input(
+			ui_ctx,
+			ev_ctx,
+			&state.target_user_id,
+			placeholder = "User ID (e.g. 101)",
+			salt = "id_input",
+		)
+
+		renderer.element_open(
+			ui_ctx,
+			{
+				style = {
+					direction = .ROW,
+					gap = 12,
+					justify_content = .END,
+					width = lc.Percent{100},
+					padding = [4]f32{16, 0, 0, 0},
+				},
+			},
+		)
+		defer renderer.element_close(ui_ctx)
+
+		if renderer.button(ui_ctx, ev_ctx, "Cancel", user_style = {bg_color = renderer.Color{0.9, 0.9, 0.9, 1}, text_color = renderer.Color{0.1, 0.1, 0.1, 1}}) do state.delete_modal_open = false
+
+		if renderer.button(
+			ui_ctx,
+			ev_ctx,
+			"Confirm Delete",
+			user_style = {bg_color = renderer.Color{0.9, 0.2, 0.2, 1}},
+		) {
+			target_str := string(state.target_user_id[:])
+			for i in 0 ..< len(state.users) {
+				if state.users[i][0] == target_str {
+					ordered_remove(&state.users, i)
+					break
+				}
+			}
+			state.delete_modal_open = false
+		}
+	}
+}
+
+page_settings :: proc(
+	ui_ctx: ^renderer.UI_Context,
+	ev_ctx: ^ev.Event_Context,
+	anim_ctx: ^anim.Context,
+	raw_state: rawptr,
+) {
+	state := (^App_State)(raw_state)
+
+	renderer.scroll_begin(
+		ui_ctx,
+		ev_ctx,
+		user_style = {
+			gap = 32,
+			width = lc.Percent{100},
+			height = lc.Percent{100},
+			padding = renderer.space(32, 48),
+		},
+		salt = "set_scroll",
+	)
+	defer renderer.scroll_end(ui_ctx)
+
+	renderer.text(
+		ui_ctx,
+		ev_ctx,
+		state.list_items[state.main_router.current_idx],
+		user_style = {font_size = 64, font_name = SANKOFA_DISPLAY},
+	)
+
+	if renderer.accordion_begin(
 		ui_ctx,
 		ev_ctx,
 		anim_ctx,
 		state.sdl_rend,
-		state.carousel_images,
-		&state.carousel_idx,
-		viewport_style = {
-			width = lc.Fixed{600},
-			height = lc.Fixed{400},
-			border_radius = renderer.space(12),
-		},
-		salt = "main_carousel",
-	)
+		"Advanced Settings",
+		&state.accordion_open,
+	) {
+		defer renderer.accordion_end(ui_ctx, true)
+		renderer.text(
+			ui_ctx,
+			ev_ctx,
+			"Warning: Modifying these values may break the layout engine.",
+			user_style = {text_color = renderer.Color{0.6, 0.6, 0.6, 1}},
+		)
+		renderer.switch_toggle(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			"Enable Experimental Rendering",
+			&state.my_switch_val,
+		)
+	}
 }
 
 // ---------------------------------------------------------
-// --- 3. MAIN LOOP
+// --- MAIN APPLICATION
 // ---------------------------------------------------------
 
 main :: proc() {
@@ -198,7 +550,7 @@ main :: proc() {
 	defer img.Quit()
 
 	window := sdl.CreateWindow(
-		"OvietaOS - Minimal Test",
+		"Odin UI Engine - Dashboard",
 		sdl.WINDOWPOS_CENTERED,
 		sdl.WINDOWPOS_CENTERED,
 		1024,
@@ -209,6 +561,7 @@ main :: proc() {
 
 	sdl_rend := sdl.CreateRenderer(window, -1, {.ACCELERATED, .PRESENTVSYNC})
 	defer sdl.DestroyRenderer(sdl_rend)
+
 	sdl.SetRenderDrawBlendMode(sdl_rend, .BLEND)
 
 	ui_ctx := renderer.ui_context_create(1024, 768)
@@ -240,22 +593,46 @@ main :: proc() {
 	perf_freq := f64(sdl.GetPerformanceFrequency())
 	last_time := sdl.GetPerformanceCounter()
 
-	// Setup our minimal state
 	app := App_State {
-		sdl_rend        = sdl_rend,
-		list_items      = {"Home", "Components", "Carousel"},
-		list_selected   = 0,
-		test_color      = {0.15, 0.4, 0.8, 1.0},
-		selected_date   = {2026, 9, 20},
-		// Swap these paths out for actual large images if you have them!
-		carousel_images = {
+		sdl_rend         = sdl_rend,
+		list_items       = {"Dashboard", "User Directory", "Settings"},
+		list_selected    = 0,
+		tab_labels       = {"Controls", "Statistics"},
+		active_tab       = 0,
+		my_options       = {"Admin", "Developer", "Designer", "Guest"},
+		my_selected_idx  = -1,
+		my_combo_idx     = -1,
+		my_combo_buf     = make([dynamic]u8),
+		my_progress      = 0.35,
+		accordion_open   = true,
+		table_headers    = {"ID", "Name", "Role", "Status"},
+		users            = make([dynamic][4]string),
+		table_cols       = {lc.Fixed{60}, lc.Grow{1}, lc.Fixed{120}, lc.Fixed{100}},
+		form_user_name   = make([dynamic]u8),
+		target_user_id   = make([dynamic]u8),
+		status_options   = {"Active", "Offline"},
+		next_id          = 104,
+		my_color         = {0.15, 0.4, 0.8, 1.0},
+		carousel_images  = {
 			"assets/pictures/carousel/slide1.png",
 			"assets/pictures/carousel/slide2.png",
 			"assets/pictures/carousel/slide3.png",
 		},
+		selected_date    = {2026, 9, 20},
+		date_picker_open = false,
 	}
+	defer delete(app.my_combo_buf)
+	defer delete(app.users)
+	defer delete(app.form_user_name)
+	defer delete(app.target_user_id)
 
-	my_pages := []renderer.Page_Proc{page_home, page_components, page_carousel}
+	append(&app.users, [4]string{"101", "Alice Doe", "Admin", "Active"})
+	append(&app.users, [4]string{"102", "Bob Smith", "Developer", "Offline"})
+	append(&app.users, [4]string{"103", "Charlie", "Designer", "Active"})
+
+	my_pages := []renderer.Page_Proc{page_dashboard, page_directory, page_settings}
+	my_context_x, my_context_y: f32 = 0, 0
+	my_context_open := false
 
 	running := true
 	for running {
@@ -270,6 +647,12 @@ main :: proc() {
 		for sdl.PollEvent(&event) {
 			ev.pump_events(&ev_ctx, &event)
 			if event.type == .QUIT do running = false
+
+			if event.type == .MOUSEBUTTONDOWN && event.button.button == sdl.BUTTON_RIGHT {
+				my_context_open = true
+				my_context_x = f32(event.button.x)
+				my_context_y = f32(event.button.y)
+			}
 		}
 
 		target_cursor := cursor_arrow
@@ -286,87 +669,139 @@ main :: proc() {
 		win_w, win_h: i32
 		sdl.GetWindowSize(window, &win_w, &win_h)
 
-		// --- BUILD UI TREE ---
+		// ---------------------------------------------------------
+		// --- UI LAYOUT TREE
+		// ---------------------------------------------------------
 		renderer.ui_begin_frame(ui_ctx, sdl_rend, win_w, win_h)
 
-		// Root Container
-		renderer.element_open(
-			ui_ctx,
-			{
-				style = {
-					direction = .ROW,
-					width = lc.ViewPercent{100},
-					height = lc.ViewPercent{100},
-					bg_color = renderer.Color{0.96, 0.96, 0.98, 1},
+		{
+			renderer.element_open(
+				ui_ctx,
+				{
+					style = {
+						direction = .ROW,
+						width = lc.ViewPercent{100},
+						height = lc.ViewPercent{100},
+						bg_color = renderer.Color{0.96, 0.96, 0.98, 1},
+					},
 				},
-			},
-		)
+			)
+			defer renderer.element_close(ui_ctx)
 
-		// Sidebar
-		renderer.element_open(
-			ui_ctx,
 			{
-				style = {
-					gap = 24,
-					direction = .COLUMN,
-					width = lc.Fixed{240},
-					height = lc.Percent{100},
-					padding = renderer.space(24, 16),
-					border = renderer.space(0, 1, 0, 0),
-					bg_color = renderer.Color{1, 1, 1, 1},
-					border_color = renderer.Color{0.85, 0.85, 0.85, 1},
-				},
-			},
-		)
-		renderer.text(
-			ui_ctx,
-			&ev_ctx,
-			"TEST OS",
-			user_style = {font_size = 24, text_color = renderer.Color{0.1, 0.1, 0.1, 1}},
-		)
-		renderer.list_view(
-			ui_ctx,
-			&ev_ctx,
-			app.list_items,
-			&app.list_selected,
-			wrapper_style = {
-				height = lc.Grow{1},
-				border = renderer.space(0),
-				bg_color = renderer.Color{0, 0, 0, 0},
-			},
-		)
-		renderer.element_close(ui_ctx) // Close Sidebar
+				renderer.element_open(
+					ui_ctx,
+					{
+						style = {
+							gap = 24,
+							direction = .COLUMN,
+							width = lc.Fixed{240},
+							height = lc.Percent{100},
+							padding = renderer.space(24, 16),
+							border = renderer.space(0, 1, 0, 0),
+							bg_color = renderer.Color{1, 1, 1, 1},
+							border_color = renderer.Color{0.85, 0.85, 0.85, 1},
+						},
+					},
+				)
+				defer renderer.element_close(ui_ctx)
 
-		// Main Content Area (Router handles the layout wrapper)
-		renderer.router_view(
-			ui_ctx,
-			&ev_ctx,
-			&anim_ctx,
-			&app.main_router,
-			app.list_selected,
-			my_pages,
-			&app,
-			salt = "main_router",
-		)
+				renderer.text(
+					ui_ctx,
+					&ev_ctx,
+					"OVIETAOS",
+					user_style = {
+						font_size = 30,
+						font_name = CAACUPEONE,
+						text_color = renderer.Color{0.1, 0.1, 0.1, 1},
+					},
+				)
+				renderer.list_view(
+					ui_ctx,
+					&ev_ctx,
+					app.list_items,
+					&app.list_selected,
+					wrapper_style = {
+						height = lc.Grow{1},
+						direction = .COLUMN,
+						width = lc.Percent{100},
+						border = renderer.space(0),
+						bg_color = renderer.Color{0, 0, 0, 0},
+					},
+				)
+			}
 
-		renderer.element_close(ui_ctx) // Close Root Container
+			renderer.router_view(
+				ui_ctx,
+				&ev_ctx,
+				&anim_ctx,
+				&app.main_router,
+				app.list_selected,
+				my_pages,
+				&app,
+				salt = "main_router",
+			)
 
-		// --- COMPUTE AND RENDER ---
+			{
+				renderer.element_open(
+					ui_ctx,
+					{
+						style = {
+							right = 24.0,
+							bottom = 24.0,
+							z_index = 4000,
+							position = .FIXED,
+							direction = .COLUMN_REVERSE,
+						},
+					},
+				)
+				defer renderer.element_close(ui_ctx)
+				renderer.toast(
+					ui_ctx,
+					&ev_ctx,
+					"Action Successful",
+					"Component library integration complete.",
+					.SUCCESS,
+					&app.my_toast_open,
+				)
+			}
+
+			if active, target := renderer.context_menu_begin(
+				ui_ctx,
+				&ev_ctx,
+				&anim_ctx,
+				my_context_x,
+				my_context_y,
+				&my_context_open,
+			); active {
+				defer renderer.context_menu_end(ui_ctx, true)
+				if renderer.button(ui_ctx, &ev_ctx, "Copy ID", user_style = {text_align = .LEFT}) do my_context_open = false
+				if renderer.button(ui_ctx, &ev_ctx, "Inspect Element", user_style = {text_align = .LEFT}) do my_context_open = false
+				if renderer.button(ui_ctx, &ev_ctx, "Delete Node", user_style = {text_align = .LEFT, text_color = renderer.Color{0.9, 0.2, 0.2, 1}}) do my_context_open = false
+			}
+		}
+
 		roots := renderer.ui_layout_tree(ui_ctx)
-		for root in roots do anim.apply_structural(&anim_ctx, root)
-
+		for root in roots {
+			anim.apply_structural(&anim_ctx, root)
+		}
 		renderer.ui_compute(ui_ctx)
+    anim.process_lifecycles(&anim_ctx, ui_ctx.layout)
 		anim.update(&anim_ctx.engine, frame_dt)
 
 		visual_cb :: proc(user_data: rawptr, state: ^anim.Retained_State) {
 			el := (^renderer.Element)(user_data)
 			if el == nil do return
+
 			el.resolved_opacity = state.opacity
+
 			if state.has_bg_color do el.style.bg_color = transmute(renderer.Color)state.bg_color
 			if state.has_text_color do el.style.text_color = transmute(renderer.Color)state.text_color
 			if state.has_border_color do el.style.border_color = transmute(renderer.Color)state.border_color
 		}
-		for root in roots do anim.apply_visual(&anim_ctx, root, visual_cb)
+		for root in roots {
+			anim.apply_visual(&anim_ctx, root, visual_cb)
+		}
 
 		sdl.SetRenderDrawColor(sdl_rend, 240, 240, 245, 255)
 		sdl.RenderClear(sdl_rend)

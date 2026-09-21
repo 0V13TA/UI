@@ -2510,10 +2510,11 @@ router_view :: proc(
 
 // --- CAROUSEL ---
 DEFAULT_CAROUSEL_WRAPPER :: Style {
-	direction   = .COLUMN, // Stack tightly around viewport
+	direction   = .COLUMN,
 	align_items = .CENTER,
 	width       = lc.Fit(true),
-	position    = .RELATIVE, // Crucial: Anchors the absolute overlays
+	height      = lc.Fit(true),
+	position    = .RELATIVE,
 }
 DEFAULT_CAROUSEL_VIEWPORT :: Style {
 	width         = lc.Fixed{600},
@@ -2527,17 +2528,39 @@ carousel_textures :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
 	anim_ctx: ^anim.Context,
-	sdl_rend: ^sdl.Renderer, // Needed to render the arrow images
+	sdl_rend: ^sdl.Renderer,
 	images: []^sdl.Texture,
 	current_idx: ^int,
 	wrapper_style: Style = {},
 	viewport_style: Style = {},
-	left_arrow: string = "assets/pictures/icons/left.png", // Pass your actual file names here
-	right_arrow: string = "assets/pictures/icons/right.png", // Pass your actual file names here
+	arrow_style: Style = {},
+	left_arrow: string = "assets/pictures/icons/left_button.png",
+	right_arrow: string = "assets/pictures/icons/right_button.png",
+  auto_play: bool = false,
+	auto_play_interval: u32 = 3000,
 	salt := "",
 	loc := #caller_location,
 ) {
+	if len(images) == 0 do return
+
+	current_idx^ = current_idx^ % len(images)
+	if current_idx^ < 0 do current_idx^ += len(images)
+
 	root_id := lc.ID(loc, salt)
+  @(static) last_tick: map[lc.Box_ID]u32
+	if auto_play {
+		if root_id not_in last_tick do last_tick[root_id] = sdl.GetTicks()
+
+		if !is_tree_hovered(ui_ctx, ev_ctx, root_id) {
+			current_tick := sdl.GetTicks()
+			if current_tick - last_tick[root_id] > auto_play_interval {
+				current_idx^ += 1
+				last_tick[root_id] = current_tick
+			}
+		} else {
+			last_tick[root_id] = sdl.GetTicks()
+		}
+	}
 	track_id := lc.ID(root_id, "track")
 	arrows_id := lc.ID(root_id, "arrows")
 	dots_id := lc.ID(root_id, "dots")
@@ -2546,25 +2569,34 @@ carousel_textures :: proc(
 	final_wrapper.position = .RELATIVE
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	// Viewport (Clips the track)
 	final_viewport := merge_styles(DEFAULT_CAROUSEL_VIEWPORT, viewport_style)
 	element_open(ui_ctx, Element{style = final_viewport})
 
-	// Sliding Track
+	// Safely extract fixed dimensions to enforce constraint boundaries
+	vp_width: f32 = 600.0
+	vp_height: f32 = 400.0
+	if w_union, ok := final_viewport.width.?; ok {
+		if w_fixed, is_fixed := w_union.(lc.Fixed); is_fixed do vp_width = w_fixed.value
+	}
+	if h_union, ok := final_viewport.height.?; ok {
+		if h_fixed, is_fixed := h_union.(lc.Fixed); is_fixed do vp_height = h_fixed.value
+	}
+
+	target_x := -f32(current_idx^) * vp_width
+
 	element_open(
 		ui_ctx,
-		Element{_box = {id = track_id}, style = {direction = .ROW, position = .RELATIVE}},
+		Element {
+			_box = {id = track_id},
+			style = {
+				direction = .ROW,
+				position  = .RELATIVE,
+				left      = target_x,
+				width     = lc.Fit(true),
+				// height = lc.Percent{100},
+			},
+		},
 	)
-
-	// --- SAFELY CALCULATE TARGET X ---
-	vp_width: f32 = 600.0
-	if w_union, ok := final_viewport.width.?; ok {
-		#partial switch v in w_union {
-		case lc.Fixed:
-			vp_width = v.value
-		}
-	}
-	target_x := -f32(current_idx^) * vp_width
 
 	@(static) map_init: bool
 	@(static) prev_idx: map[lc.Box_ID]int
@@ -2576,25 +2608,25 @@ carousel_textures :: proc(
 	if track_id not_in prev_idx do prev_idx[track_id] = current_idx^
 
 	if prev_idx[track_id] != current_idx^ {
+		old_x := -f32(prev_idx[track_id]) * vp_width
 		prev_idx[track_id] = current_idx^
-		to(ui_ctx, anim_ctx, track_id, {x = target_x, duration = 0.4, ease = anim.ease_out_exp})
+		from(ui_ctx, anim_ctx, track_id, {x = old_x, duration = 0.4, ease = anim.ease_out_exp})
 	}
 
 	for tex, i in images {
 		slide_style := Style {
-			width      = final_viewport.width,
-			height     = final_viewport.height,
+			width      = lc.Fixed{vp_width},
+			height     = lc.Fixed{vp_height},
 			object_fit = .COVER,
 		}
-		image_texture(ui_ctx, tex, slide_style, fmt.tprintf("slide_%d", i))
+		image_texture(ui_ctx, tex, slide_style, salt = fmt.tprintf("slide_%d", i))
 	}
 	element_close(ui_ctx) // Track
 	element_close(ui_ctx) // Viewport
 
-	// --- HOVER LOGIC FOR ARROWS ---
 	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
-
 	arrows_state := anim.get_state(anim_ctx, arrows_id)
+
 	@(static) prev_hover: map[lc.Box_ID]bool
 	if arrows_id not_in prev_hover {
 		prev_hover[arrows_id] = is_hovered
@@ -2606,8 +2638,6 @@ carousel_textures :: proc(
 		to(ui_ctx, anim_ctx, arrows_id, {opacity = is_hovered ? 1.0 : 0.0, duration = 0.2})
 	}
 
-	// --- ARROWS OVERLAY ---
-	// Conditionally render only if visible, so invisible arrows don't eat clicks
 	if is_hovered || arrows_state.opacity > 0.01 {
 		element_open(
 			ui_ctx,
@@ -2617,66 +2647,54 @@ carousel_textures :: proc(
 					position        = .ABSOLUTE,
 					top             = 0,
 					left            = 0,
-					width           = final_viewport.width,
-					height          = final_viewport.height,
+          width           = lc.Percent{100},
+          height          = lc.Fixed{vp_height}, // Restore this line
 					direction       = .ROW,
 					justify_content = .SPACE_BETWEEN,
 					align_items     = .CENTER,
-					padding         = space(0, 16), // 16px inward from the edges
+					padding         = space(0, 16),
 				},
 			},
 		)
 
-		// Left Arrow
-		if current_idx^ > 0 {
-			if image_button(
-				ui_ctx,
-				ev_ctx,
-				sdl_rend,
-				left_arrow,
-				user_style = {
-					width = lc.Fixed{48},
-					height = lc.Fixed{48},
-					bg_color = Color{0, 0, 0, 0.4},
-					border_radius = space(24),
-					padding = space(12),
-				},
-				salt = "prev",
-			) {
-				current_idx^ -= 1
-			}
-		} else {
-			element_open(ui_ctx, {style = {width = lc.Fixed{48}, height = lc.Fixed{48}}})
-			element_close(ui_ctx)
+		final_arrow_style := merge_styles(
+			Style {
+				width = lc.Fixed{48},
+				height = lc.Fixed{48},
+				bg_color = Color{0, 0, 0, 0.4},
+				border_radius = space(24),
+				padding = space(12),
+			},
+			arrow_style,
+		)
+
+		if image_button(
+			ui_ctx,
+			ev_ctx,
+			sdl_rend,
+			left_arrow,
+			user_style = final_arrow_style,
+			salt = "prev",
+		) {
+      current_idx^ -= 1
+			if auto_play do last_tick[root_id] = sdl.GetTicks()
 		}
 
-		// Right Arrow
-		if current_idx^ < len(images) - 1 {
-			if image_button(
-				ui_ctx,
-				ev_ctx,
-				sdl_rend,
-				right_arrow,
-				user_style = {
-					width = lc.Fixed{48},
-					height = lc.Fixed{48},
-					bg_color = Color{0, 0, 0, 0.4},
-					border_radius = space(24),
-					padding = space(12),
-				},
-				salt = "next",
-			) {
-				current_idx^ += 1
-			}
-		} else {
-			element_open(ui_ctx, {style = {width = lc.Fixed{48}, height = lc.Fixed{48}}})
-			element_close(ui_ctx)
+		if image_button(
+			ui_ctx,
+			ev_ctx,
+			sdl_rend,
+			right_arrow,
+			user_style = final_arrow_style,
+			salt = "next",
+		) {
+      current_idx^ += 1
+			if auto_play do last_tick[root_id] = sdl.GetTicks()
 		}
 
 		element_close(ui_ctx) // Arrows
 	}
 
-	// --- DOTS OVERLAY ---
 	element_open(
 		ui_ctx,
 		Element {
@@ -2684,8 +2702,9 @@ carousel_textures :: proc(
 			style = {
 				position        = .ABSOLUTE,
 				bottom          = 16,
-				left            = 0, // Pin to bottom
-				width           = final_viewport.width,
+				left            = 0,
+        width           = lc.Percent{100},
+				height          = lc.Fit(true),
 				direction       = .ROW,
 				justify_content = .CENTER,
 				align_items     = .CENTER,
@@ -2717,7 +2736,6 @@ carousel_textures :: proc(
 			current_idx^ = i
 		}
 
-		// Smooth dot scale and color transitions
 		@(static) prev_dot_active: map[lc.Box_ID]bool
 		if dot_id not_in prev_dot_active do prev_dot_active[dot_id] = is_active
 		if prev_dot_active[dot_id] != is_active {
@@ -2749,12 +2767,14 @@ carousel_paths :: proc(
 	current_idx: ^int,
 	wrapper_style: Style = {},
 	viewport_style: Style = {},
-	left_arrow: string = "assets/pictures/icons/left.png",
-	right_arrow: string = "assets/pictures/icons/right.png",
+	arrow_style: Style = {},
+	left_arrow: string = "assets/pictures/icons/left_button.png",
+	right_arrow: string = "assets/pictures/icons/right_button.png",
+  auto_play: bool = false,
+	auto_play_interval: u32 = 3000,
 	salt := "",
 	loc := #caller_location,
 ) {
-	// Dynamically cache all requested string paths into textures
 	textures := make([dynamic]^sdl.Texture, context.temp_allocator)
 	for path in images {
 		path_hash := hash.fnv32(transmute([]byte)path)
@@ -2777,12 +2797,16 @@ carousel_paths :: proc(
 		current_idx,
 		wrapper_style,
 		viewport_style,
+		arrow_style,
 		left_arrow,
 		right_arrow,
+    auto_play,
+    auto_play_interval,
 		salt,
 		loc,
 	)
 }
+
 
 // --- COLOR PICKER ---
 DEFAULT_COLOR_PICKER_WRAPPER :: Style {
@@ -2800,6 +2824,40 @@ DEFAULT_COLOR_PICKER_SWATCH :: Style {
 	border_color  = Color{0.8, 0.8, 0.8, 1},
 }
 
+@(private)
+hsv_to_rgb :: proc(h, s, v: f32) -> [3]f32 {
+	c := v * s
+	x := c * (1.0 - math.abs(math.mod_f32(h / 60.0, 2.0) - 1.0))
+	m := v - c
+	r, g, b: f32
+	if h < 60 do r, g, b = c, x, 0
+	else if h < 120 do r, g, b = x, c, 0
+	else if h < 180 do r, g, b = 0, c, x
+	else if h < 240 do r, g, b = 0, x, c
+	else if h < 300 do r, g, b = x, 0, c
+	else do r, g, b = c, 0, x
+	return {r + m, g + m, b + m}
+}
+
+@(private)
+rgb_to_hsv :: proc(r, g, b: f32) -> [3]f32 {
+	max_c := max(r, max(g, b))
+	min_c := min(r, min(g, b))
+	delta := max_c - min_c
+	h, s, v: f32 = 0, 0, max_c
+
+	if max_c > 0 do s = delta / max_c
+	else do return {0, 0, 0}
+
+	if delta == 0 do h = 0
+	else if max_c == r do h = 60 * math.mod_f32((g - b) / delta, 6)
+	else if max_c == g do h = 60 * (((b - r) / delta) + 2)
+	else do h = 60 * (((r - g) / delta) + 4)
+	
+	if h < 0 do h += 360
+	return {h, s, v}
+}
+
 color_picker :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^events.Event_Context,
@@ -2815,6 +2873,16 @@ color_picker :: proc(
 	root_id := lc.ID(loc, salt)
 	swatch_id := lc.ID(root_id, "swatch")
 
+	// 1. Stateful HSV Tracking (Prevents losing Hue when Value is 0 / Black)
+	@(static) hsv_states: map[lc.Box_ID][3]f32
+	if root_id not_in hsv_states do hsv_states[root_id] = rgb_to_hsv(color[0], color[1], color[2])
+
+	// Detect if color changed externally and sync our internal HSV map
+	curr_rgb := hsv_to_rgb(hsv_states[root_id][0], hsv_states[root_id][1], hsv_states[root_id][2])
+	if math.abs(color[0] - curr_rgb[0]) > 0.01 || math.abs(color[1] - curr_rgb[1]) > 0.01 || math.abs(color[2] - curr_rgb[2]) > 0.01 {
+		hsv_states[root_id] = rgb_to_hsv(color[0], color[1], color[2])
+	}
+
 	final_wrapper := merge_styles(DEFAULT_COLOR_PICKER_WRAPPER, wrapper_style)
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
@@ -2823,13 +2891,11 @@ color_picker :: proc(
 	final_swatch := DEFAULT_COLOR_PICKER_SWATCH
 	final_swatch.bg_color = transmute(Color)color^
 
-	// Clickable Swatch triggers Popover
 	events.register(ev_ctx, swatch_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
 	if ev_ctx.clicked_this_frame[swatch_id] or_else false do is_open^ = !is_open^
 	element_open(ui_ctx, Element{_box = {id = swatch_id}, style = final_swatch})
 	element_close(ui_ctx)
-
-	element_close(ui_ctx) // Wrapper
+	element_close(ui_ctx)
 
 	if popover_begin(
 		ui_ctx,
@@ -2837,44 +2903,169 @@ color_picker :: proc(
 		anim_ctx,
 		swatch_id,
 		is_open,
-		user_style = {width = lc.Fixed{240}, gap = 16},
+		user_style = {width = lc.Fixed{240}, gap = 12},
 		salt = salt,
 	) {
 		defer popover_end(ui_ctx, true)
 
-		// Define explicit struct type to fix inline compiler array parsing
-		Color_Channel :: struct {
-			lbl: string,
-			val: ^f32,
-			c:   Color,
+		// 2. Allocate Render Data on the layout frame allocator so it survives until render_tree!
+		Render_State :: struct { h, s, v, a: f32 }
+		rs := new(Render_State, lc.frame_allocator(ui_ctx.layout))
+		rs.h = hsv_states[root_id][0]
+		rs.s = hsv_states[root_id][1]
+		rs.v = hsv_states[root_id][2]
+		rs.a = color[3]
+
+		// --- SV 2D GRADIENT AREA ---
+		sv_str := fmt.tprintf("%d_sv_canvas", root_id)
+		sv_id := lc.ID(sv_str)
+		events.register(ev_ctx, sv_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+		
+		if ev_ctx.pressed_id == sv_id {
+			if prev, ok := ui_ctx.layout.prev_all_boxes[sv_id]; ok {
+				mx, my: i32
+				sdl.GetMouseState(&mx, &my)
+				lx := clamp(f32(mx) - prev.x, 0.0, prev.computed_width)
+				ly := clamp(f32(my) - prev.y, 0.0, prev.computed_height)
+				
+				st := &hsv_states[root_id]
+				st[1] = lx / prev.computed_width
+				st[2] = 1.0 - (ly / prev.computed_height)
+				
+				rgb := hsv_to_rgb(st[0], st[1], st[2])
+				color[0], color[1], color[2] = rgb[0], rgb[1], rgb[2]
+				rs.s, rs.v = st[1], st[2]
+				changed = true
+			}
 		}
 
-		colors := []Color_Channel {
-			{"R", &color^[0], {0.9, 0.2, 0.2, 1}},
-			{"G", &color^[1], {0.2, 0.8, 0.3, 1}},
-			{"B", &color^[2], {0.2, 0.5, 0.9, 1}},
+		canvas(
+			ui_ctx,
+			proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
+				rs := (^Render_State)(data)
+				step: i32 = 4 // Granularity for performance
+				
+				for y := bounds.y; y < bounds.y + bounds.h; y += step {
+					v := 1.0 - (f32(y - bounds.y) / f32(bounds.h))
+					for x := bounds.x; x < bounds.x + bounds.w; x += step {
+						s := f32(x - bounds.x) / f32(bounds.w)
+						rgb := hsv_to_rgb(rs.h, s, v)
+						sdl.SetRenderDrawColor(renderer, u8(rgb[0]*255), u8(rgb[1]*255), u8(rgb[2]*255), 255)
+						rect := sdl.Rect{x, y, step, step}
+						sdl.RenderFillRect(renderer, &rect)
+					}
+				}
+
+				cx := bounds.x + i32(rs.s * f32(bounds.w))
+				cy := bounds.y + i32((1.0 - rs.v) * f32(bounds.h))
+				sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
+				ring := sdl.Rect{cx - 4, cy - 4, 8, 8}
+				sdl.RenderDrawRect(renderer, &ring)
+				sdl.SetRenderDrawColor(renderer, 0, 0, 0, 255)
+				ring2 := sdl.Rect{cx - 3, cy - 3, 6, 6}
+				sdl.RenderDrawRect(renderer, &ring2)
+			},
+			data = rs,
+			user_style = {width = lc.Percent{100}, height = lc.Fixed{140}, border_radius = space(4)},
+			id = sv_str,
+		)
+
+		// --- HUE SLIDER ---
+		hue_str := fmt.tprintf("%d_hue_canvas", root_id)
+		hue_id := lc.ID(hue_str)
+		events.register(ev_ctx, hue_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+		
+		if ev_ctx.pressed_id == hue_id {
+			if prev, ok := ui_ctx.layout.prev_all_boxes[hue_id]; ok {
+				mx, my: i32
+				sdl.GetMouseState(&mx, &my)
+				lx := clamp(f32(mx) - prev.x, 0.0, prev.computed_width)
+				
+				st := &hsv_states[root_id]
+				st[0] = (lx / prev.computed_width) * 360.0
+				
+				rgb := hsv_to_rgb(st[0], st[1], st[2])
+				color[0], color[1], color[2] = rgb[0], rgb[1], rgb[2]
+				rs.h = st[0]
+				changed = true
+			}
 		}
 
-		for c, i in colors {
-			// 1. Explicitly tell the row container to fill the popover's width
-			element_open(
-				ui_ctx,
-				{
-					style = {
-						direction = .ROW,
-						align_items = .CENTER,
-						gap = 8,
-						width = lc.Percent{100},
-					},
-				},
-			)
+		canvas(
+			ui_ctx,
+			proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
+				rs := (^Render_State)(data)
+				step: i32 = 2
+				for x := bounds.x; x < bounds.x + bounds.w; x += step {
+					h := (f32(x - bounds.x) / f32(bounds.w)) * 360.0
+					rgb := hsv_to_rgb(h, 1.0, 1.0)
+					sdl.SetRenderDrawColor(renderer, u8(rgb[0]*255), u8(rgb[1]*255), u8(rgb[2]*255), 255)
+					rect := sdl.Rect{x, bounds.y, step, bounds.h}
+					sdl.RenderFillRect(renderer, &rect)
+				}
 
-			text(ui_ctx, ev_ctx, c.lbl, user_style = {width = lc.Fixed{20}})
+				cx := bounds.x + i32((rs.h / 360.0) * f32(bounds.w))
+				sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
+				ring := sdl.Rect{cx - 3, bounds.y - 2, 6, bounds.h + 4}
+				sdl.RenderDrawRect(renderer, &ring)
+				sdl.SetRenderDrawColor(renderer, 0, 0, 0, 255)
+				ring2 := sdl.Rect{cx - 2, bounds.y - 1, 4, bounds.h + 2}
+				sdl.RenderDrawRect(renderer, &ring2)
+			},
+			data = rs,
+			user_style = {width = lc.Percent{100}, height = lc.Fixed{16}, border_radius = space(4)},
+			id = hue_str,
+		)
 
-			if ok, _ := slider(ui_ctx, ev_ctx, anim_ctx, c.val, 0.0, 1.0, wrapper_style = {width = lc.Grow{1}}, fill_style = {bg_color = c.c, height = lc.Percent{100}}, thumb_style = {bg_color = c.c, width = lc.Fixed{14}, height = lc.Fixed{14}, position = .ABSOLUTE, z_index = 1000, top = 8}, salt = fmt.tprintf("%s_slider_%d", salt, i)); ok do changed = true
-
-			element_close(ui_ctx)
+		// --- ALPHA SLIDER ---
+		alpha_str := fmt.tprintf("%d_alpha_canvas", root_id)
+		alpha_id := lc.ID(alpha_str)
+		events.register(ev_ctx, alpha_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+		
+		if ev_ctx.pressed_id == alpha_id {
+			if prev, ok := ui_ctx.layout.prev_all_boxes[alpha_id]; ok {
+				mx, my: i32
+				sdl.GetMouseState(&mx, &my)
+				lx := clamp(f32(mx) - prev.x, 0.0, prev.computed_width)
+				color[3] = lx / prev.computed_width
+				rs.a = color[3]
+				changed = true
+			}
 		}
+
+		canvas(
+			ui_ctx,
+			proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
+				rs := (^Render_State)(data)
+				rgb := hsv_to_rgb(rs.h, rs.s, rs.v)
+				step: i32 = 2
+				
+				for x := bounds.x; x < bounds.x + bounds.w; x += step {
+					a := f32(x - bounds.x) / f32(bounds.w)
+					
+					// Draw gray to color blend as faux alpha checker
+					bg := f32(0.3)
+					r := bg * (1.0 - a) + rgb[0] * a
+					g := bg * (1.0 - a) + rgb[1] * a
+					b := bg * (1.0 - a) + rgb[2] * a
+					
+					sdl.SetRenderDrawColor(renderer, u8(r*255), u8(g*255), u8(b*255), 255)
+					rect := sdl.Rect{x, bounds.y, step, bounds.h}
+					sdl.RenderFillRect(renderer, &rect)
+				}
+
+				cx := bounds.x + i32(rs.a * f32(bounds.w))
+				sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
+				ring := sdl.Rect{cx - 3, bounds.y - 2, 6, bounds.h + 4}
+				sdl.RenderDrawRect(renderer, &ring)
+				sdl.SetRenderDrawColor(renderer, 0, 0, 0, 255)
+				ring2 := sdl.Rect{cx - 2, bounds.y - 1, 4, bounds.h + 2}
+				sdl.RenderDrawRect(renderer, &ring2)
+			},
+			data = rs,
+			user_style = {width = lc.Percent{100}, height = lc.Fixed{16}, border_radius = space(4)},
+			id = alpha_str,
+		)
 	}
 	return changed
 }
@@ -2889,6 +3080,7 @@ DEFAULT_DATE_PICKER_WRAPPER :: Style {
 	border        = [4]f32{1, 1, 1, 1},
 	border_color  = Color{0.8, 0.8, 0.8, 1},
 	bg_color      = Color{1, 1, 1, 1},
+	text_color    = Color{0, 0, 0, 1},
 }
 
 // Zeller's congruence adapted for 0 = Sunday
@@ -3058,4 +3250,34 @@ date_picker :: proc(
 		element_close(ui_ctx)
 	}
 	return changed
+}
+
+canvas :: proc(
+	ui_ctx: ^UI_Context,
+	draw_proc: proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr),
+	data: rawptr = nil,
+	user_style := Style{},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) {
+    // Generate a stable ID based on the caller location or a provided string
+	final_id := id != "" ? lc.ID(id) : lc.ID(loc, salt)
+
+	final_style := user_style
+	// Default to filling the available layout space if not overridden
+	if final_style.width == nil do final_style.width = lc.Percent{100}
+	if final_style.height == nil do final_style.height = lc.Percent{100}
+
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = final_id},
+			style = final_style,
+			custom_render = draw_proc,
+			custom_render_data = data,
+		},
+		loc,
+	)
+	element_close(ui_ctx)
 }

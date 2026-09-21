@@ -38,7 +38,22 @@ get_state :: proc(ctx: ^Context, id: lc.Box_ID) -> ^Retained_State {
 }
 
 process_lifecycles :: proc(ctx: ^Context, layout: ^lc.Layout_Context) {
-	// Future: Handle mount/unmount animations here
+	// Track which IDs need to be purged using the fast temp allocator
+	stale_ids := make([dynamic]lc.Box_ID, context.temp_allocator)
+
+	// Identify retained states for boxes that no longer exist in the layout tree
+	for id, state in ctx.states {
+		if id not_in layout.all_boxes {
+			// Free the heap allocation to prevent memory leaks
+			free(state)
+			append(&stale_ids, id)
+		}
+	}
+
+	// Remove the stale keys from the map
+	for id in stale_ids {
+		delete_key(&ctx.states, id)
+	}
 }
 
 apply_structural :: proc(ctx: ^Context, root: ^lc.Box) {

@@ -386,7 +386,7 @@ new_box_from_config :: proc(
 ) -> ^Box {
 	arena_alloc := chained_arena_allocator(&ctx.arenas[ctx.active_idx])
 	box, err := new(Box, arena_alloc)
-	if err != nil do panic("Failed to allocate memory")
+	if err != nil do panic(fmt.tprintf("Failed to allocate memory for Box at %s:%d", loc.file_path, loc.line))
 
 	box^ = box_config
 	if box.id == 0 {
@@ -453,7 +453,7 @@ resolve_fixed_width :: proc(
 				box.computed_width = 0.0
 				if box.id not_in ctx.warned_boxes {
 					fmt.printfln(
-						"WARNING: Layout constraint violated on Box: %s",
+						"WARNING: Percent width constraint violated on Box: %s (Parent width is unbounded or Fit)",
 						get_debug_name(box.id),
 					)
 					ctx.warned_boxes[box.id] = true
@@ -561,7 +561,7 @@ grow_shrink_width :: proc(box: ^Box, ctx: ^Layout_Context, viewport_dim: f32) {
 					if iteration > 100 {
 						if box.id not_in ctx.warned_boxes {
 							fmt.printfln(
-								"WARNING: Layout constraint violated on Box: %s",
+								"WARNING: Flex width iteration limit (100) exceeded on Box: %s (Check conflicting min/max bounds)",
 								get_debug_name(box.id),
 							)
 							ctx.warned_boxes[box.id] = true
@@ -818,7 +818,7 @@ resolve_fixed_height :: proc(
 				box.computed_height = 0.0
 				if box.id not_in ctx.warned_boxes {
 					fmt.printfln(
-						"WARNING: Layout constraint violated on Box: %s",
+						"WARNING: Percent height constraint violated on Box: %s (Parent height is unbounded or Fit)",
 						get_debug_name(box.id),
 					)
 					ctx.warned_boxes[box.id] = true
@@ -840,7 +840,7 @@ resolve_fixed_height :: proc(
 			if parent_is_fit || box.parent == nil {
 				if box.id not_in ctx.warned_boxes {
 					fmt.printfln(
-						"WARNING: Layout constraint violated on Box: %s",
+						"WARNING: Grow height constraint violated on Box: %s (Parent height is unbounded or Fit)",
 						get_debug_name(box.id),
 					)
 					ctx.warned_boxes[box.id] = true
@@ -851,7 +851,7 @@ resolve_fixed_height :: proc(
 			if parent_is_fit || box.parent == nil {
 				if box.id not_in ctx.warned_boxes {
 					fmt.printfln(
-						"WARNING: Layout constraint violated on Box: %s",
+						"WARNING: Shrink height constraint violated on Box: %s (Parent height is unbounded or Fit)",
 						get_debug_name(box.id),
 					)
 					ctx.warned_boxes[box.id] = true
