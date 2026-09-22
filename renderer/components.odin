@@ -3366,37 +3366,6 @@ canvas :: proc(
 	element_close(ui_ctx)
 }
 
-@(private)
-_debug_kv :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^events.Event_Context,
-	label: string,
-	val: string,
-	salt: string,
-) {
-	element_open(
-		ui_ctx,
-		Element {
-			style = {direction = .ROW, justify_content = .SPACE_BETWEEN, width = lc.Percent{100}},
-		},
-	)
-	text(
-		ui_ctx,
-		ev_ctx,
-		label,
-		user_style = {text_color = Color{0.6, 0.6, 0.6, 1}, font_size = 12},
-		salt = fmt.tprintf("%s_lbl", salt),
-	)
-	text(
-		ui_ctx,
-		ev_ctx,
-		val,
-		user_style = {text_color = Color{0.8, 0.8, 0.8, 1}, font_size = 12, text_align = .RIGHT},
-		salt = fmt.tprintf("%s_val", salt),
-	)
-	element_close(ui_ctx)
-}
-
 debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx: ^anim.Context) {
 	prev_roots := ui_ctx.layout.prev_root_boxes
 
@@ -3450,16 +3419,16 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx
 		Element {
 			_box = {id = debug_panel_id},
 			style = {
-				position = .FIXED,
-				top = 0,
-				right = 0,
-				width = lc.Fixed{350},
-				height = lc.ViewPercent{100},
-				bg_color = Color{0.1, 0.1, 0.12, 0.95},
-				border = space(0, 0, 0, 1),
+				position     = .FIXED,
+				top          = 0,
+				right        = 0,
+				width        = lc.Fixed{350},
+				height       = lc.ViewPercent{100},
+				bg_color     = Color{0.1, 0.1, 0.12, 0.95}, // Dark Theme
+				border       = space(0, 0, 0, 1),
 				border_color = Color{0.25, 0.25, 0.25, 1},
-				z_index = 100000,
-				direction = .COLUMN,
+				z_index      = 100000,
+				direction    = .COLUMN,
 			},
 		},
 	)
@@ -3491,7 +3460,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx
 		ev_ctx,
 		scroll_y = true,
 		scroll_x = true,
-		user_style = {width = lc.Percent{100}, height = lc.Grow{1}},
+		user_style = {width = lc.Percent{100}, height = lc.Grow{1}}, // Pushes info bar to bottom
 		salt = "debug_tree_scroll",
 	)
 
@@ -3508,7 +3477,6 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx
 			pinned_node_id,
 		)
 	}
-
 	scroll_end(ui_ctx, ev_ctx, scroll_id, anim_ctx)
 
 	// --- RESOLVE HOVER AND PIN TARGETS ---
@@ -3528,19 +3496,16 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx
 	}
 	if is_debug do hover_target = 0
 
-	// Handle Pinning (Tree Click overrides Physical Click)
 	if tree_click_target != 0 {
 		pinned_node_id = tree_click_target
 	} else if just_clicked && hover_target != 0 {
 		pinned_node_id = hover_target
 	}
 
-	// Auto-unpin if the element was destroyed this frame
 	if pinned_node_id != 0 && pinned_node_id not_in ui_ctx.layout.prev_all_boxes {
 		pinned_node_id = 0
 	}
 
-	// Resolve the active display target (Hover wins, falls back to Pin)
 	if tree_hover_target != 0 {
 		active_target_id = tree_hover_target
 	} else if hover_target != 0 {
@@ -3549,94 +3514,75 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx
 		active_target_id = pinned_node_id
 	}
 
-	// 3. Information Bar
+	// 3. Information Bar (Docked natively at the bottom of the column!)
+	info_scroll_id := scroll_begin(
+		ui_ctx,
+		ev_ctx,
+		scroll_y = true,
+		user_style = {
+			width        = lc.Percent{100},
+			height       = lc.Fixed{350}, // Fixed vertical slice for the dump pane
+			bg_color     = Color{0.1, 0.1, 0.12, 1},
+			border       = space(1, 0, 0, 0),
+			border_color = Color{0.25, 0.25, 0.25, 1},
+			padding      = space(16),
+			gap          = 4,
+		},
+		salt = "debug_info_scroll",
+	)
+
 	if active_target_id != 0 {
 		if target, ok := ui_ctx.layout.prev_all_boxes[active_target_id]; ok {
 			el := (^Element)(target.user_data)
 			name := lc.get_debug_name(target.id)
 			if name == "UNKNOWN_ID" do name = fmt.tprintf("Box_%d", target.id)
 
-			info_scroll_id := scroll_begin(
-				ui_ctx,
-				ev_ctx,
-				scroll_y = true,
-				user_style = {
-					width = lc.Percent{100},
-					height = lc.Fixed{280},
-					bg_color = Color{0.12, 0.12, 0.14, 1},
-					border = space(1, 0, 0, 0),
-					border_color = Color{0.25, 0.25, 0.25, 1},
-					padding = space(16),
-					gap = 4,
-				},
-				salt = "debug_info_scroll",
-			)
-
-			// Identity
+			// -- IDENTITY & BOUNDS --
 			text(
 				ui_ctx,
 				ev_ctx,
-				fmt.tprintf("ID: %s", name),
+				"IDENTITY & BOUNDS",
 				user_style = {
 					text_color = Color{0.4, 0.8, 0.4, 1},
-					font_size = 15,
+					font_size = 14,
 					padding = space(0, 0, 4, 0),
 				},
-				salt = "info_name",
+				salt = "h_id",
 			)
-
-			element_open(
-				ui_ctx,
-				{
-					style = {
-						width = lc.Percent{100},
-						height = lc.Fixed{1},
-						bg_color = Color{0.25, 0.25, 0.25, 1},
-						margin = space(4, 0),
-					},
-				},
-			)
-			element_close(ui_ctx)
-
-			// Computed Bounds
+			_debug_kv(ui_ctx, ev_ctx, "Name", name, "kv_name")
+			_debug_kv(ui_ctx, ev_ctx, "ID", fmt.tprintf("%d", target.id), "kv_id")
 			_debug_kv(
 				ui_ctx,
 				ev_ctx,
-				"Size (W x H)",
-				fmt.tprintf("%.0f x %.0f", target.computed_width, target.computed_height),
-				"kv_size",
-			)
-			_debug_kv(
-				ui_ctx,
-				ev_ctx,
-				"Position (X, Y)",
+				"Absolute Pos (X, Y)",
 				fmt.tprintf("[%.0f, %.0f]", target.x, target.y),
 				"kv_pos",
 			)
-			_debug_kv(ui_ctx, ev_ctx, "Z-Index", fmt.tprintf("%d", target.z_index), "kv_z")
 			_debug_kv(
 				ui_ctx,
 				ev_ctx,
-				"Positioning",
-				fmt.tprintf("%v", target.position),
-				"kv_postype",
+				"Computed Size",
+				fmt.tprintf("%.0f x %.0f", target.computed_width, target.computed_height),
+				"kv_size",
 			)
 
-			element_open(
+			_debug_divider(ui_ctx)
+
+			// -- FLEX & LAYOUT --
+			text(
 				ui_ctx,
-				{
-					style = {
-						width = lc.Percent{100},
-						height = lc.Fixed{1},
-						bg_color = Color{0.25, 0.25, 0.25, 1},
-						margin = space(8, 0),
-					},
+				ev_ctx,
+				"FLEX & LAYOUT",
+				user_style = {
+					text_color = Color{0.4, 0.8, 0.4, 1},
+					font_size = 14,
+					padding = space(0, 0, 4, 0),
 				},
+				salt = "h_flex",
 			)
-			element_close(ui_ctx)
-
-			// Layout / Flex
 			_debug_kv(ui_ctx, ev_ctx, "Direction", fmt.tprintf("%v", target.direction), "kv_dir")
+			_debug_kv(ui_ctx, ev_ctx, "Width", fmt.tprintf("%v", target.width), "kv_w")
+			_debug_kv(ui_ctx, ev_ctx, "Height", fmt.tprintf("%v", target.height), "kv_h")
 			_debug_kv(
 				ui_ctx,
 				ev_ctx,
@@ -3652,46 +3598,80 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx
 				"kv_align",
 			)
 			_debug_kv(ui_ctx, ev_ctx, "Flex Wrap", fmt.tprintf("%v", target.wrap), "kv_wrap")
+			_debug_kv(ui_ctx, ev_ctx, "Basis", fmt.tprintf("%.0f", target.basis), "kv_bas")
 
-			element_open(
+			_debug_divider(ui_ctx)
+
+			// -- BOX MODEL --
+			text(
 				ui_ctx,
-				{
-					style = {
-						width = lc.Percent{100},
-						height = lc.Fixed{1},
-						bg_color = Color{0.25, 0.25, 0.25, 1},
-						margin = space(8, 0),
-					},
+				ev_ctx,
+				"BOX MODEL",
+				user_style = {
+					text_color = Color{0.4, 0.8, 0.4, 1},
+					font_size = 14,
+					padding = space(0, 0, 4, 0),
 				},
+				salt = "h_box",
 			)
-			element_close(ui_ctx)
-
-			// Box Model / Spacing
 			_debug_kv(ui_ctx, ev_ctx, "Padding", fmt.tprintf("%v", target.padding), "kv_pad")
 			_debug_kv(ui_ctx, ev_ctx, "Margin", fmt.tprintf("%v", target.margin), "kv_mar")
 			_debug_kv(ui_ctx, ev_ctx, "Border", fmt.tprintf("%v", target.border), "kv_bor")
-			_debug_kv(ui_ctx, ev_ctx, "Gap", fmt.tprintf("%.1f", target.gap), "kv_gap")
+			_debug_kv(ui_ctx, ev_ctx, "Gap", fmt.tprintf("%.0f", target.gap), "kv_gap")
 			_debug_kv(
 				ui_ctx,
 				ev_ctx,
-				"Overflow (X/Y)",
+				"Overflow (X / Y)",
 				fmt.tprintf("%v / %v", target.overflow_x, target.overflow_y),
 				"kv_over",
 			)
 
+			_debug_divider(ui_ctx)
+
+			// -- POSITIONING --
+			text(
+				ui_ctx,
+				ev_ctx,
+				"POSITIONING",
+				user_style = {
+					text_color = Color{0.4, 0.8, 0.4, 1},
+					font_size = 14,
+					padding = space(0, 0, 4, 0),
+				},
+				salt = "h_pos",
+			)
+			_debug_kv(ui_ctx, ev_ctx, "Type", fmt.tprintf("%v", target.position), "kv_postype")
+			_debug_kv(ui_ctx, ev_ctx, "Z-Index", fmt.tprintf("%d", target.z_index), "kv_z")
+			_debug_kv(
+				ui_ctx,
+				ev_ctx,
+				"Top / Bottom",
+				fmt.tprintf("%v / %v", target.top, target.bottom),
+				"kv_tb",
+			)
+			_debug_kv(
+				ui_ctx,
+				ev_ctx,
+				"Left / Right",
+				fmt.tprintf("%v / %v", target.left, target.right),
+				"kv_lr",
+			)
+
 			if el != nil {
-				element_open(
+				_debug_divider(ui_ctx)
+
+				// -- VISUALS & TEXT --
+				text(
 					ui_ctx,
-					{
-						style = {
-							width = lc.Percent{100},
-							height = lc.Fixed{1},
-							bg_color = Color{0.25, 0.25, 0.25, 1},
-							margin = space(8, 0),
-						},
+					ev_ctx,
+					"VISUALS & TEXT",
+					user_style = {
+						text_color = Color{0.4, 0.8, 0.4, 1},
+						font_size = 14,
+						padding = space(0, 0, 4, 0),
 					},
+					salt = "h_vis",
 				)
-				element_close(ui_ctx)
 
 				c_bg := el.resolved_bg_color
 				_debug_kv(
@@ -3725,19 +3705,13 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx
 					fmt.tprintf("%.2f", el.resolved_opacity),
 					"kv_op",
 				)
-
-				element_open(
+				_debug_kv(
 					ui_ctx,
-					{
-						style = {
-							width = lc.Percent{100},
-							height = lc.Fixed{1},
-							bg_color = Color{0.25, 0.25, 0.25, 1},
-							margin = space(8, 0),
-						},
-					},
+					ev_ctx,
+					"Object Fit",
+					fmt.tprintf("%v", el.resolved_object_fit),
+					"kv_objf",
 				)
-				element_close(ui_ctx)
 
 				c_tx := el.resolved_text_color
 				_debug_kv(
@@ -3769,33 +3743,27 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx
 					"kv_ta",
 				)
 			}
-
-			scroll_end(ui_ctx, ev_ctx, info_scroll_id, anim_ctx)
 		}
 	} else {
 		element_open(
 			ui_ctx,
-			Element {
-				style = {
-					width = lc.Percent{100},
-					height = lc.Fixed{280},
-					bg_color = Color{0.12, 0.12, 0.14, 1},
-					border = space(1, 0, 0, 0),
-					border_color = Color{0.25, 0.25, 0.25, 1},
-					justify_content = .CENTER,
-					align_items = .CENTER,
-				},
-			},
+			{style = {height = lc.Grow{1}, justify_content = .CENTER, align_items = .CENTER}},
 		)
 		text(
 			ui_ctx,
 			ev_ctx,
-			"Hover or click an element to inspect",
-			user_style = {text_color = Color{0.4, 0.4, 0.4, 1}, font_size = 14},
+			"Hover or click an element\nto inspect.",
+			user_style = {
+				text_color = Color{0.4, 0.4, 0.4, 1},
+				font_size = 14,
+				text_align = .CENTER,
+			},
 			salt = "info_empty",
 		)
 		element_close(ui_ctx)
 	}
+
+	scroll_end(ui_ctx, ev_ctx, info_scroll_id, anim_ctx)
 }
 
 @(private)
@@ -3829,13 +3797,12 @@ _render_debug_node :: proc(
 		clicked_target^ = box.id
 	}
 
-	// Visually distinguish pinned elements in the tree
 	is_pinned := box.id == pinned_id
 	row_bg := Color{0, 0, 0, 0}
 	if is_hovered {
 		row_bg = Color{0.2, 0.4, 0.8, 0.5}
 	} else if is_pinned {
-		row_bg = Color{0.2, 0.5, 0.9, 0.25} // Faint blue selection background
+		row_bg = Color{0.2, 0.5, 0.9, 0.25}
 	}
 
 	element_open(
@@ -3900,4 +3867,61 @@ _render_debug_node :: proc(
 			)
 		}
 	}
+}
+
+@(private)
+_debug_kv :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	label: string,
+	val: string,
+	salt: string,
+) {
+	element_open(
+		ui_ctx,
+		Element {
+			style = {
+				direction = .ROW,
+				justify_content = .SPACE_BETWEEN,
+				width = lc.Percent{100},
+				gap = 16,
+			},
+		},
+	)
+	text(
+		ui_ctx,
+		ev_ctx,
+		label,
+		user_style = {text_color = Color{0.6, 0.6, 0.6, 1}, font_size = 12, width = lc.Shrink{1}},
+		salt = fmt.tprintf("%s_lbl", salt),
+	)
+	text(
+		ui_ctx,
+		ev_ctx,
+		val,
+		user_style = {
+			text_color = Color{0.8, 0.8, 0.8, 1},
+			font_size = 12,
+			text_align = .RIGHT,
+			width = lc.Grow{1},
+		},
+		salt = fmt.tprintf("%s_val", salt),
+	)
+	element_close(ui_ctx)
+}
+
+@(private)
+_debug_divider :: proc(ui_ctx: ^UI_Context) {
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				width = lc.Percent{100},
+				height = lc.Fixed{1},
+				bg_color = Color{0.25, 0.25, 0.25, 1},
+				margin = space(8, 0),
+			},
+		},
+	)
+	element_close(ui_ctx)
 }
