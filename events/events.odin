@@ -49,6 +49,7 @@ Event_Context :: struct {
 	cursor_blink_start:   map[lc.Box_ID]u64,
 	cursor_last_position: map[lc.Box_ID]int,
 	focused_buffer:       ^[dynamic]u8,
+	focus_order:          [dynamic]lc.Box_ID,
 }
 
 UI_Event :: struct {
@@ -74,38 +75,36 @@ UI_Event :: struct {
 begin_frame :: proc(ctx: ^Event_Context) {
 	clear(&ctx.clicked_this_frame)
 	ctx.prev_pressed_id = ctx.pressed_id
+	clear(&ctx.focus_order) // (From your earlier changes)
+}
 
-	// Rubber band spring physics for Y axis
-	for id, &offset in ctx.scroll_offsets_y {
-		if box, ok := ctx.layout.prev_all_boxes[id]; ok {
-			max_scroll := max(box.scroll_height - box.computed_height, 0.0)
-			if offset < 0.0 {
-				offset += (0.0 - offset) * 0.15 // Spring back to top
-				if abs(offset) < 0.5 do offset = 0.0
-			} else if offset > max_scroll {
-				offset += (max_scroll - offset) * 0.15 // Spring back to bottom
-				if abs(offset - max_scroll) < 0.5 do offset = max_scroll
-			}
+cycle_focus :: proc(ctx: ^Event_Context, reverse: bool) {
+	if len(ctx.focus_order) == 0 do return
+
+	idx := -1
+	for id, i in ctx.focus_order {
+		if id == ctx.focused_id {
+			idx = i
+			break
 		}
 	}
 
-	// Rubber band spring physics for X axis
-	for id, &offset in ctx.scroll_offsets_x {
-		if box, ok := ctx.layout.prev_all_boxes[id]; ok {
-			max_scroll := max(box.scroll_width - box.computed_width, 0.0)
-			if offset < 0.0 {
-				offset += (0.0 - offset) * 0.15
-				if abs(offset) < 0.5 do offset = 0.0
-			} else if offset > max_scroll {
-				offset += (max_scroll - offset) * 0.15
-				if abs(offset - max_scroll) < 0.5 do offset = max_scroll
-			}
-		}
+	if reverse {
+		idx -= 1
+		if idx < 0 do idx = len(ctx.focus_order) - 1
+	} else {
+		idx += 1
+		if idx >= len(ctx.focus_order) do idx = 0
 	}
+
+	ctx.focused_id = ctx.focus_order[idx]
 }
 
 register :: proc(ctx: ^Event_Context, id: lc.Box_ID, callbacks: Event_Callbacks) {
 	ctx.listeners[id] = callbacks
+	if callbacks.focusable {
+		append(&ctx.focus_order, id) // Collect the natural DOM order
+	}
 }
 
 // Safely removes a listener, ensuring lifecycle hooks fire if it was active
@@ -322,27 +321,36 @@ bubble_event :: proc(
 			if current.overflow_y == .SCROLL && e.scroll_dy != 0 {
 				max_scroll := max(current.scroll_height - current.computed_height, 0.0)
 				old_offset := current.offset_y
+
+				// Apply the scroll delta
 				new_offset := current.offset_y - (e.scroll_dy * 50.0)
 
-				// Apply friction if pulled out of bounds
-				if new_offset < 0.0 do new_offset = current.offset_y - (e.scroll_dy * 15.0)
-				if new_offset > max_scroll do new_offset = current.offset_y - (e.scroll_dy * 15.0)
+				// HARD CLAMP: Prevent the offset from leaving the valid layout bounds
+				if new_offset < 0.0 do new_offset = 0.0
+				if new_offset > max_scroll do new_offset = max_scroll
 
 				ctx.scroll_offsets_y[current.id] = new_offset
 				current.offset_y = new_offset
+
+				// Only stop propagation if we actually scrolled.
+				// This allows nested scroll views to pass the scroll event to their parents
+				// when they hit the top or bottom!
 				if new_offset != old_offset do e.stop_propagation = true
 			}
 
 			if current.overflow_x == .SCROLL && e.scroll_dx != 0 {
 				max_scroll := max(current.scroll_width - current.computed_width, 0.0)
 				old_offset := current.offset_x
+
 				new_offset := current.offset_x - (e.scroll_dx * 50.0)
 
-				if new_offset < 0.0 do new_offset = current.offset_x - (e.scroll_dx * 15.0)
-				if new_offset > max_scroll do new_offset = current.offset_x - (e.scroll_dx * 15.0)
+				// HARD CLAMP: Prevent the offset from leaving the valid layout bounds
+				if new_offset < 0.0 do new_offset = 0.0
+				if new_offset > max_scroll do new_offset = max_scroll
 
 				ctx.scroll_offsets_x[current.id] = new_offset
 				current.offset_x = new_offset
+
 				if new_offset != old_offset do e.stop_propagation = true
 			}
 		}

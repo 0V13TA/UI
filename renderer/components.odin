@@ -37,27 +37,28 @@ text :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) {
-	id := lc.ID(loc, id)
+	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	final_id := lc.ID(hash_input)
 
-	events.register(ev_ctx, id, events.Event_Callbacks{focusable = true})
+	events.register(ev_ctx, final_id, events.Event_Callbacks{focusable = true})
 
-	is_pressed := ev_ctx.pressed_id == id
-	just_pressed := is_pressed && ev_ctx.prev_pressed_id != id
-	is_focused := ev_ctx.focused_id == id
+	is_pressed := ev_ctx.pressed_id == final_id
+	just_pressed := is_pressed && ev_ctx.prev_pressed_id != final_id
+	is_focused := ev_ctx.focused_id == final_id
 
-	if id not_in ev_ctx.text_cursors do ev_ctx.text_cursors[id] = 0
-	if id not_in ev_ctx.text_selection do ev_ctx.text_selection[id] = 0
+	if final_id not_in ev_ctx.text_cursors do ev_ctx.text_cursors[final_id] = 0
+	if final_id not_in ev_ctx.text_selection do ev_ctx.text_selection[final_id] = 0
 
 	if !is_focused {
-		ev_ctx.text_selection[id] = 0
-		ev_ctx.text_cursors[id] = 0
+		ev_ctx.text_selection[final_id] = 0
+		ev_ctx.text_cursors[final_id] = 0
 	}
 
 	final_style := user_style
 	if user_style.text_wrap == nil do final_style.text_wrap = .WORD
-	if ev_ctx.text_cursors[id] != ev_ctx.text_selection[id] {
-		final_style.selection_start = ev_ctx.text_selection[id]
-		final_style.selection_end = ev_ctx.text_cursors[id]
+	if ev_ctx.text_cursors[final_id] != ev_ctx.text_selection[final_id] {
+		final_style.selection_start = ev_ctx.text_selection[final_id]
+		final_style.selection_end = ev_ctx.text_cursors[final_id]
 	}
 
 	parent_font_name := ""
@@ -76,7 +77,7 @@ text :: proc(
 	active_font := get_font(ui_ctx, font_path, font_size)
 
 	if is_pressed {
-		if prev_box, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+		if prev_box, ok := ui_ctx.layout.prev_all_boxes[final_id]; ok {
 			mx, my: i32
 			sdl.GetMouseState(&mx, &my)
 			local_x := f32(mx) - prev_box.x
@@ -102,14 +103,14 @@ text :: proc(
 				}
 			}
 
-			ev_ctx.text_cursors[id] = best_cursor
+			ev_ctx.text_cursors[final_id] = best_cursor
 			if just_pressed {
-				ev_ctx.text_selection[id] = best_cursor
+				ev_ctx.text_selection[final_id] = best_cursor
 			}
 		}
 	}
 
-	element_open(ui_ctx, Element{_box = {id = id}, text = text, style = final_style}, loc)
+	element_open(ui_ctx, Element{_box = {id = final_id}, text = text, style = final_style}, loc)
 	element_close(ui_ctx)
 }
 
@@ -217,7 +218,7 @@ scroll_begin :: proc(
 	user_style := Style{},
 	salt := "",
 	loc := #caller_location,
-) {
+) -> lc.Box_ID {
 	final_id := id
 	if final_id == 0 {
 		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
@@ -244,10 +245,75 @@ scroll_begin :: proc(
 		},
 		loc,
 	)
+	return final_id
 }
 
-scroll_end :: proc(ctx: ^UI_Context) {
-	element_close(ctx)
+scroll_end :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	id: lc.Box_ID,
+	anim_ctx: ^anim.Context = nil,
+) {
+	if prev, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
+		content_h: f32 = 0
+		for child in prev.children {
+			content_h = max(content_h, child.y + child.computed_height - prev.y)
+		}
+
+		if content_h > prev.computed_height {
+			ratio := prev.computed_height / content_h
+			thumb_h := max(prev.computed_height * ratio, 24.0)
+
+			max_scroll := content_h - prev.computed_height
+			scroll_y := ev_ctx.scroll_offsets_y[id]
+			scroll_progress := max_scroll > 0 ? clamp(scroll_y / max_scroll, 0.0, 1.0) : 0.0
+			thumb_y := (scroll_progress * (prev.computed_height - thumb_h)) + scroll_y
+
+			sb_id := lc.ID(id, "scrollbar")
+			is_hovered := is_tree_hovered(ui_ctx, ev_ctx, id)
+
+			opacity: f32 = is_hovered ? 1.0 : 0.0
+
+			// Safely handle animations only if anim_ctx is provided
+			if anim_ctx != nil {
+				@(static) prev_hover: map[lc.Box_ID]bool
+				if sb_id not_in prev_hover do prev_hover[sb_id] = false
+
+				if prev_hover[sb_id] != is_hovered {
+					prev_hover[sb_id] = is_hovered
+					to(
+						ui_ctx,
+						anim_ctx,
+						sb_id,
+						{opacity = is_hovered ? 1.0 : 0.0, duration = 0.25},
+					)
+				}
+				sb_state := anim.get_state(anim_ctx, sb_id)
+				opacity = sb_state.opacity
+			}
+
+			if is_hovered || opacity > 0.01 {
+				element_open(
+					ui_ctx,
+					Element {
+						_box = {id = sb_id},
+						style = {
+							position = .ABSOLUTE,
+							right = 4.0,
+							top = thumb_y + 4.0,
+							width = lc.Fixed{6},
+							height = lc.Fixed{thumb_h - 8.0},
+							bg_color = Color{0.4, 0.4, 0.4, opacity * 0.8},
+							border_radius = space(3),
+							z_index = 100,
+						},
+					},
+				)
+				element_close(ui_ctx)
+			}
+		}
+	}
+	element_close(ui_ctx)
 }
 
 DEFAULT_CHECKBOX_WRAPPER_STYLE :: Style {
@@ -916,7 +982,7 @@ text_input :: proc(
 		element_close(ui_ctx)
 	}
 
-	scroll_end(ui_ctx)
+	scroll_end(ui_ctx, ev_ctx, root_id)
 	return is_focused
 }
 
@@ -2346,7 +2412,7 @@ table :: proc(
 		element_close(ui_ctx)
 	}
 
-	scroll_end(ui_ctx)
+	scroll_end(ui_ctx, ev_ctx, body_id)
 	element_close(ui_ctx)
 }
 
@@ -2422,7 +2488,7 @@ list_view :: proc(
 		}
 	}
 
-	scroll_end(ui_ctx)
+	scroll_end(ui_ctx, ev_ctx, scroll_id)
 	element_close(ui_ctx)
 
 	return changed
@@ -2536,7 +2602,7 @@ carousel_textures :: proc(
 	arrow_style: Style = {},
 	left_arrow: string = "assets/pictures/icons/left_button.png",
 	right_arrow: string = "assets/pictures/icons/right_button.png",
-  auto_play: bool = false,
+	auto_play: bool = false,
 	auto_play_interval: u32 = 3000,
 	salt := "",
 	loc := #caller_location,
@@ -2547,7 +2613,7 @@ carousel_textures :: proc(
 	if current_idx^ < 0 do current_idx^ += len(images)
 
 	root_id := lc.ID(loc, salt)
-  @(static) last_tick: map[lc.Box_ID]u32
+	@(static) last_tick: map[lc.Box_ID]u32
 	if auto_play {
 		if root_id not_in last_tick do last_tick[root_id] = sdl.GetTicks()
 
@@ -2647,8 +2713,8 @@ carousel_textures :: proc(
 					position        = .ABSOLUTE,
 					top             = 0,
 					left            = 0,
-          width           = lc.Percent{100},
-          height          = lc.Fixed{vp_height}, // Restore this line
+					width           = lc.Percent{100},
+					height          = lc.Fixed{vp_height}, // Restore this line
 					direction       = .ROW,
 					justify_content = .SPACE_BETWEEN,
 					align_items     = .CENTER,
@@ -2676,7 +2742,7 @@ carousel_textures :: proc(
 			user_style = final_arrow_style,
 			salt = "prev",
 		) {
-      current_idx^ -= 1
+			current_idx^ -= 1
 			if auto_play do last_tick[root_id] = sdl.GetTicks()
 		}
 
@@ -2688,7 +2754,7 @@ carousel_textures :: proc(
 			user_style = final_arrow_style,
 			salt = "next",
 		) {
-      current_idx^ += 1
+			current_idx^ += 1
 			if auto_play do last_tick[root_id] = sdl.GetTicks()
 		}
 
@@ -2700,15 +2766,15 @@ carousel_textures :: proc(
 		Element {
 			_box = {id = dots_id},
 			style = {
-				position        = .ABSOLUTE,
-				bottom          = 16,
-				left            = 0,
-        width           = lc.Percent{100},
-				height          = lc.Fit(true),
-				direction       = .ROW,
+				position = .ABSOLUTE,
+				bottom = 16,
+				left = 0,
+				width = lc.Percent{100},
+				height = lc.Fit(true),
+				direction = .ROW,
 				justify_content = .CENTER,
-				align_items     = .CENTER,
-				gap             = 8,
+				align_items = .CENTER,
+				gap = 8,
 			},
 		},
 	)
@@ -2770,7 +2836,7 @@ carousel_paths :: proc(
 	arrow_style: Style = {},
 	left_arrow: string = "assets/pictures/icons/left_button.png",
 	right_arrow: string = "assets/pictures/icons/right_button.png",
-  auto_play: bool = false,
+	auto_play: bool = false,
 	auto_play_interval: u32 = 3000,
 	salt := "",
 	loc := #caller_location,
@@ -2800,8 +2866,8 @@ carousel_paths :: proc(
 		arrow_style,
 		left_arrow,
 		right_arrow,
-    auto_play,
-    auto_play_interval,
+		auto_play,
+		auto_play_interval,
 		salt,
 		loc,
 	)
@@ -2853,7 +2919,7 @@ rgb_to_hsv :: proc(r, g, b: f32) -> [3]f32 {
 	else if max_c == r do h = 60 * math.mod_f32((g - b) / delta, 6)
 	else if max_c == g do h = 60 * (((b - r) / delta) + 2)
 	else do h = 60 * (((r - g) / delta) + 4)
-	
+
 	if h < 0 do h += 360
 	return {h, s, v}
 }
@@ -2879,7 +2945,9 @@ color_picker :: proc(
 
 	// Detect if color changed externally and sync our internal HSV map
 	curr_rgb := hsv_to_rgb(hsv_states[root_id][0], hsv_states[root_id][1], hsv_states[root_id][2])
-	if math.abs(color[0] - curr_rgb[0]) > 0.01 || math.abs(color[1] - curr_rgb[1]) > 0.01 || math.abs(color[2] - curr_rgb[2]) > 0.01 {
+	if math.abs(color[0] - curr_rgb[0]) > 0.01 ||
+	   math.abs(color[1] - curr_rgb[1]) > 0.01 ||
+	   math.abs(color[2] - curr_rgb[2]) > 0.01 {
 		hsv_states[root_id] = rgb_to_hsv(color[0], color[1], color[2])
 	}
 
@@ -2909,7 +2977,9 @@ color_picker :: proc(
 		defer popover_end(ui_ctx, true)
 
 		// 2. Allocate Render Data on the layout frame allocator so it survives until render_tree!
-		Render_State :: struct { h, s, v, a: f32 }
+		Render_State :: struct {
+			h, s, v, a: f32,
+		}
 		rs := new(Render_State, lc.frame_allocator(ui_ctx.layout))
 		rs.h = hsv_states[root_id][0]
 		rs.s = hsv_states[root_id][1]
@@ -2920,18 +2990,18 @@ color_picker :: proc(
 		sv_str := fmt.tprintf("%d_sv_canvas", root_id)
 		sv_id := lc.ID(sv_str)
 		events.register(ev_ctx, sv_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
-		
+
 		if ev_ctx.pressed_id == sv_id {
 			if prev, ok := ui_ctx.layout.prev_all_boxes[sv_id]; ok {
 				mx, my: i32
 				sdl.GetMouseState(&mx, &my)
 				lx := clamp(f32(mx) - prev.x, 0.0, prev.computed_width)
 				ly := clamp(f32(my) - prev.y, 0.0, prev.computed_height)
-				
+
 				st := &hsv_states[root_id]
 				st[1] = lx / prev.computed_width
 				st[2] = 1.0 - (ly / prev.computed_height)
-				
+
 				rgb := hsv_to_rgb(st[0], st[1], st[2])
 				color[0], color[1], color[2] = rgb[0], rgb[1], rgb[2]
 				rs.s, rs.v = st[1], st[2]
@@ -2944,13 +3014,19 @@ color_picker :: proc(
 			proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
 				rs := (^Render_State)(data)
 				step: i32 = 4 // Granularity for performance
-				
+
 				for y := bounds.y; y < bounds.y + bounds.h; y += step {
 					v := 1.0 - (f32(y - bounds.y) / f32(bounds.h))
 					for x := bounds.x; x < bounds.x + bounds.w; x += step {
 						s := f32(x - bounds.x) / f32(bounds.w)
 						rgb := hsv_to_rgb(rs.h, s, v)
-						sdl.SetRenderDrawColor(renderer, u8(rgb[0]*255), u8(rgb[1]*255), u8(rgb[2]*255), 255)
+						sdl.SetRenderDrawColor(
+							renderer,
+							u8(rgb[0] * 255),
+							u8(rgb[1] * 255),
+							u8(rgb[2] * 255),
+							255,
+						)
 						rect := sdl.Rect{x, y, step, step}
 						sdl.RenderFillRect(renderer, &rect)
 					}
@@ -2966,7 +3042,11 @@ color_picker :: proc(
 				sdl.RenderDrawRect(renderer, &ring2)
 			},
 			data = rs,
-			user_style = {width = lc.Percent{100}, height = lc.Fixed{140}, border_radius = space(4)},
+			user_style = {
+				width = lc.Percent{100},
+				height = lc.Fixed{140},
+				border_radius = space(4),
+			},
 			id = sv_str,
 		)
 
@@ -2974,16 +3054,16 @@ color_picker :: proc(
 		hue_str := fmt.tprintf("%d_hue_canvas", root_id)
 		hue_id := lc.ID(hue_str)
 		events.register(ev_ctx, hue_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
-		
+
 		if ev_ctx.pressed_id == hue_id {
 			if prev, ok := ui_ctx.layout.prev_all_boxes[hue_id]; ok {
 				mx, my: i32
 				sdl.GetMouseState(&mx, &my)
 				lx := clamp(f32(mx) - prev.x, 0.0, prev.computed_width)
-				
+
 				st := &hsv_states[root_id]
 				st[0] = (lx / prev.computed_width) * 360.0
-				
+
 				rgb := hsv_to_rgb(st[0], st[1], st[2])
 				color[0], color[1], color[2] = rgb[0], rgb[1], rgb[2]
 				rs.h = st[0]
@@ -2991,15 +3071,19 @@ color_picker :: proc(
 			}
 		}
 
-		canvas(
-			ui_ctx,
-			proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
+		canvas(ui_ctx, proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
 				rs := (^Render_State)(data)
 				step: i32 = 2
 				for x := bounds.x; x < bounds.x + bounds.w; x += step {
 					h := (f32(x - bounds.x) / f32(bounds.w)) * 360.0
 					rgb := hsv_to_rgb(h, 1.0, 1.0)
-					sdl.SetRenderDrawColor(renderer, u8(rgb[0]*255), u8(rgb[1]*255), u8(rgb[2]*255), 255)
+					sdl.SetRenderDrawColor(
+						renderer,
+						u8(rgb[0] * 255),
+						u8(rgb[1] * 255),
+						u8(rgb[2] * 255),
+						255,
+					)
 					rect := sdl.Rect{x, bounds.y, step, bounds.h}
 					sdl.RenderFillRect(renderer, &rect)
 				}
@@ -3011,17 +3095,13 @@ color_picker :: proc(
 				sdl.SetRenderDrawColor(renderer, 0, 0, 0, 255)
 				ring2 := sdl.Rect{cx - 2, bounds.y - 1, 4, bounds.h + 2}
 				sdl.RenderDrawRect(renderer, &ring2)
-			},
-			data = rs,
-			user_style = {width = lc.Percent{100}, height = lc.Fixed{16}, border_radius = space(4)},
-			id = hue_str,
-		)
+			}, data = rs, user_style = {width = lc.Percent{100}, height = lc.Fixed{16}, border_radius = space(4)}, id = hue_str)
 
 		// --- ALPHA SLIDER ---
 		alpha_str := fmt.tprintf("%d_alpha_canvas", root_id)
 		alpha_id := lc.ID(alpha_str)
 		events.register(ev_ctx, alpha_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
-		
+
 		if ev_ctx.pressed_id == alpha_id {
 			if prev, ok := ui_ctx.layout.prev_all_boxes[alpha_id]; ok {
 				mx, my: i32
@@ -3039,17 +3119,17 @@ color_picker :: proc(
 				rs := (^Render_State)(data)
 				rgb := hsv_to_rgb(rs.h, rs.s, rs.v)
 				step: i32 = 2
-				
+
 				for x := bounds.x; x < bounds.x + bounds.w; x += step {
 					a := f32(x - bounds.x) / f32(bounds.w)
-					
+
 					// Draw gray to color blend as faux alpha checker
 					bg := f32(0.3)
 					r := bg * (1.0 - a) + rgb[0] * a
 					g := bg * (1.0 - a) + rgb[1] * a
 					b := bg * (1.0 - a) + rgb[2] * a
-					
-					sdl.SetRenderDrawColor(renderer, u8(r*255), u8(g*255), u8(b*255), 255)
+
+					sdl.SetRenderDrawColor(renderer, u8(r * 255), u8(g * 255), u8(b * 255), 255)
 					rect := sdl.Rect{x, bounds.y, step, bounds.h}
 					sdl.RenderFillRect(renderer, &rect)
 				}
@@ -3063,7 +3143,11 @@ color_picker :: proc(
 				sdl.RenderDrawRect(renderer, &ring2)
 			},
 			data = rs,
-			user_style = {width = lc.Percent{100}, height = lc.Fixed{16}, border_radius = space(4)},
+			user_style = {
+				width = lc.Percent{100},
+				height = lc.Fixed{16},
+				border_radius = space(4),
+			},
 			id = alpha_str,
 		)
 	}
@@ -3261,7 +3345,7 @@ canvas :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) {
-    // Generate a stable ID based on the caller location or a provided string
+	// Generate a stable ID based on the caller location or a provided string
 	final_id := id != "" ? lc.ID(id) : lc.ID(loc, salt)
 
 	final_style := user_style
@@ -3280,4 +3364,540 @@ canvas :: proc(
 		loc,
 	)
 	element_close(ui_ctx)
+}
+
+@(private)
+_debug_kv :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	label: string,
+	val: string,
+	salt: string,
+) {
+	element_open(
+		ui_ctx,
+		Element {
+			style = {direction = .ROW, justify_content = .SPACE_BETWEEN, width = lc.Percent{100}},
+		},
+	)
+	text(
+		ui_ctx,
+		ev_ctx,
+		label,
+		user_style = {text_color = Color{0.6, 0.6, 0.6, 1}, font_size = 12},
+		salt = fmt.tprintf("%s_lbl", salt),
+	)
+	text(
+		ui_ctx,
+		ev_ctx,
+		val,
+		user_style = {text_color = Color{0.8, 0.8, 0.8, 1}, font_size = 12, text_align = .RIGHT},
+		salt = fmt.tprintf("%s_val", salt),
+	)
+	element_close(ui_ctx)
+}
+
+debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^events.Event_Context, anim_ctx: ^anim.Context) {
+	prev_roots := ui_ctx.layout.prev_root_boxes
+
+	// State trackers
+	@(static) active_target_id: lc.Box_ID
+	@(static) pinned_node_id: lc.Box_ID
+	@(static) tree_hover_target: lc.Box_ID
+	@(static) tree_click_target: lc.Box_ID
+	@(static) prev_mouse_down: bool
+
+	tree_hover_target = 0
+	tree_click_target = 0
+
+	// Global mouse click detection for pinning from the main UI
+	mouse_state := sdl.GetMouseState(nil, nil)
+	is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
+	just_clicked := is_mouse_down && !prev_mouse_down
+	prev_mouse_down = is_mouse_down
+
+	debug_panel_id := lc.ID("DEBUG_PANEL_ROOT")
+	highlight_id := lc.ID("DEBUG_HIGHLIGHT_OVERLAY")
+	info_bar_id := lc.ID("DEBUG_INFO_BAR")
+
+	// 1. Highlight Overlay
+	if active_target_id != 0 {
+		if target, ok := ui_ctx.layout.prev_all_boxes[active_target_id]; ok {
+			element_open(
+				ui_ctx,
+				Element {
+					_box = {id = highlight_id},
+					style = {
+						position = .FIXED,
+						left = target.x,
+						top = target.y,
+						width = lc.Fixed{target.computed_width},
+						height = lc.Fixed{target.computed_height},
+						bg_color = Color{0.2, 0.6, 1.0, 0.3},
+						border = space(2),
+						border_color = Color{0.2, 0.6, 1.0, 1.0},
+						z_index = 99998,
+					},
+				},
+			)
+			element_close(ui_ctx)
+		}
+	}
+
+	// 2. Fixed Tree Panel
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = debug_panel_id},
+			style = {
+				position = .FIXED,
+				top = 0,
+				right = 0,
+				width = lc.Fixed{350},
+				height = lc.ViewPercent{100},
+				bg_color = Color{0.1, 0.1, 0.12, 0.95},
+				border = space(0, 0, 0, 1),
+				border_color = Color{0.25, 0.25, 0.25, 1},
+				z_index = 100000,
+				direction = .COLUMN,
+			},
+		},
+	)
+	defer element_close(ui_ctx)
+
+	// Panel Header
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				padding = space(16),
+				border = space(0, 0, 1, 0),
+				border_color = Color{0.25, 0.25, 0.25, 1},
+				bg_color = Color{0.15, 0.15, 0.18, 1},
+			},
+		},
+	)
+	text(
+		ui_ctx,
+		ev_ctx,
+		"Debug Inspector",
+		user_style = {text_color = Color{1, 1, 1, 1}, font_size = 18},
+	)
+	element_close(ui_ctx)
+
+	// Panel Body (Scrollable Tree)
+	scroll_id := scroll_begin(
+		ui_ctx,
+		ev_ctx,
+		scroll_y = true,
+		scroll_x = true,
+		user_style = {width = lc.Percent{100}, height = lc.Grow{1}},
+		salt = "debug_tree_scroll",
+	)
+
+	for root in prev_roots {
+		if root.id == debug_panel_id || root.id == highlight_id || root.id == info_bar_id do continue
+		_render_debug_node(
+			ui_ctx,
+			ev_ctx,
+			anim_ctx,
+			root,
+			0,
+			&tree_hover_target,
+			&tree_click_target,
+			pinned_node_id,
+		)
+	}
+
+	scroll_end(ui_ctx, ev_ctx, scroll_id, anim_ctx)
+
+	// --- RESOLVE HOVER AND PIN TARGETS ---
+	hover_target := ev_ctx.hovered_id
+	is_debug := false
+	curr := hover_target
+	for curr != 0 {
+		if curr == debug_panel_id || curr == highlight_id || curr == info_bar_id {
+			is_debug = true
+			break
+		}
+		if prev, ok := ui_ctx.layout.prev_all_boxes[curr]; ok && prev.parent != nil {
+			curr = prev.parent.id
+		} else {
+			break
+		}
+	}
+	if is_debug do hover_target = 0
+
+	// Handle Pinning (Tree Click overrides Physical Click)
+	if tree_click_target != 0 {
+		pinned_node_id = tree_click_target
+	} else if just_clicked && hover_target != 0 {
+		pinned_node_id = hover_target
+	}
+
+	// Auto-unpin if the element was destroyed this frame
+	if pinned_node_id != 0 && pinned_node_id not_in ui_ctx.layout.prev_all_boxes {
+		pinned_node_id = 0
+	}
+
+	// Resolve the active display target (Hover wins, falls back to Pin)
+	if tree_hover_target != 0 {
+		active_target_id = tree_hover_target
+	} else if hover_target != 0 {
+		active_target_id = hover_target
+	} else {
+		active_target_id = pinned_node_id
+	}
+
+	// 3. Information Bar
+	if active_target_id != 0 {
+		if target, ok := ui_ctx.layout.prev_all_boxes[active_target_id]; ok {
+			el := (^Element)(target.user_data)
+			name := lc.get_debug_name(target.id)
+			if name == "UNKNOWN_ID" do name = fmt.tprintf("Box_%d", target.id)
+
+			info_scroll_id := scroll_begin(
+				ui_ctx,
+				ev_ctx,
+				scroll_y = true,
+				user_style = {
+					width = lc.Percent{100},
+					height = lc.Fixed{280},
+					bg_color = Color{0.12, 0.12, 0.14, 1},
+					border = space(1, 0, 0, 0),
+					border_color = Color{0.25, 0.25, 0.25, 1},
+					padding = space(16),
+					gap = 4,
+				},
+				salt = "debug_info_scroll",
+			)
+
+			// Identity
+			text(
+				ui_ctx,
+				ev_ctx,
+				fmt.tprintf("ID: %s", name),
+				user_style = {
+					text_color = Color{0.4, 0.8, 0.4, 1},
+					font_size = 15,
+					padding = space(0, 0, 4, 0),
+				},
+				salt = "info_name",
+			)
+
+			element_open(
+				ui_ctx,
+				{
+					style = {
+						width = lc.Percent{100},
+						height = lc.Fixed{1},
+						bg_color = Color{0.25, 0.25, 0.25, 1},
+						margin = space(4, 0),
+					},
+				},
+			)
+			element_close(ui_ctx)
+
+			// Computed Bounds
+			_debug_kv(
+				ui_ctx,
+				ev_ctx,
+				"Size (W x H)",
+				fmt.tprintf("%.0f x %.0f", target.computed_width, target.computed_height),
+				"kv_size",
+			)
+			_debug_kv(
+				ui_ctx,
+				ev_ctx,
+				"Position (X, Y)",
+				fmt.tprintf("[%.0f, %.0f]", target.x, target.y),
+				"kv_pos",
+			)
+			_debug_kv(ui_ctx, ev_ctx, "Z-Index", fmt.tprintf("%d", target.z_index), "kv_z")
+			_debug_kv(
+				ui_ctx,
+				ev_ctx,
+				"Positioning",
+				fmt.tprintf("%v", target.position),
+				"kv_postype",
+			)
+
+			element_open(
+				ui_ctx,
+				{
+					style = {
+						width = lc.Percent{100},
+						height = lc.Fixed{1},
+						bg_color = Color{0.25, 0.25, 0.25, 1},
+						margin = space(8, 0),
+					},
+				},
+			)
+			element_close(ui_ctx)
+
+			// Layout / Flex
+			_debug_kv(ui_ctx, ev_ctx, "Direction", fmt.tprintf("%v", target.direction), "kv_dir")
+			_debug_kv(
+				ui_ctx,
+				ev_ctx,
+				"Justify Content",
+				fmt.tprintf("%v", target.justify_content),
+				"kv_just",
+			)
+			_debug_kv(
+				ui_ctx,
+				ev_ctx,
+				"Align Items",
+				fmt.tprintf("%v", target.align_items),
+				"kv_align",
+			)
+			_debug_kv(ui_ctx, ev_ctx, "Flex Wrap", fmt.tprintf("%v", target.wrap), "kv_wrap")
+
+			element_open(
+				ui_ctx,
+				{
+					style = {
+						width = lc.Percent{100},
+						height = lc.Fixed{1},
+						bg_color = Color{0.25, 0.25, 0.25, 1},
+						margin = space(8, 0),
+					},
+				},
+			)
+			element_close(ui_ctx)
+
+			// Box Model / Spacing
+			_debug_kv(ui_ctx, ev_ctx, "Padding", fmt.tprintf("%v", target.padding), "kv_pad")
+			_debug_kv(ui_ctx, ev_ctx, "Margin", fmt.tprintf("%v", target.margin), "kv_mar")
+			_debug_kv(ui_ctx, ev_ctx, "Border", fmt.tprintf("%v", target.border), "kv_bor")
+			_debug_kv(ui_ctx, ev_ctx, "Gap", fmt.tprintf("%.1f", target.gap), "kv_gap")
+			_debug_kv(
+				ui_ctx,
+				ev_ctx,
+				"Overflow (X/Y)",
+				fmt.tprintf("%v / %v", target.overflow_x, target.overflow_y),
+				"kv_over",
+			)
+
+			if el != nil {
+				element_open(
+					ui_ctx,
+					{
+						style = {
+							width = lc.Percent{100},
+							height = lc.Fixed{1},
+							bg_color = Color{0.25, 0.25, 0.25, 1},
+							margin = space(8, 0),
+						},
+					},
+				)
+				element_close(ui_ctx)
+
+				c_bg := el.resolved_bg_color
+				_debug_kv(
+					ui_ctx,
+					ev_ctx,
+					"Bg Color",
+					fmt.tprintf("[%.2f, %.2f, %.2f, %.2f]", c_bg[0], c_bg[1], c_bg[2], c_bg[3]),
+					"kv_bg",
+				)
+
+				c_bd := el.resolved_border_color
+				_debug_kv(
+					ui_ctx,
+					ev_ctx,
+					"Border Color",
+					fmt.tprintf("[%.2f, %.2f, %.2f, %.2f]", c_bd[0], c_bd[1], c_bd[2], c_bd[3]),
+					"kv_bdc",
+				)
+
+				_debug_kv(
+					ui_ctx,
+					ev_ctx,
+					"Border Radius",
+					fmt.tprintf("%v", el.resolved_border_radius),
+					"kv_rad",
+				)
+				_debug_kv(
+					ui_ctx,
+					ev_ctx,
+					"Opacity",
+					fmt.tprintf("%.2f", el.resolved_opacity),
+					"kv_op",
+				)
+
+				element_open(
+					ui_ctx,
+					{
+						style = {
+							width = lc.Percent{100},
+							height = lc.Fixed{1},
+							bg_color = Color{0.25, 0.25, 0.25, 1},
+							margin = space(8, 0),
+						},
+					},
+				)
+				element_close(ui_ctx)
+
+				c_tx := el.resolved_text_color
+				_debug_kv(
+					ui_ctx,
+					ev_ctx,
+					"Text Color",
+					fmt.tprintf("[%.2f, %.2f, %.2f, %.2f]", c_tx[0], c_tx[1], c_tx[2], c_tx[3]),
+					"kv_txc",
+				)
+				_debug_kv(
+					ui_ctx,
+					ev_ctx,
+					"Font Size",
+					fmt.tprintf("%.1f", el.resolved_font_size),
+					"kv_fs",
+				)
+				_debug_kv(
+					ui_ctx,
+					ev_ctx,
+					"Text Wrap",
+					fmt.tprintf("%v", el.resolved_text_wrap),
+					"kv_tw",
+				)
+				_debug_kv(
+					ui_ctx,
+					ev_ctx,
+					"Text Align",
+					fmt.tprintf("%v", el.resolved_text_align),
+					"kv_ta",
+				)
+			}
+
+			scroll_end(ui_ctx, ev_ctx, info_scroll_id, anim_ctx)
+		}
+	} else {
+		element_open(
+			ui_ctx,
+			Element {
+				style = {
+					width = lc.Percent{100},
+					height = lc.Fixed{280},
+					bg_color = Color{0.12, 0.12, 0.14, 1},
+					border = space(1, 0, 0, 0),
+					border_color = Color{0.25, 0.25, 0.25, 1},
+					justify_content = .CENTER,
+					align_items = .CENTER,
+				},
+			},
+		)
+		text(
+			ui_ctx,
+			ev_ctx,
+			"Hover or click an element to inspect",
+			user_style = {text_color = Color{0.4, 0.4, 0.4, 1}, font_size = 14},
+			salt = "info_empty",
+		)
+		element_close(ui_ctx)
+	}
+}
+
+@(private)
+_render_debug_node :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^events.Event_Context,
+	anim_ctx: ^anim.Context,
+	box: ^lc.Box,
+	depth: f32,
+	hovered_target: ^lc.Box_ID,
+	clicked_target: ^lc.Box_ID,
+	pinned_id: lc.Box_ID,
+) {
+	if box == nil do return
+
+	name := lc.get_debug_name(box.id)
+	if name == "UNKNOWN_ID" do name = fmt.tprintf("Box_%d", box.id)
+
+	row_id := lc.ID(box.id, "debug_row")
+	has_children := len(box.children) > 0
+
+	@(static) expanded_nodes: map[lc.Box_ID]bool
+	if box.id not_in expanded_nodes do expanded_nodes[box.id] = false
+
+	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, row_id)
+	if is_hovered do hovered_target^ = box.id
+
+	events.register(ev_ctx, row_id, events.Event_Callbacks{focusable = true, cursor = .HAND})
+	if ev_ctx.clicked_this_frame[row_id] or_else false {
+		expanded_nodes[box.id] = !expanded_nodes[box.id]
+		clicked_target^ = box.id
+	}
+
+	// Visually distinguish pinned elements in the tree
+	is_pinned := box.id == pinned_id
+	row_bg := Color{0, 0, 0, 0}
+	if is_hovered {
+		row_bg = Color{0.2, 0.4, 0.8, 0.5}
+	} else if is_pinned {
+		row_bg = Color{0.2, 0.5, 0.9, 0.25} // Faint blue selection background
+	}
+
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = row_id},
+			style = {
+				direction = .COLUMN,
+				width = lc.Percent{100},
+				padding = space(6, 8, 6, 8 + (depth * 16.0)),
+				bg_color = row_bg,
+				border = space(0, 0, 1, 0),
+				border_color = Color{1, 1, 1, 0.05},
+				gap = 2,
+			},
+		},
+	)
+
+	prefix := has_children ? (expanded_nodes[box.id] ? "v " : "> ") : "- "
+	t_color := has_children ? Color{0.9, 0.9, 0.9, 1} : Color{0.5, 0.7, 1.0, 1}
+
+	text(
+		ui_ctx,
+		ev_ctx,
+		fmt.tprintf("%s%s", prefix, name),
+		user_style = {text_color = t_color, font_size = 14},
+		salt = fmt.tprintf("debug_name_%d", box.id),
+	)
+
+	stats := fmt.tprintf(
+		"%.0f x %.0f  @  [%.0f, %.0f]",
+		box.computed_width,
+		box.computed_height,
+		box.x,
+		box.y,
+	)
+	text(
+		ui_ctx,
+		ev_ctx,
+		stats,
+		user_style = {
+			text_color = Color{0.5, 0.5, 0.5, 1},
+			font_size = 12,
+			padding = space(0, 0, 0, 14),
+		},
+		salt = fmt.tprintf("debug_stats_%d", box.id),
+	)
+
+	element_close(ui_ctx)
+
+	if has_children && expanded_nodes[box.id] {
+		for child in box.children {
+			_render_debug_node(
+				ui_ctx,
+				ev_ctx,
+				anim_ctx,
+				child,
+				depth + 1,
+				hovered_target,
+				clicked_target,
+				pinned_id,
+			)
+		}
+	}
 }

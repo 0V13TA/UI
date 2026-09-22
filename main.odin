@@ -66,6 +66,7 @@ App_State :: struct {
 	carousel_images:   []string,
 	selected_date:     [3]int, // [YYYY, MM, DD]
 	date_picker_open:  bool,
+	debug_mode_open:   bool,
 }
 
 // ---------------------------------------------------------
@@ -80,7 +81,7 @@ page_dashboard :: proc(
 ) {
 	state := (^App_State)(raw_state)
 
-	renderer.scroll_begin(
+	dash_scroll_id := renderer.scroll_begin(
 		ui_ctx,
 		ev_ctx,
 		user_style = {
@@ -91,7 +92,7 @@ page_dashboard :: proc(
 		},
 		salt = "dash_scroll",
 	)
-	defer renderer.scroll_end(ui_ctx)
+	defer renderer.scroll_end(ui_ctx, ev_ctx, dash_scroll_id, anim_ctx)
 
 	renderer.text(
 		ui_ctx,
@@ -236,14 +237,14 @@ tab_controls :: proc(
 			state.sdl_rend,
 			state.carousel_images,
 			&state.carousel_idx,
-      wrapper_style = {width = lc.Percent{100}}, // Explicitly bound the Fit(true) parent
+			wrapper_style = {width = lc.Percent{100}}, // Explicitly bound the Fit(true) parent
 			viewport_style = {width = lc.Percent{100}, height = lc.Fixed{160}},
 			arrow_style = {
 				width = lc.Fixed{32},
 				height = lc.Fixed{32},
 				padding = renderer.space(8),
 			},
-      auto_play = true,
+			auto_play = true,
 			salt = "carousel1",
 		)
 	}
@@ -266,7 +267,7 @@ page_directory :: proc(
 ) {
 	state := (^App_State)(raw_state)
 
-	renderer.scroll_begin(
+	dir_scroll_id := renderer.scroll_begin(
 		ui_ctx,
 		ev_ctx,
 		user_style = {
@@ -277,7 +278,7 @@ page_directory :: proc(
 		},
 		salt = "dir_scroll",
 	)
-	defer renderer.scroll_end(ui_ctx)
+	defer renderer.scroll_end(ui_ctx, ev_ctx, dir_scroll_id, anim_ctx)
 
 	renderer.text(
 		ui_ctx,
@@ -492,7 +493,7 @@ page_settings :: proc(
 ) {
 	state := (^App_State)(raw_state)
 
-	renderer.scroll_begin(
+	set_scroll_id := renderer.scroll_begin(
 		ui_ctx,
 		ev_ctx,
 		user_style = {
@@ -503,7 +504,7 @@ page_settings :: proc(
 		},
 		salt = "set_scroll",
 	)
-	defer renderer.scroll_end(ui_ctx)
+	defer renderer.scroll_end(ui_ctx, ev_ctx, set_scroll_id, anim_ctx)
 
 	renderer.text(
 		ui_ctx,
@@ -648,6 +649,18 @@ main :: proc() {
 			ev.pump_events(&ev_ctx, &event)
 			if event.type == .QUIT do running = false
 
+			if event.type == .KEYDOWN {
+				// Cycle Focus
+				if event.key.keysym.sym == .TAB {
+					has_shift := (transmute(u16)event.key.keysym.mod & 0x0003) != 0
+					ev.cycle_focus(&ev_ctx, reverse = has_shift)
+				}
+				// Toggle Debug Mode
+				if event.key.keysym.sym == .F3 {
+					app.debug_mode_open = !app.debug_mode_open
+				}
+			}
+
 			if event.type == .MOUSEBUTTONDOWN && event.button.button == sdl.BUTTON_RIGHT {
 				my_context_open = true
 				my_context_x = f32(event.button.x)
@@ -779,6 +792,10 @@ main :: proc() {
 				if renderer.button(ui_ctx, &ev_ctx, "Inspect Element", user_style = {text_align = .LEFT}) do my_context_open = false
 				if renderer.button(ui_ctx, &ev_ctx, "Delete Node", user_style = {text_align = .LEFT, text_color = renderer.Color{0.9, 0.2, 0.2, 1}}) do my_context_open = false
 			}
+
+			if app.debug_mode_open {
+				renderer.debug_panel(ui_ctx, &ev_ctx, &anim_ctx)
+			}
 		}
 
 		roots := renderer.ui_layout_tree(ui_ctx)
@@ -786,7 +803,7 @@ main :: proc() {
 			anim.apply_structural(&anim_ctx, root)
 		}
 		renderer.ui_compute(ui_ctx)
-    anim.process_lifecycles(&anim_ctx, ui_ctx.layout)
+		anim.process_lifecycles(&anim_ctx, ui_ctx.layout)
 		anim.update(&anim_ctx.engine, frame_dt)
 
 		visual_cb :: proc(user_data: rawptr, state: ^anim.Retained_State) {
