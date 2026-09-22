@@ -3993,7 +3993,7 @@ calc_textarea_cursor_pos :: proc(
 			end_idx := start_idx
 			line_width: f32 = 0.0
 
-			// 1. Simulate word wrap to find how many words fit on this line
+			// Simulate word wrap to find how many words fit on this line
 			for end_idx < len(words) {
 				word_width: f32 = 0.0
 				if len(words[end_idx]) > 0 {
@@ -4009,7 +4009,7 @@ calc_textarea_cursor_pos :: proc(
 				end_idx += 1
 			}
 
-			// 2. Traverse the words on this specific wrapped line
+			// Traverse the words on this specific wrapped line
 			for i in start_idx ..< end_idx {
 				word_bytes := len(words[i])
 
@@ -4085,7 +4085,7 @@ calc_textarea_cursor_idx :: proc(
 			end_idx := start_idx
 			line_width: f32 = 0.0
 
-			// 1. Determine visual line boundaries
+			// Determine visual line boundaries
 			for end_idx < len(words) {
 				word_width: f32 = 0.0
 				if len(words[end_idx]) > 0 {
@@ -4101,7 +4101,7 @@ calc_textarea_cursor_idx :: proc(
 				end_idx += 1
 			}
 
-			// 2. Map X position if target_y falls inside this visual line
+			// Map X position if target_y falls inside this visual line
 			if target_y >= current_y && target_y < current_y + line_height {
 				current_x: f32 = 0.0
 				best_dist: f32 = 999999.0
@@ -4146,7 +4146,7 @@ calc_textarea_cursor_idx :: proc(
 				return best_idx
 			}
 
-			// 3. Advance trackers if we haven't found the line yet
+			// Advance trackers if we haven't found the line yet
 			for i in start_idx ..< end_idx {
 				byte_tracker += len(words[i])
 				if i < len(words) - 1 do byte_tracker += 1
@@ -4232,6 +4232,41 @@ textarea :: proc(
 	font_path := final_text.font_name.? or_else parent_font_name
 	font_size := final_text.font_size.? or_else parent_font_size
 	active_font := get_font(ui_ctx, font_path, font_size)
+
+  is_pressed := ev_ctx.pressed_id == root_id
+	was_pressed := ev_ctx.prev_pressed_id == root_id
+	just_pressed := is_pressed && !was_pressed
+	is_dragging := is_pressed && was_pressed
+
+	if is_pressed {
+		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
+			mx, my: i32
+			sdl.GetMouseState(&mx, &my)
+
+			// Convert global mouse coordinates to local scrolled space
+			scroll_x := ev_ctx.scroll_offsets_x[root_id]
+			scroll_y := ev_ctx.scroll_offsets_y[root_id]
+			
+			local_x := f32(mx) - prev_outer.x - prev_outer.border[3] - prev_outer.padding[3] + scroll_x
+			local_y := f32(my) - prev_outer.y - prev_outer.border[0] - prev_outer.padding[0] + scroll_y
+
+			// Determine inner viewport width for text wrapping bounds
+			viewport_width := prev_outer.computed_width - get_horizontal(prev_outer.padding) - get_horizontal(prev_outer.border)
+			if viewport_width <= 0 do viewport_width = 1000.0
+
+			// Find the visual index
+			best_cursor := calc_textarea_cursor_idx(active_font, display_text, local_x, local_y, viewport_width)
+
+			// Update the gap buffer (keep_anchor = true if dragging to create a selection)
+			gap_buffer_move_cursor(buffer, best_cursor, is_dragging)
+
+			// Reset blink timer so the caret stays solid while clicking/dragging
+			if just_pressed || ev_ctx.cursor_last_position[root_id] != best_cursor {
+				ev_ctx.cursor_blink_start[root_id] = u64(sdl.GetTicks())
+				ev_ctx.cursor_last_position[root_id] = best_cursor
+			}
+		}
+	}
 
 	// Resolve Wrap and Styles
 	final_wrapper := merge_styles(DEFAULT_TEXTAREA_WRAPPER_STYLE, wrapper_style)
