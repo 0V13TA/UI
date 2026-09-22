@@ -6,6 +6,7 @@ import "core:math"
 import "core:strings"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
+import "vendor:sdl2/ttf"
 
 is_tree_hovered :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, target_id: Box_ID) -> bool {
 	curr := ev_ctx.hovered_id
@@ -2521,10 +2522,10 @@ router_view :: proc(
 		wrapper_style,
 	)
 
-	// 1. MUST OPEN ELEMENT FIRST! (So the animation engine can find its ID)
+	// MUST OPEN ELEMENT FIRST! (So the animation engine can find its ID)
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	// 2. Trigger the "Out" animation
+	// Trigger the "Out" animation
 	if requested_idx != router_state.target_idx && !router_state.is_transitioning {
 		router_state.is_transitioning = true
 		router_state.target_idx = requested_idx
@@ -2536,7 +2537,7 @@ router_view :: proc(
 		)
 	}
 
-	// 3. Trigger the "In" animation when the fade-out completes
+	// Trigger the "In" animation when the fade-out completes
 	page_anim := get_state(anim_ctx, root_id)
 	if router_state.is_transitioning &&
 	   page_anim.opacity <= 0.01 &&
@@ -2552,7 +2553,7 @@ router_view :: proc(
 		)
 	}
 
-	// 4. Execute the isolated page procedure
+	// Execute the isolated page procedure
 	if router_state.current_idx >= 0 && router_state.current_idx < len(pages) {
 		pages[router_state.current_idx](ui_ctx, ev_ctx, anim_ctx, app_state)
 	}
@@ -2925,7 +2926,7 @@ color_picker :: proc(
 	root_id := ID(loc, salt)
 	swatch_id := ID(root_id, "swatch")
 
-	// 1. Stateful HSV Tracking (Prevents losing Hue when Value is 0 / Black)
+	// Stateful HSV Tracking (Prevents losing Hue when Value is 0 / Black)
 	@(static) hsv_states: map[Box_ID][3]f32
 	if root_id not_in hsv_states do hsv_states[root_id] = rgb_to_hsv(color[0], color[1], color[2])
 
@@ -2962,7 +2963,7 @@ color_picker :: proc(
 	) {
 		defer popover_end(ui_ctx, true)
 
-		// 2. Allocate Render Data on the layout frame allocator so it survives until render_tree!
+		// Allocate Render Data on the layout frame allocator so it survives until render_tree!
 		Render_State :: struct {
 			h, s, v, a: f32,
 		}
@@ -3361,7 +3362,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 	highlight_id := ID("DEBUG_HIGHLIGHT_OVERLAY")
 	info_bar_id := ID("DEBUG_INFO_BAR")
 
-	// 1. Highlight Overlay
+	// Highlight Overlay
 	if active_target_id != 0 {
 		if target, ok := ui_ctx.layout.prev_all_boxes[active_target_id]; ok {
 			element_open(
@@ -3385,7 +3386,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 		}
 	}
 
-	// 2. Fixed Tree Panel
+	// Fixed Tree Panel
 	element_open(
 		ui_ctx,
 		Element {
@@ -3486,7 +3487,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 		active_target_id = pinned_node_id
 	}
 
-	// 3. Information Bar (Docked natively at the bottom of the column!)
+	// Information Bar (Docked natively at the bottom of the column!)
 	info_scroll_id := scroll_begin(
 		ui_ctx,
 		ev_ctx,
@@ -3896,4 +3897,533 @@ _debug_divider :: proc(ui_ctx: ^UI_Context) {
 		},
 	)
 	element_close(ui_ctx)
+}
+
+DEFAULT_TEXTAREA_WRAPPER_STYLE :: Style {
+	width         = Percent{100},
+	height        = Fixed{150},
+	padding       = [4]f32{8, 8, 8, 8},
+	border_radius = [4]f32{6, 6, 6, 6},
+	border        = [4]f32{2, 2, 2, 2},
+	border_color  = Color{0.8, 0.8, 0.8, 1},
+	bg_color      = Color{1, 1, 1, 1},
+}
+
+DEFAULT_TEXTAREA_TEXT_STYLE :: Style {
+	width      = Percent{100},
+	height     = Fit(true),
+	font_size  = 18,
+	text_wrap  = .WORD,
+	text_align = .LEFT,
+	text_color = Color{0.1, 0.1, 0.1, 1},
+}
+
+@(private = "file")
+Textarea_State :: struct {
+	ev_ctx: ^Event_Context,
+	ui_ctx: ^UI_Context,
+}
+
+@(private = "file")
+_textarea_text_input_cb :: proc(e: ^UI_Event, data: rawptr) {
+	state := (^Textarea_State)(data)
+	ev_ctx := state.ev_ctx
+	if ev_ctx.focused_gap_buffer == nil do return
+
+	gb := ev_ctx.focused_gap_buffer
+	gap_buffer_delete_selection(gb)
+	gap_buffer_insert_string(gb, e.text)
+}
+
+
+@(private = "file")
+_textarea_key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
+	state := (^Textarea_State)(data)
+	ev_ctx := state.ev_ctx
+	ui_ctx := state.ui_ctx
+
+	gb := ev_ctx.focused_gap_buffer
+
+	has_shift := (transmute(u16)e.key_mod & 0x0003) != 0
+	has_ctrl := (transmute(u16)e.key_mod & 0x00C0) != 0
+
+	#partial switch e.keycode {
+	case .a:
+		if has_ctrl { 	// Select All
+			gb.anchor = 0
+			gap_buffer_move_cursor(gb, gap_buffer_length(gb), true)
+		}
+	case .c:
+		if has_ctrl && gap_buffer_has_selection(gb) { 	// Copy
+			start_idx := min(gb.gap_start, gb.anchor)
+			end_idx := max(gb.gap_start, gb.anchor)
+
+			// We allocate the C-String on the temp allocator to pass to the OS
+			clipboard_str := gap_buffer_get_substring(gb, start_idx, end_idx)
+			clipboard_cstr := fmt.ctprintf("%s", clipboard_str)
+			sdl.SetClipboardText(clipboard_cstr)
+		}
+	case .x:
+		if has_ctrl && gap_buffer_has_selection(gb) { 	// Cut
+			start_idx := min(gb.gap_start, gb.anchor)
+			end_idx := max(gb.gap_start, gb.anchor)
+
+			clipboard_str := gap_buffer_get_substring(gb, start_idx, end_idx)
+			clipboard_cstr := fmt.ctprintf("%s", clipboard_str)
+			sdl.SetClipboardText(clipboard_cstr)
+
+			gap_buffer_delete_selection(gb)
+		}
+	case .v:
+		if has_ctrl && sdl.HasClipboardText() { 	// Paste
+			clipboard_cstr := sdl.GetClipboardText()
+			if clipboard_cstr != nil {
+				defer sdl.free(rawptr(clipboard_cstr))
+				pasted_str := string(clipboard_cstr)
+
+				// Strip carriage returns if present from Windows clipboards
+				clean_str, _ := strings.replace_all(pasted_str, "\r", "", context.temp_allocator)
+
+				gap_buffer_delete_selection(gb)
+				gap_buffer_insert_string(gb, clean_str)
+			}
+		}
+	case .ESCAPE:
+		if gap_buffer_has_selection(gb) {
+			gb.anchor = gb.gap_start // Clear selection
+		}
+	case .LEFT:
+		if has_shift {
+			gap_buffer_move_left(gb, true)
+		} else {
+			if gap_buffer_has_selection(gb) {
+				gap_buffer_move_cursor(gb, min(gb.gap_start, gb.anchor), false)
+			} else {
+				gap_buffer_move_left(gb, false)
+			}
+		}
+	case .RIGHT:
+		if has_shift {
+			gap_buffer_move_right(gb, true)
+		} else {
+			if gap_buffer_has_selection(gb) {
+				gap_buffer_move_cursor(gb, max(gb.gap_start, gb.anchor), false)
+			} else {
+				gap_buffer_move_right(gb, false)
+			}
+		}
+	case .UP, .DOWN:
+		box, has_box := ui_ctx.layout.prev_all_boxes[e.current_target]
+		if has_box && box.user_data != nil {
+			el := (^Element)(box.user_data)
+			font := el.resolved_font
+			text := gap_buffer_to_string(gb, context.temp_allocator)
+
+			// Reconstruct the inner width bounds
+			viewport_width :=
+				box.computed_width -
+				box.padding[1] -
+				box.padding[3] -
+				box.border[1] -
+				box.border[3]
+			if viewport_width <= 0 do viewport_width = 1000.0
+
+			curr_x, curr_y := calc_textarea_cursor_pos(font, text, gb.gap_start, viewport_width)
+			line_height := f32(ttf.FontHeight(font))
+
+			target_y := e.keycode == .UP ? curr_y - line_height : curr_y + line_height
+			target_idx := calc_textarea_cursor_idx(font, text, curr_x, target_y, viewport_width)
+
+			gap_buffer_move_cursor(gb, target_idx, has_shift)
+		} else {
+			// Fallbacks in case the layout engine hasn't processed the box yet
+			if e.keycode == .UP do gap_buffer_move_up(gb, has_shift)
+			else do gap_buffer_move_down(gb, has_shift)
+		}
+	case .BACKSPACE:
+		if !gap_buffer_delete_selection(gb) {
+			gap_buffer_backspace(gb)
+		}
+	case .DELETE:
+		if !gap_buffer_delete_selection(gb) {
+			gap_buffer_delete(gb)
+		}
+	case .RETURN, .KP_ENTER:
+		gap_buffer_delete_selection(gb)
+		gap_buffer_insert_rune(gb, '\n')
+	case .HOME:
+		gap_buffer_move_cursor(gb, 0, has_shift)
+	case .END:
+		gap_buffer_move_cursor(gb, gap_buffer_length(gb), has_shift)
+	}
+}
+
+@(private = "file")
+calc_textarea_cursor_pos :: proc(
+	font: ^ttf.Font,
+	text: string,
+	cursor_byte_idx: int,
+	max_width: f32,
+) -> (
+	x, y: f32,
+) {
+	if font == nil do return 0, 0
+	if cursor_byte_idx <= 0 do return 0.0, 0.0
+
+	line_height := f32(ttf.FontHeight(font))
+	space_w, space_h: i32
+	ttf.SizeUTF8(font, " ", &space_w, &space_h)
+	space_width := f32(space_w)
+
+	current_x: f32 = 0.0
+	current_y: f32 = 0.0
+	byte_tracker := 0
+
+	explicit_lines := strings.split(text, "\n", context.temp_allocator)
+
+	for explicit_line, l_idx in explicit_lines {
+		words := strings.split(explicit_line, " ", context.temp_allocator)
+		start_idx := 0
+
+		for start_idx < len(words) {
+			end_idx := start_idx
+			line_width: f32 = 0.0
+
+			// 1. Simulate word wrap to find how many words fit on this line
+			for end_idx < len(words) {
+				word_width: f32 = 0.0
+				if len(words[end_idx]) > 0 {
+					c_word := fmt.ctprintf("%s", words[end_idx])
+					w, h: i32
+					ttf.SizeUTF8(font, c_word, &w, &h)
+					word_width = f32(w)
+				}
+				if end_idx > start_idx && line_width + word_width > max_width {
+					break
+				}
+				line_width += word_width + space_width
+				end_idx += 1
+			}
+
+			// 2. Traverse the words on this specific wrapped line
+			for i in start_idx ..< end_idx {
+				word_bytes := len(words[i])
+
+				// Does the cursor fall inside this word?
+				if cursor_byte_idx >= byte_tracker &&
+				   cursor_byte_idx <= byte_tracker + word_bytes {
+					local_byte_offset := cursor_byte_idx - byte_tracker
+					sub_str := words[i][:local_byte_offset]
+
+					w: i32 = 0
+					if len(sub_str) > 0 do ttf.SizeUTF8(font, fmt.ctprintf("%s", sub_str), &w, nil)
+					return current_x + f32(w), current_y
+				}
+
+				w: i32 = 0
+				if word_bytes > 0 do ttf.SizeUTF8(font, fmt.ctprintf("%s", words[i]), &w, nil)
+
+				current_x += f32(w)
+				byte_tracker += word_bytes
+
+				// Apply space separator if it's not the last word of the explicit line
+				if i < len(words) - 1 {
+					if cursor_byte_idx == byte_tracker {
+						return current_x, current_y
+					}
+					current_x += space_width
+					byte_tracker += 1 // 1 byte for ' '
+				}
+			}
+
+			current_y += line_height
+			current_x = 0.0
+			start_idx = end_idx
+		}
+
+		// Apply newline separator if it's not the last explicit line
+		if l_idx < len(explicit_lines) - 1 {
+			if cursor_byte_idx == byte_tracker {
+				return current_x, current_y
+			}
+			byte_tracker += 1 // 1 byte for '\n'
+		}
+	}
+
+	return current_x, current_y
+}
+
+@(private = "file")
+calc_textarea_cursor_idx :: proc(
+	font: ^ttf.Font,
+	text: string,
+	target_x, target_y: f32,
+	max_width: f32,
+) -> int {
+	if font == nil || len(text) == 0 do return 0
+	if target_y < 0 do return 0 // Above the first line
+
+	line_height := f32(ttf.FontHeight(font))
+	space_w, space_h: i32
+	ttf.SizeUTF8(font, " ", &space_w, &space_h)
+	space_width := f32(space_w)
+
+	current_y: f32 = 0.0
+	byte_tracker := 0
+
+	explicit_lines := strings.split(text, "\n", context.temp_allocator)
+
+	for explicit_line, l_idx in explicit_lines {
+		words := strings.split(explicit_line, " ", context.temp_allocator)
+		start_idx := 0
+
+		for start_idx < len(words) {
+			end_idx := start_idx
+			line_width: f32 = 0.0
+
+			// 1. Determine visual line boundaries
+			for end_idx < len(words) {
+				word_width: f32 = 0.0
+				if len(words[end_idx]) > 0 {
+					c_word := fmt.ctprintf("%s", words[end_idx])
+					w, h: i32
+					ttf.SizeUTF8(font, c_word, &w, &h)
+					word_width = f32(w)
+				}
+				if end_idx > start_idx && line_width + word_width > max_width {
+					break
+				}
+				line_width += word_width + space_width
+				end_idx += 1
+			}
+
+			// 2. Map X position if target_y falls inside this visual line
+			if target_y >= current_y && target_y < current_y + line_height {
+				current_x: f32 = 0.0
+				best_dist: f32 = 999999.0
+				best_idx: int = byte_tracker
+
+				for i in start_idx ..< end_idx {
+					word_bytes := len(words[i])
+
+					for char_idx in 0 ..= word_bytes {
+						sub_str := words[i][:char_idx]
+						w: i32 = 0
+						if len(sub_str) > 0 do ttf.SizeUTF8(font, fmt.ctprintf("%s", sub_str), &w, nil)
+
+						char_x := current_x + f32(w)
+						dist := math.abs(char_x - target_x)
+						if dist < best_dist {
+							best_dist = dist
+							best_idx = byte_tracker + char_idx
+						}
+					}
+
+					w: i32 = 0
+					if word_bytes > 0 do ttf.SizeUTF8(font, fmt.ctprintf("%s", words[i]), &w, nil)
+					current_x += f32(w)
+					byte_tracker += word_bytes
+
+					if i < len(words) - 1 {
+						dist := math.abs(current_x - target_x)
+						if dist < best_dist {
+							best_dist = dist
+							best_idx = byte_tracker
+						}
+						current_x += space_width
+						byte_tracker += 1
+					}
+				}
+
+				// Check trailing line space
+				if math.abs(current_x - target_x) < best_dist {
+					best_idx = byte_tracker
+				}
+				return best_idx
+			}
+
+			// 3. Advance trackers if we haven't found the line yet
+			for i in start_idx ..< end_idx {
+				byte_tracker += len(words[i])
+				if i < len(words) - 1 do byte_tracker += 1
+			}
+
+			current_y += line_height
+			start_idx = end_idx
+		}
+
+		if l_idx < len(explicit_lines) - 1 {
+			byte_tracker += 1 // Account for explicit '\n'
+		}
+	}
+
+	return len(text) // Below the last line
+}
+
+
+textarea :: proc(
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^Event_Context,
+	buffer: ^Gap_Buffer,
+	placeholder := "",
+	wrapper_style: Style = DEFAULT_TEXTAREA_WRAPPER_STYLE,
+	text_style: Style = DEFAULT_TEXTAREA_TEXT_STYLE,
+	focused_border_color: Color = {0.15, 0.4, 0.8, 1},
+	salt := "",
+	id: string = "",
+	loc := #caller_location,
+) -> bool {
+	root_id := ID(id) if id != "" else ID(loc, salt)
+	string_id := ID(root_id, "text")
+
+	state := new(Textarea_State, frame_allocator(ui_ctx.layout))
+	state.ev_ctx = ev_ctx
+	state.ui_ctx = ui_ctx
+
+	register(
+		ev_ctx,
+		root_id,
+		Event_Callbacks {
+			cursor = .IBEAM,
+			focusable = true,
+			user_data = state,
+			on_text_input = _textarea_text_input_cb,
+			on_key_down = _textarea_key_down_cb,
+		},
+	)
+
+	is_focused := ev_ctx.focused_id == root_id
+
+	if is_focused {
+		sdl.StartTextInput()
+		ev_ctx.focused_gap_buffer = buffer
+
+		if root_id not_in ev_ctx.cursor_blink_start {
+			ev_ctx.cursor_blink_start[root_id] = u64(sdl.GetTicks())
+		}
+	} else if ev_ctx.focused_gap_buffer == buffer {
+		sdl.StopTextInput()
+		ev_ctx.focused_gap_buffer = nil
+	}
+
+	// Generate text for rendering
+	display_text := gap_buffer_to_string(buffer, context.temp_allocator)
+	if len(display_text) == 0 do display_text = placeholder
+
+	// Resolve Fonts
+	final_text := merge_styles(DEFAULT_TEXTAREA_TEXT_STYLE, text_style)
+
+	parent_font_name := ""
+	parent_font_size: f32 = 16.0
+	if len(ui_ctx.layout.parent_stack) > 0 {
+		parent_box := ui_ctx.layout.parent_stack[len(ui_ctx.layout.parent_stack) - 1]
+		if parent_box.user_data != nil {
+			parent_el := (^Element)(parent_box.user_data)
+			parent_font_name = parent_el.resolved_font_name
+			parent_font_size = parent_el.resolved_font_size
+		}
+	}
+
+	font_path := final_text.font_name.? or_else parent_font_name
+	font_size := final_text.font_size.? or_else parent_font_size
+	active_font := get_font(ui_ctx, font_path, font_size)
+
+	// Resolve Wrap and Styles
+	final_wrapper := merge_styles(DEFAULT_TEXTAREA_WRAPPER_STYLE, wrapper_style)
+	if is_focused do final_wrapper.border_color = focused_border_color
+
+	if is_focused && buffer.anchor != buffer.gap_start {
+		final_text.selection_start = buffer.anchor
+		final_text.selection_end = buffer.gap_start
+		final_text.selection_color = Color{0.2, 0.5, 0.9, 0.4}
+	}
+
+	scroll_begin(
+		ui_ctx,
+		ev_ctx,
+		id = root_id,
+		scroll_y = true,
+		scroll_x = false,
+		user_style = final_wrapper,
+		loc = loc,
+	)
+
+	// Cursor Pos & Scroll Handling
+	cursor_x, cursor_y: f32 = 0.0, 0.0
+	cursor_visible := false
+
+	if is_focused {
+		elapsed := u64(sdl.GetTicks()) - ev_ctx.cursor_blink_start[root_id]
+		cursor_visible = (elapsed % 1000) < 500
+
+		viewport_width: f32 = 1000.0 // Default wide fallback
+		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
+			viewport_width =
+				prev_outer.computed_width -
+				get_horizontal(prev_outer.padding) -
+				get_horizontal(prev_outer.border)
+		}
+
+		cursor_x, cursor_y = calc_textarea_cursor_pos(
+			active_font,
+			display_text,
+			buffer.gap_start,
+			viewport_width,
+		)
+
+		// Auto-scroll
+		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
+			scroll_y := ev_ctx.scroll_offsets_y[root_id]
+			viewport_height :=
+				prev_outer.computed_height -
+				get_vertical(prev_outer.padding) -
+				get_vertical(prev_outer.border)
+
+			margin: f32 = 10.0
+			line_height := f32(ttf.FontHeight(active_font))
+
+			if cursor_y < scroll_y + margin {
+				ev_ctx.scroll_offsets_y[root_id] = max(cursor_y - margin, 0)
+			} else if cursor_y + line_height > scroll_y + viewport_height - margin {
+				ev_ctx.scroll_offsets_y[root_id] =
+					cursor_y + line_height - viewport_height + margin
+			}
+		}
+	}
+
+	// Draw the text
+	element_open(
+		ui_ctx,
+		Element {
+			_box = {id = string_id},
+			text = display_text,
+			style = final_text,
+			resolved_font = active_font, // Feed the resolved font natively
+		},
+		loc,
+	)
+	element_close(ui_ctx)
+
+	// Draw the Caret
+	if cursor_visible {
+		line_h := f32(ttf.FontHeight(active_font))
+		element_open(
+			ui_ctx,
+			Element {
+				style = {
+					position = .ABSOLUTE,
+					left = cursor_x,
+					top = cursor_y,
+					width = Fixed{2},
+					height = Fixed{line_h},
+					bg_color = Color{0.1, 0.1, 0.1, 1},
+				},
+			},
+			loc,
+		)
+		element_close(ui_ctx)
+	}
+
+	scroll_end(ui_ctx, ev_ctx, root_id)
+	return is_focused
 }

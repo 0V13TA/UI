@@ -49,6 +49,7 @@ Event_Context :: struct {
 	cursor_last_position: map[Box_ID]int,
 	focused_buffer:       ^[dynamic]u8,
 	focus_order:          [dynamic]Box_ID,
+	focused_gap_buffer:   ^Gap_Buffer,
 }
 
 UI_Event :: struct {

@@ -221,15 +221,19 @@ get_font :: proc(ctx: ^UI_Context, path: string, size: f32) -> ^ttf.Font {
 	return font
 }
 
+@(private)
 space_1 :: proc(all: f32) -> [4]f32 {
 	return {all, all, all, all}
 }
+@(private)
 space_2 :: proc(vertical, horizontal: f32) -> [4]f32 {
 	return {vertical, horizontal, vertical, horizontal}
 }
+@(private)
 space_3 :: proc(top, horizontal, bottom: f32) -> [4]f32 {
 	return {top, horizontal, bottom, horizontal}
 }
+@(private)
 space_4 :: proc(top, right, bottom, left: f32) -> [4]f32 {
 	return {top, right, bottom, left}
 }
@@ -243,15 +247,18 @@ space :: proc {
 
 
 // --- Color Helpers ---
+@(private)
 to_sdl_color :: proc(c: Color) -> (u8, u8, u8, u8) {
 	return u8(c[0] * 255), u8(c[1] * 255), u8(c[2] * 255), u8(c[3] * 255)
 }
 
+@(private)
 set_render_color :: proc(renderer: ^sdl.Renderer, c: Color) {
 	r, g, b, a := to_sdl_color(c)
 	sdl.SetRenderDrawColor(renderer, r, g, b, a)
 }
 
+@(private)
 create_9slice_base_texture :: proc(renderer: ^sdl.Renderer, radius: i32) -> ^sdl.Texture {
 	size := radius * 2 + 2 // +2 gives a 2px stretchable center
 
@@ -307,6 +314,7 @@ create_9slice_base_texture :: proc(renderer: ^sdl.Renderer, radius: i32) -> ^sdl
 	return tex
 }
 
+@(private)
 draw_rounded_rect_9slice :: proc(
 	renderer: ^sdl.Renderer,
 	tex: ^sdl.Texture,
@@ -368,6 +376,7 @@ draw_rounded_rect_9slice :: proc(
 }
 
 
+@(private)
 get_9slice_texture :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer) -> ^sdl.Texture {
 	if ctx.master_9slice == nil {
 		ctx.master_9slice = create_9slice_base_texture(renderer, MASTER_CORNER_RADIUS)
@@ -375,6 +384,7 @@ get_9slice_texture :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer) -> ^sdl.Te
 	return ctx.master_9slice
 }
 
+@(private)
 get_mask_texture :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, w, h: i32) -> ^sdl.Texture {
 	// If we already have a texture large enough, just reuse it!
 	if ctx.mask_texture != nil && ctx.mask_texture_w >= w && ctx.mask_texture_h >= h {
@@ -403,6 +413,7 @@ get_mask_texture :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, w, h: i32) -
 }
 
 // --- Master Box Drawing Proc ---
+@(private)
 draw_ui_box :: proc(
 	ctx: ^UI_Context,
 	renderer: ^sdl.Renderer,
@@ -508,6 +519,7 @@ draw_ui_box :: proc(
 	}
 }
 
+@(private)
 draw_ui_text :: proc(
 	ctx: ^UI_Context,
 	renderer: ^sdl.Renderer,
@@ -543,6 +555,7 @@ draw_ui_text :: proc(
 		prev_ch = ch
 	}
 }
+
 
 @(private)
 ui_text_width :: proc(box: ^Box, text: string) -> f32 {
@@ -885,6 +898,7 @@ apply_styles :: proc(el: ^Element, ctx: ^UI_Context) {
 }
 
 // Merges a sparse override style on top of a base default style.
+@(private)
 merge_styles :: proc(base: Style, override: Style) -> Style {
 	result := base
 
@@ -957,6 +971,7 @@ set_clip :: proc(renderer: ^sdl.Renderer, current: ^Maybe(Rect), target: Maybe(R
 	current^ = target
 }
 
+@(private)
 render_box :: proc(
 	ui_ctx: ^UI_Context,
 	renderer: ^sdl.Renderer,
@@ -1321,6 +1336,11 @@ render_box :: proc(
 												nil,
 											)
 
+											// ---> FIX 1: Extend highlight to cover the trailing space
+											if e_idx > global_char_idx + word_len {
+												hl_w += i32(space_width)
+											}
+
 											sel_col :=
 												el.style.selection_color.? or_else Color {
 													0.2,
@@ -1357,6 +1377,30 @@ render_box :: proc(
 								cursor_x += f32(w) + space_width
 								global_char_idx += word_len + 1
 							} else {
+								// ---> FIX 2: Highlight standalone consecutive spaces
+								if s, ok1 := el.style.selection_start.?; ok1 {
+									if e, ok2 := el.style.selection_end.?; ok2 {
+										s_idx, e_idx := min(s, e), max(s, e)
+										if s_idx <= global_char_idx && e_idx > global_char_idx {
+											sel_col :=
+												el.style.selection_color.? or_else Color {
+													0.2,
+													0.5,
+													0.9,
+													0.4,
+												}
+											set_render_color(renderer, sel_col)
+											bg_rect := sdl.Rect {
+												i32(cursor_x),
+												i32(cursor_y),
+												i32(space_width),
+												i32(line_height),
+											}
+											sdl.RenderFillRect(renderer, &bg_rect)
+										}
+									}
+								}
+
 								cursor_x += space_width
 								global_char_idx += 1
 							}
@@ -1378,6 +1422,7 @@ render_box :: proc(
 	set_clip(renderer, current_clip, previous_clip)
 }
 
+@(private)
 render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^Box) {
 	current_clip: Maybe(Rect) = nil
 	for root_box in root_boxes {
@@ -1389,6 +1434,7 @@ render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^Bo
 	}
 }
 
+@(private)
 get_glyph :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, font: ^ttf.Font, ch: rune) -> Glyph {
 	key := Glyph_Key {
 		font = font,
@@ -1424,6 +1470,7 @@ get_glyph :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, font: ^ttf.Font, ch
 	return glyph
 }
 
+@(private)
 clear_glyph_cache :: proc(ctx: ^UI_Context) {
 	for _, glyph in ctx.glyph_cache {
 		if glyph.texture != nil {
@@ -1513,4 +1560,68 @@ element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location)
 
 element_close :: proc(ctx: ^UI_Context) {
 	box_close(ctx.layout)
+}
+
+COLOR_WHITE :: Color{1.0, 1.0, 1.0, 1.0}
+COLOR_BLACK :: Color{0.0, 0.0, 0.0, 1.0}
+COLOR_TRANSPARENT :: Color{0.0, 0.0, 0.0, 0.0}
+COLOR_RED :: Color{1.0, 0.0, 0.0, 1.0}
+
+// Assuming standard 0xRRGGBBAA format
+hex :: proc(val: u32) -> Color {
+	return Color {
+		f32((val >> 24) & 0xFF) / 255.0,
+		f32((val >> 16) & 0xFF) / 255.0,
+		f32((val >> 8) & 0xFF) / 255.0,
+		f32(val & 0xFF) / 255.0,
+	}
+}
+
+// For standard 6-character web hex where alpha is assumed 1.0 (0xRRGGBB)
+hex_rgb :: proc(val: u32) -> Color {
+	return Color {
+		f32((val >> 16) & 0xFF) / 255.0,
+		f32((val >> 8) & 0xFF) / 255.0,
+		f32(val & 0xFF) / 255.0,
+		1.0,
+	}
+}
+
+with_alpha :: proc(c: Color, alpha: f32) -> Color {
+	return Color{c[0], c[1], c[2], alpha}
+}
+
+// h: 0..360, s: 0.0..1.0, l: 0.0..1.0
+hsl :: proc(h, s, l: f32, a: f32 = 1.0) -> Color {
+	// Wrap hue to ensure it stays strictly within 0-360
+	hue := math.mod_f32(h, 360.0)
+	if hue < 0.0 do hue += 360.0
+
+	c := (1.0 - math.abs(2.0 * l - 1.0)) * s
+	h_prime := hue / 60.0
+	x := c * (1.0 - math.abs(math.mod_f32(h_prime, 2.0) - 1.0))
+	m := l - c / 2.0
+
+	r, g, b: f32
+	if h_prime <
+	   1.0 {r, g, b = c, x, 0} else if h_prime < 2.0 {r, g, b = x, c, 0} else if h_prime < 3.0 {r, g, b = 0, c, x} else if h_prime < 4.0 {r, g, b = 0, x, c} else if h_prime < 5.0 {r, g, b = x, 0, c} else {r, g, b = c, 0, x}
+
+	return Color{r + m, g + m, b + m, a}
+}
+
+// h: 0..360, s: 0.0..1.0, v: 0.0..1.0
+hsv :: proc(h, s, v: f32, a: f32 = 1.0) -> Color {
+	hue := math.mod_f32(h, 360.0)
+	if hue < 0.0 do hue += 360.0
+
+	c := v * s
+	h_prime := hue / 60.0
+	x := c * (1.0 - math.abs(math.mod_f32(h_prime, 2.0) - 1.0))
+	m := v - c
+
+	r, g, b: f32
+	if h_prime <
+	   1.0 {r, g, b = c, x, 0} else if h_prime < 2.0 {r, g, b = x, c, 0} else if h_prime < 3.0 {r, g, b = 0, c, x} else if h_prime < 4.0 {r, g, b = 0, x, c} else if h_prime < 5.0 {r, g, b = x, 0, c} else {r, g, b = c, 0, x}
+
+	return Color{r + m, g + m, b + m, a}
 }
