@@ -310,7 +310,7 @@ video_player_seek :: proc(player: ^Video_Player, time_sec: f64) {
 	sync.unlock(&player.queue_mutex)
 }
 
-@(private)
+@(private = "file")
 ffmpeg_worker_thread :: proc(data: rawptr) {
 	player := cast(^Video_Player)data
 

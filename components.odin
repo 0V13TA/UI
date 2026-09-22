@@ -583,7 +583,7 @@ DEFAULT_TEXT_INPUT_TEXT_STYLE :: Style {
 	text_color = Color{0.1, 0.1, 0.1, 1},
 }
 
-@(private)
+@(private = "file")
 _delete_selection :: proc(buf: ^[dynamic]u8, ev_ctx: ^Event_Context, id: Box_ID) -> bool {
 	cursor := clamp(ev_ctx.text_cursors[id], 0, len(buf^))
 	anchor := clamp(ev_ctx.text_selection[id], 0, len(buf^))
@@ -601,7 +601,7 @@ _delete_selection :: proc(buf: ^[dynamic]u8, ev_ctx: ^Event_Context, id: Box_ID)
 	return true
 }
 
-@(private)
+@(private = "file")
 _text_input_cb :: proc(e: ^UI_Event, data: rawptr) {
 	ev_ctx := (^Event_Context)(data)
 	if ev_ctx.focused_buffer == nil do return
@@ -618,7 +618,7 @@ _text_input_cb :: proc(e: ^UI_Event, data: rawptr) {
 	ev_ctx.text_selection[e.current_target] = ev_ctx.text_cursors[e.current_target]
 }
 
-@(private)
+@(private = "file")
 _key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 	ev_ctx := (^Event_Context)(data)
 	if ev_ctx.focused_buffer == nil do return
@@ -2876,7 +2876,7 @@ DEFAULT_COLOR_PICKER_SWATCH :: Style {
 	border_color  = Color{0.8, 0.8, 0.8, 1},
 }
 
-@(private)
+@(private = "file")
 hsv_to_rgb :: proc(h, s, v: f32) -> [3]f32 {
 	c := v * s
 	x := c * (1.0 - math.abs(math.mod_f32(h / 60.0, 2.0) - 1.0))
@@ -2891,7 +2891,7 @@ hsv_to_rgb :: proc(h, s, v: f32) -> [3]f32 {
 	return {r + m, g + m, b + m}
 }
 
-@(private)
+@(private = "file")
 rgb_to_hsv :: proc(r, g, b: f32) -> [3]f32 {
 	max_c := max(r, max(g, b))
 	min_c := min(r, min(g, b))
@@ -3146,7 +3146,7 @@ DEFAULT_DATE_PICKER_WRAPPER :: Style {
 }
 
 // Zeller's congruence adapted for 0 = Sunday
-@(private)
+@(private = "file")
 day_of_week :: proc(year, month, day: int) -> int {
 	y, m := year, month
 	if m < 3 {
@@ -3159,7 +3159,7 @@ day_of_week :: proc(year, month, day: int) -> int {
 	return (dow + 6) % 7
 }
 
-@(private)
+@(private = "file")
 days_in_month :: proc(year, month: int) -> int {
 	if month == 2 {
 		is_leap := (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
@@ -3738,7 +3738,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 	scroll_end(ui_ctx, ev_ctx, info_scroll_id, anim_ctx)
 }
 
-@(private)
+@(private = "file")
 _render_debug_node :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^Event_Context,
@@ -3841,7 +3841,7 @@ _render_debug_node :: proc(
 	}
 }
 
-@(private)
+@(private = "file")
 _debug_kv :: proc(
 	ui_ctx: ^UI_Context,
 	ev_ctx: ^Event_Context,
@@ -3882,7 +3882,7 @@ _debug_kv :: proc(
 	element_close(ui_ctx)
 }
 
-@(private)
+@(private = "file")
 _debug_divider :: proc(ui_ctx: ^UI_Context) {
 	element_open(
 		ui_ctx,

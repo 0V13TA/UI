@@ -335,7 +335,7 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^Context, target: Anim_Target, props: A
 	}
 }
 
-@(private)
+@(private = "file")
 _resolve_targets :: proc(ctx: ^UI_Context, target: Anim_Target) -> [dynamic]^Box {
 	results := make([dynamic]^Box, context.temp_allocator)
 
@@ -358,7 +358,7 @@ _resolve_targets :: proc(ctx: ^UI_Context, target: Anim_Target) -> [dynamic]^Box
 	return results
 }
 
-@(private)
+@(private = "file")
 _collect_by_class :: proc(box: ^Box, target: Class, results: ^[dynamic]^Box) {
 	if box == nil do return
 
@@ -376,7 +376,7 @@ _collect_by_class :: proc(box: ^Box, target: Class, results: ^[dynamic]^Box) {
 	}
 }
 
-@(private)
+@(private = "file")
 _collect_by_id :: proc(box: ^Box, target: Box_ID, results: ^[dynamic]^Box) {
 	if box == nil do return
 

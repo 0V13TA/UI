@@ -24,13 +24,13 @@ css_ease_out :: Bezier{0.0, 0.0, 0.58, 1.0}
 css_ease_in_out :: Bezier{0.42, 0.0, 0.58, 1.0}
 
 // 3. Cubic Bezier Solver
-@(private)
+@(private = "file")
 _bezier_coord :: proc(p1, p2, t: f32) -> f32 {
 	inv_t := 1.0 - t
 	return 3.0 * inv_t * inv_t * t * p1 + 3.0 * inv_t * t * t * p2 + t * t * t
 }
 
-@(private)
+@(private = "file")
 solve_cubic_bezier :: proc(x1, y1, x2, y2, x: f32) -> f32 {
 	if x <= 0.0 do return 0.0
 	if x >= 1.0 do return 1.0
@@ -148,7 +148,7 @@ update :: proc(engine: ^Engine, dt: f32) {
 	}
 }
 
-@(private)
+@(private = "file")
 get_current_f32 :: proc(target: Tween_Target) -> f32 {
 	switch ptr in target {
 	case ^f32:
@@ -214,7 +214,7 @@ tween_from_to :: proc(engine: ^Engine, vars: Tween_Vars) {
 	}
 }
 
-@(private)
+@(private = "file")
 _register_tween :: proc(
 	engine: ^Engine,
 	prop: Property_Tween,
