@@ -30,7 +30,7 @@ main :: proc() {
 				defer element_close(app.ui)
 
 
-				text(app.ui, app.ev, "Text Area")
+				text(app.ui, app.ev, "Text Area ☺️", user_style = {font_size = 60})
 				textarea(
 					app.ui,
 					app.ev,

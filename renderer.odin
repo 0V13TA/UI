@@ -151,12 +151,18 @@ Glyph :: struct {
 	min_x, max_y, advance: i32,
 }
 
+Text_Key :: struct {
+	font:       ^ttf.Font,
+	text:       string,
+	r, g, b, a: u8,
+}
+
 UI_Context :: struct {
 	layout:         ^Layout_Context,
 	fonts:          map[u32]^ttf.Font, // Hash Font name + Cache name
 	videos:         map[string]^Video_Player,
 	stylesheet:     map[Class]Style,
-	glyph_cache:    map[Glyph_Key]Glyph,
+	text_cache:     map[Text_Key]Cached_Texture,
 	image_cache:    map[u32]^sdl.Texture,
 	font_cache:     map[Font_Key]^ttf.Font,
 	master_9slice:  ^sdl.Texture,
@@ -191,7 +197,7 @@ get_class_name :: proc(c: Class) -> string {
 
 get_font :: proc(ctx: ^UI_Context, path: string, size: f32) -> ^ttf.Font {
 	// Fallback to a default font if none is specified
-	actual_path := path != "" ? path : "assets/font/CaacupeOne-Regular.ttf"
+	actual_path := path != "" ? path : "./assets/font/Kablammo-Regular-VariableFont_MORF.ttf"
 	actual_size := size > 0 ? i32(size) : 16
 
 	key := Font_Key {
@@ -528,34 +534,19 @@ draw_ui_text :: proc(
 	x, y: i32,
 	color: Color,
 ) {
-	r, g, b, a := to_sdl_color(color)
-	current_x := x
-	prev_ch: rune = 0
+	if len(text) == 0 do return
 
-	for ch in text {
-		if prev_ch != 0 {
-			current_x += ttf.GetFontKerningSizeGlyphs32(font, prev_ch, ch)
+	cached := get_text_texture(ctx, renderer, font, text, color)
+	if cached.texture != nil {
+		dest := sdl.Rect {
+			x = x,
+			y = y,
+			w = cached.width,
+			h = cached.height,
 		}
-
-		glyph := get_glyph(ctx, renderer, font, ch)
-		if glyph.texture != nil {
-			sdl.SetTextureColorMod(glyph.texture, r, g, b)
-			sdl.SetTextureAlphaMod(glyph.texture, a)
-
-			dest := sdl.Rect {
-				x = current_x + glyph.min_x,
-				y = y,
-				w = glyph.width,
-				h = glyph.height,
-			}
-
-			sdl.RenderCopy(renderer, glyph.texture, nil, &dest)
-			current_x += glyph.advance
-		}
-		prev_ch = ch
+		sdl.RenderCopy(renderer, cached.texture, nil, &dest)
 	}
 }
-
 
 @(private)
 ui_text_width :: proc(box: ^Box, text: string) -> f32 {
@@ -1435,49 +1426,56 @@ render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^Bo
 }
 
 @(private)
-get_glyph :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, font: ^ttf.Font, ch: rune) -> Glyph {
-	key := Glyph_Key {
+get_text_texture :: proc(
+	ctx: ^UI_Context,
+	renderer: ^sdl.Renderer,
+	font: ^ttf.Font,
+	text: string,
+	color: Color,
+) -> Cached_Texture {
+	r, g, b, a := to_sdl_color(color)
+	key := Text_Key {
 		font = font,
-		ch   = ch,
+		text = text,
+		r    = r,
+		g    = g,
+		b    = b,
+		a    = a,
 	}
 
-	if glyph, exists := ctx.glyph_cache[key]; exists {
-		return glyph
+	if cached, exists := ctx.text_cache[key]; exists {
+		return cached
 	}
 
-	// Cache miss: query metrics and generate a white glyph
-	minx, maxx, miny, maxy, advance: i32
-	ttf.GlyphMetrics32(font, ch, &minx, &maxx, &miny, &maxy, &advance)
+	c_text := strings.clone_to_cstring(text, context.temp_allocator)
+	sdl_col := sdl.Color{r, g, b, a}
 
-	white := sdl.Color{255, 255, 255, 255}
-	surface := ttf.RenderGlyph32_Blended(font, ch, white)
+	surface := ttf.RenderUTF8_Blended(font, c_text, sdl_col)
 
-	glyph := Glyph {
-		min_x   = minx,
-		max_y   = maxy,
-		advance = advance,
-	}
-
+	cached := Cached_Texture{}
 	if surface != nil {
-		glyph.texture = sdl.CreateTextureFromSurface(renderer, surface)
-		glyph.width = surface.w
-		glyph.height = surface.h
-		sdl.SetTextureBlendMode(glyph.texture, .BLEND)
+		cached.texture = sdl.CreateTextureFromSurface(renderer, surface)
+		cached.width = surface.w
+		cached.height = surface.h
+		sdl.SetTextureBlendMode(cached.texture, .BLEND)
 		sdl.FreeSurface(surface)
 	}
 
-	ctx.glyph_cache[key] = glyph
-	return glyph
+	// Clone into a stable allocator before storing — `text` is very often a
+	// temp-allocated fmt.tprintf() result that will be invalidated/reused
+	// once the temp arena resets, which would corrupt this key on future lookups.
+	key.text = strings.clone(text)
+	ctx.text_cache[key] = cached
+	return cached
 }
 
 @(private)
-clear_glyph_cache :: proc(ctx: ^UI_Context) {
-	for _, glyph in ctx.glyph_cache {
-		if glyph.texture != nil {
-			sdl.DestroyTexture(glyph.texture)
-		}
+clear_text_cache :: proc(ctx: ^UI_Context) {
+	for key, cached in ctx.text_cache {
+		if cached.texture != nil do sdl.DestroyTexture(cached.texture)
+		delete(key.text)
 	}
-	clear(&ctx.glyph_cache)
+	clear(&ctx.text_cache)
 }
 
 ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
@@ -1490,7 +1488,7 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx.fonts = make(map[u32]^ttf.Font)
 	ctx.videos = make(map[string]^Video_Player)
 	ctx.font_cache = make(map[Font_Key]^ttf.Font)
-	ctx.glyph_cache = make(map[Glyph_Key]Glyph)
+	ctx.text_cache = make(map[Text_Key]Cached_Texture)
 	ctx.image_cache = make(map[u32]^sdl.Texture)
 
 	return ctx
@@ -1498,8 +1496,8 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 
 ui_context_destroy :: proc(ctx: ^UI_Context) {
 	layout_context_destroy(ctx.layout)
-	clear_glyph_cache(ctx)
-	delete(ctx.glyph_cache)
+	clear_text_cache(ctx)
+	delete(ctx.text_cache)
 
 	// Purge GPU textures before destroying the map
 	// clear_texture_cache(ctx)
