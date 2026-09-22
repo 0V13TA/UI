@@ -1,18 +1,16 @@
-package renderer
+package UI
 
-import anim "../animations"
-import lc "../layout_calc"
 import "core:hash"
 
 Anim_Target :: union {
 	string,
 	Class,
-	lc.Box_ID,
+	Box_ID,
 }
 
 Anim_Props :: struct {
 	duration, delay: f32,
-	ease:            anim.Easing,
+	ease:            Easing,
 	stagger:         f32,
 
 	// Target Properties
@@ -36,7 +34,7 @@ Timeline_Step :: struct {
 
 Timeline :: struct {
 	ctx:      ^UI_Context,
-	anim_ctx: ^anim.Context,
+	anim_ctx: ^Context,
 	steps:    [dynamic]Timeline_Step,
 }
 
@@ -46,7 +44,7 @@ TL_Pos :: enum {
 	ABSOLUTE,
 }
 
-timeline :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context) -> Timeline {
+timeline :: proc(ctx: ^UI_Context, anim_ctx: ^Context) -> Timeline {
 	return Timeline{ctx = ctx, anim_ctx = anim_ctx}
 }
 
@@ -113,18 +111,18 @@ tl_play :: proc(tl: ^Timeline) {
 	delete(tl.steps)
 }
 
-to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props: Anim_Props) {
+to :: proc(ctx: ^UI_Context, anim_ctx: ^Context, target: Anim_Target, props: Anim_Props) {
 	boxes := _resolve_targets(ctx, target)
 	for box, i in boxes {
-		state := anim.get_state(anim_ctx, box.id)
+		state := get_state(anim_ctx, box.id)
 
 		// 1. Read Current Frame, fallback to History, fallback to 0
 		if !state.has_width {
-			if w, ok := box.width.(lc.Fixed); ok do state.width = w.value
+			if w, ok := box.width.(Fixed); ok do state.width = w.value
 			else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.width = prev.computed_width
 		}
 		if !state.has_height {
-			if h, ok := box.height.(lc.Fixed); ok do state.height = h.value
+			if h, ok := box.height.(Fixed); ok do state.height = h.value
 			else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.height = prev.computed_height
 		}
 		if !state.has_x {
@@ -139,42 +137,32 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 		}
 
 		calculated_delay := props.delay + (props.stagger * f32(i))
-		tweens := make([dynamic]anim.Property_Tween, context.temp_allocator)
+		tweens := make([dynamic]Property_Tween, context.temp_allocator)
 
 		if v, ok := props.width.?; ok {
 			state.has_width = true
 			append(
 				&tweens,
-				anim.Property_Tween{target = &state.width, to = v, clear_flag = &state.has_width},
+				Property_Tween{target = &state.width, to = v, clear_flag = &state.has_width},
 			)
 		}
 		if v, ok := props.height.?; ok {
 			state.has_height = true
 			append(
 				&tweens,
-				anim.Property_Tween {
-					target = &state.height,
-					to = v,
-					clear_flag = &state.has_height,
-				},
+				Property_Tween{target = &state.height, to = v, clear_flag = &state.has_height},
 			)
 		}
 		if v, ok := props.opacity.?; ok {
-			append(&tweens, anim.Property_Tween{target = &state.opacity, to = v})
+			append(&tweens, Property_Tween{target = &state.opacity, to = v})
 		}
 		if v, ok := props.x.?; ok {
 			state.has_x = true
-			append(
-				&tweens,
-				anim.Property_Tween{target = &state.x, to = v, clear_flag = &state.has_x},
-			)
+			append(&tweens, Property_Tween{target = &state.x, to = v, clear_flag = &state.has_x})
 		}
 		if v, ok := props.y.?; ok {
 			state.has_y = true
-			append(
-				&tweens,
-				anim.Property_Tween{target = &state.y, to = v, clear_flag = &state.has_y},
-			)
+			append(&tweens, Property_Tween{target = &state.y, to = v, clear_flag = &state.has_y})
 		}
 
 		if v, ok := props.bg_color.?; ok {
@@ -186,7 +174,7 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 			state.has_bg_color = true
 			append(
 				&tweens,
-				anim.Property_Tween {
+				Property_Tween {
 					target = &state.bg_color,
 					to_color = v,
 					clear_flag = &state.has_bg_color,
@@ -202,7 +190,7 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 			state.has_text_color = true
 			append(
 				&tweens,
-				anim.Property_Tween {
+				Property_Tween {
 					target = &state.text_color,
 					to_color = v,
 					clear_flag = &state.has_text_color,
@@ -218,7 +206,7 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 			state.has_border_color = true
 			append(
 				&tweens,
-				anim.Property_Tween {
+				Property_Tween {
 					target = &state.border_color,
 					to_color = v,
 					clear_flag = &state.has_border_color,
@@ -227,11 +215,11 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 		}
 
 		safe_ease := props.ease
-		if safe_ease == nil do safe_ease = anim.ease_linear
+		if safe_ease == nil do safe_ease = ease_linear
 
-		anim.to(
+		tween_to(
 			&anim_ctx.engine,
-			anim.Tween_Vars {
+			Tween_Vars {
 				duration = props.duration,
 				delay = calculated_delay,
 				ease_func = safe_ease,
@@ -241,17 +229,17 @@ to :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props
 	}
 }
 
-from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, props: Anim_Props) {
+from :: proc(ctx: ^UI_Context, anim_ctx: ^Context, target: Anim_Target, props: Anim_Props) {
 	boxes := _resolve_targets(ctx, target)
 	for box, i in boxes {
-		state := anim.get_state(anim_ctx, box.id)
+		state := get_state(anim_ctx, box.id)
 
 		// A 'from' tween ALWAYS targets the true layout position.
 		// We forcefully reset the state here to erase interrupted mid-tween coordinates.
-		if w, ok := box.width.(lc.Fixed); ok do state.width = w.value
+		if w, ok := box.width.(Fixed); ok do state.width = w.value
 		else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.width = prev.computed_width
 
-		if h, ok := box.height.(lc.Fixed); ok do state.height = h.value
+		if h, ok := box.height.(Fixed); ok do state.height = h.value
 		else if prev, ok := ctx.layout.prev_all_boxes[box.id]; ok do state.height = prev.computed_height
 
 		if l, ok := box.left.?; ok do state.x = l
@@ -270,53 +258,39 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 		}
 
 		calculated_delay := props.delay + (props.stagger * f32(i))
-		tweens := make([dynamic]anim.Property_Tween, context.temp_allocator)
+		tweens := make([dynamic]Property_Tween, context.temp_allocator)
 
 		if v, ok := props.width.?; ok {
 			state.has_width = true
 			append(
 				&tweens,
-				anim.Property_Tween {
-					target = &state.width,
-					from = v,
-					clear_flag = &state.has_width,
-				},
+				Property_Tween{target = &state.width, from = v, clear_flag = &state.has_width},
 			)
 		}
 		if v, ok := props.height.?; ok {
 			state.has_height = true
 			append(
 				&tweens,
-				anim.Property_Tween {
-					target = &state.height,
-					from = v,
-					clear_flag = &state.has_height,
-				},
+				Property_Tween{target = &state.height, from = v, clear_flag = &state.has_height},
 			)
 		}
 		if v, ok := props.opacity.?; ok {
-			append(&tweens, anim.Property_Tween{target = &state.opacity, from = v})
+			append(&tweens, Property_Tween{target = &state.opacity, from = v})
 		}
 		if v, ok := props.x.?; ok {
 			state.has_x = true
-			append(
-				&tweens,
-				anim.Property_Tween{target = &state.x, from = v, clear_flag = &state.has_x},
-			)
+			append(&tweens, Property_Tween{target = &state.x, from = v, clear_flag = &state.has_x})
 		}
 		if v, ok := props.y.?; ok {
 			state.has_y = true
-			append(
-				&tweens,
-				anim.Property_Tween{target = &state.y, from = v, clear_flag = &state.has_y},
-			)
+			append(&tweens, Property_Tween{target = &state.y, from = v, clear_flag = &state.has_y})
 		}
 
 		if v, ok := props.bg_color.?; ok {
 			state.has_bg_color = true
 			append(
 				&tweens,
-				anim.Property_Tween {
+				Property_Tween {
 					target = &state.bg_color,
 					from_color = v,
 					clear_flag = &state.has_bg_color,
@@ -327,7 +301,7 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 			state.has_text_color = true
 			append(
 				&tweens,
-				anim.Property_Tween {
+				Property_Tween {
 					target = &state.text_color,
 					from_color = v,
 					clear_flag = &state.has_text_color,
@@ -338,7 +312,7 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 			state.has_border_color = true
 			append(
 				&tweens,
-				anim.Property_Tween {
+				Property_Tween {
 					target = &state.border_color,
 					from_color = v,
 					clear_flag = &state.has_border_color,
@@ -347,11 +321,11 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 		}
 
 		safe_ease := props.ease
-		if safe_ease == nil do safe_ease = anim.ease_linear
+		if safe_ease == nil do safe_ease = ease_linear
 
-		anim.from(
+		tween_from(
 			&anim_ctx.engine,
-			anim.Tween_Vars {
+			Tween_Vars {
 				duration = props.duration,
 				delay = calculated_delay,
 				ease_func = safe_ease,
@@ -362,12 +336,12 @@ from :: proc(ctx: ^UI_Context, anim_ctx: ^anim.Context, target: Anim_Target, pro
 }
 
 @(private)
-_resolve_targets :: proc(ctx: ^UI_Context, target: Anim_Target) -> [dynamic]^lc.Box {
-	results := make([dynamic]^lc.Box, context.temp_allocator)
+_resolve_targets :: proc(ctx: ^UI_Context, target: Anim_Target) -> [dynamic]^Box {
+	results := make([dynamic]^Box, context.temp_allocator)
 
 	switch t in target {
 	case string:
-		id := lc.Box_ID(hash.fnv32(transmute([]byte)t))
+		id := Box_ID(hash.fnv32(transmute([]byte)t))
 		if box, ok := ctx.layout.all_boxes[id]; ok {
 			append(&results, box)
 		}
@@ -375,7 +349,7 @@ _resolve_targets :: proc(ctx: ^UI_Context, target: Anim_Target) -> [dynamic]^lc.
 		for root in ctx.layout.root_boxes {
 			_collect_by_class(root, t, &results)
 		}
-	case lc.Box_ID:
+	case Box_ID:
 		// NEW: Instantly resolve Box ID via the hashmap instead of recursing
 		if box, ok := ctx.layout.all_boxes[t]; ok {
 			append(&results, box)
@@ -385,7 +359,7 @@ _resolve_targets :: proc(ctx: ^UI_Context, target: Anim_Target) -> [dynamic]^lc.
 }
 
 @(private)
-_collect_by_class :: proc(box: ^lc.Box, target: Class, results: ^[dynamic]^lc.Box) {
+_collect_by_class :: proc(box: ^Box, target: Class, results: ^[dynamic]^Box) {
 	if box == nil do return
 
 	if el := (^Element)(box.user_data); el != nil {
@@ -403,7 +377,7 @@ _collect_by_class :: proc(box: ^lc.Box, target: Class, results: ^[dynamic]^lc.Bo
 }
 
 @(private)
-_collect_by_id :: proc(box: ^lc.Box, target: lc.Box_ID, results: ^[dynamic]^lc.Box) {
+_collect_by_id :: proc(box: ^Box, target: Box_ID, results: ^[dynamic]^Box) {
 	if box == nil do return
 
 	if box.id == target {

@@ -1,6 +1,5 @@
-package renderer
+package UI
 
-import lc "../layout_calc"
 import "core:fmt"
 import "core:hash"
 import "core:math"
@@ -76,20 +75,20 @@ Style :: struct {
 	// Flex Alignment
 	wrap:            Maybe(bool),
 	basis:           Maybe(f32),
-	direction:       Maybe(lc.Direction),
-	align_items:     Maybe(lc.Align),
-	justify_content: Maybe(lc.Align),
+	direction:       Maybe(Direction),
+	align_items:     Maybe(Align),
+	justify_content: Maybe(Align),
 
 	// Position
 	top:             Maybe(f32), // Only useful if position != STATIC
 	left:            Maybe(f32),
 	right:           Maybe(f32),
 	bottom:          Maybe(f32),
-	position:        Maybe(lc.Position),
+	position:        Maybe(Position),
 
 	// Scrolling
-	overflow_x:      Maybe(lc.Overflow),
-	overflow_y:      Maybe(lc.Overflow),
+	overflow_x:      Maybe(Overflow),
+	overflow_y:      Maybe(Overflow),
 
 	//
 	z_index:         Maybe(i32),
@@ -99,19 +98,19 @@ Style :: struct {
 	bg_image:        Maybe(^sdl.Texture),
 
 	//
-	width:           Maybe(lc.Sizing),
-	height:          Maybe(lc.Sizing),
-	min_width:       Maybe(lc.Bound_Sizing),
-	max_width:       Maybe(lc.Bound_Sizing),
-	min_height:      Maybe(lc.Bound_Sizing),
-	max_height:      Maybe(lc.Bound_Sizing),
+	width:           Maybe(Sizing),
+	height:          Maybe(Sizing),
+	min_width:       Maybe(Bound_Sizing),
+	max_width:       Maybe(Bound_Sizing),
+	min_height:      Maybe(Bound_Sizing),
+	max_height:      Maybe(Bound_Sizing),
 }
 
 
 Element :: struct {
 	classes:                []Class,
 	style:                  Style,
-	using _box:             lc.Box,
+	using _box:             Box,
 
 	// Anything not in Box
 	// Font
@@ -136,8 +135,8 @@ Element :: struct {
 	resolved_object_fit:    Object_Fit,
 	resolved_bg_image:      ^sdl.Texture,
 
-  // Canvas Renderer Callback
-  custom_render:          proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr),
+	// Canvas Renderer Callback
+	custom_render:          proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr),
 	custom_render_data:     rawptr,
 }
 
@@ -153,7 +152,7 @@ Glyph :: struct {
 }
 
 UI_Context :: struct {
-	layout:         ^lc.Layout_Context,
+	layout:         ^Layout_Context,
 	fonts:          map[u32]^ttf.Font, // Hash Font name + Cache name
 	videos:         map[string]^Video_Player,
 	stylesheet:     map[Class]Style,
@@ -546,7 +545,7 @@ draw_ui_text :: proc(
 }
 
 @(private)
-ui_text_width :: proc(box: ^lc.Box, text: string) -> f32 {
+ui_text_width :: proc(box: ^Box, text: string) -> f32 {
 	el := (^Element)(box.user_data)
 	if el == nil || el.resolved_font == nil do return 0
 
@@ -567,7 +566,7 @@ ui_text_width :: proc(box: ^lc.Box, text: string) -> f32 {
 }
 
 @(private)
-ui_text_height :: proc(box: ^lc.Box, text: string, max_width: f32) -> f32 {
+ui_text_height :: proc(box: ^Box, text: string, max_width: f32) -> f32 {
 	el := (^Element)(box.user_data)
 	if el == nil || el.resolved_font == nil do return 0
 
@@ -946,7 +945,7 @@ merge_styles :: proc(base: Style, override: Style) -> Style {
 }
 
 @(private)
-set_clip :: proc(renderer: ^sdl.Renderer, current: ^Maybe(lc.Rect), target: Maybe(lc.Rect)) {
+set_clip :: proc(renderer: ^sdl.Renderer, current: ^Maybe(Rect), target: Maybe(Rect)) {
 	if current^ == target do return
 
 	if t, ok := target.?; ok {
@@ -961,8 +960,8 @@ set_clip :: proc(renderer: ^sdl.Renderer, current: ^Maybe(lc.Rect), target: Mayb
 render_box :: proc(
 	ui_ctx: ^UI_Context,
 	renderer: ^sdl.Renderer,
-	box: ^lc.Box,
-	current_clip: ^Maybe(lc.Rect),
+	box: ^Box,
+	current_clip: ^Maybe(Rect),
 ) {
 	previous_clip := current_clip^
 
@@ -1112,7 +1111,7 @@ render_box :: proc(
 		}
 	}
 
-  // --- Custom Canvas Rendering ---
+	// --- Custom Canvas Rendering ---
 	if el.custom_render != nil {
 		// Calculate the inner bounds so custom drawings respect layout padding and borders
 		inner_bounds := sdl.Rect {
@@ -1126,7 +1125,7 @@ render_box :: proc(
 		current_sdl_clip: sdl.Rect
 		sdl.RenderGetClipRect(renderer, &current_sdl_clip)
 		has_clip := sdl.RenderIsClipEnabled(renderer)
-		
+
 		canvas_clip := inner_bounds
 		if has_clip {
 			sdl.IntersectRect(&current_sdl_clip, &canvas_clip, &canvas_clip)
@@ -1144,13 +1143,11 @@ render_box :: proc(
 	// Draw Cached Text
 	if text, ok := box.text.?; ok {
 		if el.resolved_font != nil {
-			text_x := box.x + box.padding[lc.Side.LEFT] + box.border[lc.Side.LEFT]
-			text_y := box.y + box.padding[lc.Side.TOP] + box.border[lc.Side.TOP]
+			text_x := box.x + box.padding[Side.LEFT] + box.border[Side.LEFT]
+			text_y := box.y + box.padding[Side.TOP] + box.border[Side.TOP]
 
 			inner_width := max(
-				box.computed_width -
-				lc.get_horizontal(box.padding) -
-				lc.get_horizontal(box.border),
+				box.computed_width - get_horizontal(box.padding) - get_horizontal(box.border),
 				0.0,
 			)
 
@@ -1381,8 +1378,8 @@ render_box :: proc(
 	set_clip(renderer, current_clip, previous_clip)
 }
 
-render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^lc.Box) {
-	current_clip: Maybe(lc.Rect) = nil
+render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^Box) {
+	current_clip: Maybe(Rect) = nil
 	for root_box in root_boxes {
 		render_box(ctx, renderer, root_box, &current_clip)
 	}
@@ -1440,12 +1437,7 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 	ctx := new(UI_Context)
 
 	// Pass the SDL text measurement functions to the layout core
-	ctx.layout = lc.layout_context_create(
-		ui_text_width,
-		ui_text_height,
-		screen_width,
-		screen_height,
-	)
+	ctx.layout = layout_context_create(ui_text_width, ui_text_height, screen_width, screen_height)
 
 	ctx.stylesheet = make(map[Class]Style)
 	ctx.fonts = make(map[u32]^ttf.Font)
@@ -1458,7 +1450,7 @@ ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
 }
 
 ui_context_destroy :: proc(ctx: ^UI_Context) {
-	lc.layout_context_destroy(ctx.layout)
+	layout_context_destroy(ctx.layout)
 	clear_glyph_cache(ctx)
 	delete(ctx.glyph_cache)
 
@@ -1478,8 +1470,8 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 	free(ctx)
 
 	when ODIN_DEBUG {
-		for _, name in lc.g_debug_id_registry do delete(name)
-		delete(lc.g_debug_id_registry)
+		for _, name in g_debug_id_registry do delete(name)
+		delete(g_debug_id_registry)
 
 		for _, name in g_debug_class_registry do delete(name)
 		delete(g_debug_class_registry)
@@ -1491,34 +1483,34 @@ ui_begin_frame :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, screen_w, scre
 
 	ctx.layout.screen_width = f32(screen_w)
 	ctx.layout.screen_height = f32(screen_h)
-	lc.begin_layout(ctx.layout)
+	begin_layout(ctx.layout)
 }
 
-ui_layout_tree :: proc(ctx: ^UI_Context) -> []^lc.Box {
+ui_layout_tree :: proc(ctx: ^UI_Context) -> []^Box {
 	return ctx.layout.root_boxes[:]
 }
 
 ui_compute :: proc(ctx: ^UI_Context) {
-	lc.end_layout(ctx.layout)
+	end_layout(ctx.layout)
 }
 
 
 element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) -> ^Element {
-	el := new(Element, lc.frame_allocator(ctx.layout))
+	el := new(Element, frame_allocator(ctx.layout))
 	el^ = el_val
 
 	// Auto-generate an ID if omitted, natively tracking it in layout_calc
 	if el._box.id == 0 {
-		el._box.id = lc.ID(loc)
+		el._box.id = ID(loc)
 	}
 
 	apply_styles(el, ctx)
 	el._box.user_data = el
-	lc.box_open(ctx.layout, el._box, loc)
+	box_open(ctx.layout, el._box, loc)
 
 	return el
 }
 
 element_close :: proc(ctx: ^UI_Context) {
-	lc.box_close(ctx.layout)
+	box_close(ctx.layout)
 }

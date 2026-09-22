@@ -1,9 +1,8 @@
-package animations
+package UI
 
-import lc "../layout_calc"
 
 Retained_State :: struct {
-	id:               lc.Box_ID,
+	id:               Box_ID,
 	x:                f32,
 	y:                f32,
 	width:            f32,
@@ -23,10 +22,10 @@ Retained_State :: struct {
 
 Context :: struct {
 	engine: Engine,
-	states: map[lc.Box_ID]^Retained_State,
+	states: map[Box_ID]^Retained_State,
 }
 
-get_state :: proc(ctx: ^Context, id: lc.Box_ID) -> ^Retained_State {
+get_state :: proc(ctx: ^Context, id: Box_ID) -> ^Retained_State {
 	if s, ok := ctx.states[id]; ok {
 		return s
 	}
@@ -37,9 +36,9 @@ get_state :: proc(ctx: ^Context, id: lc.Box_ID) -> ^Retained_State {
 	return s
 }
 
-process_lifecycles :: proc(ctx: ^Context, layout: ^lc.Layout_Context) {
+process_lifecycles :: proc(ctx: ^Context, layout: ^Layout_Context) {
 	// Track which IDs need to be purged using the fast temp allocator
-	stale_ids := make([dynamic]lc.Box_ID, context.temp_allocator)
+	stale_ids := make([dynamic]Box_ID, context.temp_allocator)
 
 	// Identify retained states for boxes that no longer exist in the layout tree
 	for id, state in ctx.states {
@@ -56,12 +55,12 @@ process_lifecycles :: proc(ctx: ^Context, layout: ^lc.Layout_Context) {
 	}
 }
 
-apply_structural :: proc(ctx: ^Context, root: ^lc.Box) {
+apply_structural :: proc(ctx: ^Context, root: ^Box) {
 	if root == nil do return
 
 	if state, ok := ctx.states[root.id]; ok {
-		if state.has_width do root.width = lc.Fixed{state.width}
-		if state.has_height do root.height = lc.Fixed{state.height}
+		if state.has_width do root.width = Fixed{state.width}
+		if state.has_height do root.height = Fixed{state.height}
 
 		// NEW: Apply positional overrides for sliding animations
 		if state.has_x do root.left = state.x
@@ -73,7 +72,7 @@ apply_structural :: proc(ctx: ^Context, root: ^lc.Box) {
 	}
 }
 
-apply_visual :: proc(ctx: ^Context, root: ^lc.Box, apply_fn: proc(_: rawptr, _: ^Retained_State)) {
+apply_visual :: proc(ctx: ^Context, root: ^Box, apply_fn: proc(_: rawptr, _: ^Retained_State)) {
 	if root == nil do return
 	if state, ok := ctx.states[root.id]; ok {
 		if root.user_data != nil {

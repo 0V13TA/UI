@@ -1,9 +1,8 @@
-package animations
+package UI
 
-import lc "../layout_calc"
 import "core:math"
 
-Callback_Fn :: proc(target: lc.Box_ID, data: rawptr)
+Callback_Fn :: proc(target: Box_ID, data: rawptr)
 Easing_Fn :: proc(t: f32) -> f32
 
 // --- Easing System ---
@@ -56,7 +55,7 @@ solve_cubic_bezier :: proc(x1, y1, x2, y2, x: f32) -> f32 {
 
 Tween_Target :: union {
 	^f32,
-	^lc.Sizing,
+	^Sizing,
 	^[4]f32,
 }
 
@@ -108,8 +107,8 @@ update :: proc(engine: ^Engine, dt: f32) {
 				switch ptr in t.target {
 				case ^f32:
 					ptr^ = t.from
-				case ^lc.Sizing:
-					ptr^ = lc.Fixed{t.from}
+				case ^Sizing:
+					ptr^ = Fixed{t.from}
 				case ^[4]f32:
 					ptr^ = t.from_color
 				}
@@ -133,8 +132,8 @@ update :: proc(engine: ^Engine, dt: f32) {
 		switch ptr in t.target {
 		case ^f32:
 			ptr^ = t.from + (t.to - t.from) * progress
-		case ^lc.Sizing:
-			ptr^ = lc.Fixed{t.from + (t.to - t.from) * progress}
+		case ^Sizing:
+			ptr^ = Fixed{t.from + (t.to - t.from) * progress}
 		case ^[4]f32:
 			ptr^[0] = t.from_color[0] + (t.to_color[0] - t.from_color[0]) * progress
 			ptr^[1] = t.from_color[1] + (t.to_color[1] - t.from_color[1]) * progress
@@ -154,13 +153,13 @@ get_current_f32 :: proc(target: Tween_Target) -> f32 {
 	switch ptr in target {
 	case ^f32:
 		return ptr^
-	case ^lc.Sizing:
+	case ^Sizing:
 		#partial switch v in ptr^ {
-		case lc.Fixed:
+		case Fixed:
 			return v.value
-		case lc.Percent:
+		case Percent:
 			return v.value
-		case lc.ViewPercent:
+		case ViewPercent:
 			return v.value
 		}
 	case ^[4]f32:
@@ -169,7 +168,7 @@ get_current_f32 :: proc(target: Tween_Target) -> f32 {
 	return 0.0
 }
 
-to :: proc(engine: ^Engine, vars: Tween_Vars) {
+tween_to :: proc(engine: ^Engine, vars: Tween_Vars) {
 	for prop in vars.properties {
 		adjusted_prop := prop
 		switch ptr in prop.target {
@@ -177,7 +176,7 @@ to :: proc(engine: ^Engine, vars: Tween_Vars) {
 			start_val := ptr^
 			if start_val == prop.to_color do continue
 			adjusted_prop.from_color = start_val
-		case ^f32, ^lc.Sizing:
+		case ^f32, ^Sizing:
 			start_val := get_current_f32(prop.target)
 			if start_val == prop.to do continue
 			adjusted_prop.from = start_val
@@ -186,7 +185,7 @@ to :: proc(engine: ^Engine, vars: Tween_Vars) {
 	}
 }
 
-from :: proc(engine: ^Engine, vars: Tween_Vars) {
+tween_from :: proc(engine: ^Engine, vars: Tween_Vars) {
 	for prop in vars.properties {
 		adjusted_prop := prop
 		switch ptr in prop.target {
@@ -194,7 +193,7 @@ from :: proc(engine: ^Engine, vars: Tween_Vars) {
 			end_val := ptr^
 			if prop.from_color == end_val do continue
 			adjusted_prop.to_color = end_val
-		case ^f32, ^lc.Sizing:
+		case ^f32, ^Sizing:
 			end_val := get_current_f32(prop.target)
 			if prop.from == end_val do continue
 			adjusted_prop.to = end_val
@@ -203,12 +202,12 @@ from :: proc(engine: ^Engine, vars: Tween_Vars) {
 	}
 }
 
-from_to :: proc(engine: ^Engine, vars: Tween_Vars) {
+tween_from_to :: proc(engine: ^Engine, vars: Tween_Vars) {
 	for prop in vars.properties {
 		switch ptr in prop.target {
 		case ^[4]f32:
 			if prop.from_color == prop.to_color do continue
-		case ^f32, ^lc.Sizing:
+		case ^f32, ^Sizing:
 			if prop.from == prop.to do continue
 		}
 		_register_tween(engine, prop, vars, true)

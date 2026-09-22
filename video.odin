@@ -1,10 +1,10 @@
-package renderer
+package UI
 
-import avcodec "../ffmpeg-bindings/avcodec"
-import avformat "../ffmpeg-bindings/avformat"
-import avutil "../ffmpeg-bindings/avutil"
-import swresample "../ffmpeg-bindings/swresample"
-import types "../ffmpeg-bindings/types"
+import avcodec "./ffmpeg-bindings/avcodec"
+import avformat "./ffmpeg-bindings/avformat"
+import avutil "./ffmpeg-bindings/avutil"
+import swresample "./ffmpeg-bindings/swresample"
+import types "./ffmpeg-bindings/types"
 import "core:c"
 import "core:fmt"
 import "core:slice"

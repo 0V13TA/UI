@@ -1,4 +1,4 @@
-package layout_calc
+package UI
 
 import "core:testing"
 

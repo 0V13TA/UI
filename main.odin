@@ -1,9 +1,5 @@
-package main
+package UI
 
-import anim "./animations"
-import ev "./events"
-import lc "./layout_calc"
-import "./renderer"
 import "core:fmt"
 import "core:strings"
 import sdl "vendor:sdl2"
@@ -23,12 +19,12 @@ App_State :: struct {
 	// Navigation
 	list_items:        []string,
 	list_selected:     int,
-	main_router:       renderer.Router_State,
+	main_router:       Router_State,
 
 	// Tab State (Dashboard)
 	tab_labels:        []string,
 	active_tab:        int,
-	tab_router:        renderer.Router_State,
+	tab_router:        Router_State,
 
 	// Dashboard Form State
 	my_options:        []string,
@@ -46,7 +42,7 @@ App_State :: struct {
 	// Directory State
 	table_headers:     []string,
 	users:             [dynamic][4]string,
-	table_cols:        []lc.Sizing,
+	table_cols:        []Sizing,
 	form_user_name:    [dynamic]u8,
 	target_user_id:    [dynamic]u8,
 	form_role_idx:     int,
@@ -74,37 +70,37 @@ App_State :: struct {
 // ---------------------------------------------------------
 
 page_dashboard :: proc(
-	ui_ctx: ^renderer.UI_Context,
-	ev_ctx: ^ev.Event_Context,
-	anim_ctx: ^anim.Context,
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^Event_Context,
+	anim_ctx: ^Context,
 	raw_state: rawptr,
 ) {
 	state := (^App_State)(raw_state)
 
-	dash_scroll_id := renderer.scroll_begin(
+	dash_scroll_id := scroll_begin(
 		ui_ctx,
 		ev_ctx,
 		user_style = {
 			gap = 32,
-			width = lc.Percent{100},
-			height = lc.Percent{100},
-			padding = renderer.space(32, 48),
+			width = Percent{100},
+			height = Percent{100},
+			padding = space(32, 48),
 		},
 		salt = "dash_scroll",
 	)
-	defer renderer.scroll_end(ui_ctx, ev_ctx, dash_scroll_id, anim_ctx)
+	defer scroll_end(ui_ctx, ev_ctx, dash_scroll_id, anim_ctx)
 
-	renderer.text(
+	text(
 		ui_ctx,
 		ev_ctx,
 		state.list_items[state.main_router.current_idx],
 		user_style = {font_size = 64, font_name = SANKOFA_DISPLAY},
 	)
 
-	renderer.tabs(ui_ctx, ev_ctx, state.tab_labels, &state.active_tab)
+	tabs(ui_ctx, ev_ctx, state.tab_labels, &state.active_tab)
 
-	tab_pages := []renderer.Page_Proc{tab_controls, tab_statistics}
-	renderer.router_view(
+	tab_pages := []Page_Proc{tab_controls, tab_statistics}
+	router_view(
 		ui_ctx,
 		ev_ctx,
 		anim_ctx,
@@ -112,31 +108,28 @@ page_dashboard :: proc(
 		state.active_tab,
 		tab_pages,
 		state,
-		wrapper_style = {height = lc.Fit(true), gap = 32},
+		wrapper_style = {height = Fit(true), gap = 32},
 		salt = "tab_router",
 	)
 }
 
 tab_controls :: proc(
-	ui_ctx: ^renderer.UI_Context,
-	ev_ctx: ^ev.Event_Context,
-	anim_ctx: ^anim.Context,
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^Event_Context,
+	anim_ctx: ^Context,
 	raw_state: rawptr,
 ) {
 	state := (^App_State)(raw_state)
 
-	renderer.element_open(ui_ctx, {style = {direction = .ROW, gap = 24, width = lc.Percent{100}}})
-	defer renderer.element_close(ui_ctx) // Close Row
+	element_open(ui_ctx, {style = {direction = .ROW, gap = 24, width = Percent{100}}})
+	defer element_close(ui_ctx) // Close Row
 
 	// --- Column 1 ---
 	{
-		renderer.element_open(
-			ui_ctx,
-			{style = {direction = .COLUMN, gap = 16, width = lc.Grow{1}}},
-		)
-		defer renderer.element_close(ui_ctx)
+		element_open(ui_ctx, {style = {direction = .COLUMN, gap = 16, width = Grow{1}}})
+		defer element_close(ui_ctx)
 
-		renderer.dropdown(
+		dropdown(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
@@ -145,15 +138,15 @@ tab_controls :: proc(
 			&state.my_selected_idx,
 			&state.my_dropdown_open,
 			wrapper_style = {
-				width = lc.Percent{100},
-				border = renderer.space(1),
-				padding = renderer.space(12, 16),
-				border_radius = renderer.space(6),
-				bg_color = renderer.Color{1, 1, 1, 1},
-				text_color = renderer.Color{0, 0, 0, 1},
+				width = Percent{100},
+				border = space(1),
+				padding = space(12, 16),
+				border_radius = space(6),
+				bg_color = Color{1, 1, 1, 1},
+				text_color = Color{0, 0, 0, 1},
 			},
 		)
-		renderer.combobox(
+		combobox(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
@@ -163,25 +156,22 @@ tab_controls :: proc(
 			&state.my_combo_idx,
 			&state.my_combo_open,
 			wrapper_style = {
-				width = lc.Percent{100},
-				height = lc.Fixed{50},
+				width = Percent{100},
+				height = Fixed{50},
 				padding = [4]f32{8, 8, 8, 8},
 				border = [4]f32{1, 1, 1, 1},
 				border_radius = [4]f32{6, 6, 6, 6},
-				bg_color = renderer.Color{1, 1, 1, 1},
+				bg_color = Color{1, 1, 1, 1},
 			},
 		)
 	}
 
 	// --- Column 2 ---
 	{
-		renderer.element_open(
-			ui_ctx,
-			{style = {direction = .COLUMN, gap = 16, width = lc.Grow{1}}},
-		)
-		defer renderer.element_close(ui_ctx)
+		element_open(ui_ctx, {style = {direction = .COLUMN, gap = 16, width = Grow{1}}})
+		defer element_close(ui_ctx)
 
-		renderer.multi_select(
+		multi_select(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
@@ -190,26 +180,23 @@ tab_controls :: proc(
 			state.my_multi_states[:],
 			&state.my_multi_open,
 			wrapper_style = {
-				width = lc.Percent{100},
+				width = Percent{100},
 				border = [4]f32{1, 1, 1, 1},
 				padding = [4]f32{12, 16, 12, 16},
 				border_radius = [4]f32{6, 6, 6, 6},
-				bg_color = renderer.Color{1, 1, 1, 1},
-				text_color = renderer.Color{0, 0, 0, 1},
+				bg_color = Color{1, 1, 1, 1},
+				text_color = Color{0, 0, 0, 1},
 			},
 		)
-		renderer.switch_toggle(ui_ctx, ev_ctx, anim_ctx, "Dark Mode", &state.my_switch_val)
+		switch_toggle(ui_ctx, ev_ctx, anim_ctx, "Dark Mode", &state.my_switch_val)
 	}
 
 	// --- Column 3 (New Components) ---
 	{
-		renderer.element_open(
-			ui_ctx,
-			{style = {direction = .COLUMN, gap = 16, width = lc.Grow{1}}},
-		)
-		defer renderer.element_close(ui_ctx)
+		element_open(ui_ctx, {style = {direction = .COLUMN, gap = 16, width = Grow{1}}})
+		defer element_close(ui_ctx)
 
-		renderer.color_picker(
+		color_picker(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
@@ -220,7 +207,7 @@ tab_controls :: proc(
 		)
 
 		// The exact 6-argument call required by components.odin
-		renderer.date_picker(
+		date_picker(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
@@ -230,20 +217,16 @@ tab_controls :: proc(
 			salt = "dp1",
 		)
 
-		renderer.carousel_paths(
+		carousel_paths(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
 			state.sdl_rend,
 			state.carousel_images,
 			&state.carousel_idx,
-			wrapper_style = {width = lc.Percent{100}}, // Explicitly bound the Fit(true) parent
-			viewport_style = {width = lc.Percent{100}, height = lc.Fixed{160}},
-			arrow_style = {
-				width = lc.Fixed{32},
-				height = lc.Fixed{32},
-				padding = renderer.space(8),
-			},
+			wrapper_style = {width = Percent{100}}, // Explicitly bound the Fit(true) parent
+			viewport_style = {width = Percent{100}, height = Fixed{160}},
+			arrow_style = {width = Fixed{32}, height = Fixed{32}, padding = space(8)},
 			auto_play = true,
 			salt = "carousel1",
 		)
@@ -251,36 +234,36 @@ tab_controls :: proc(
 }
 
 tab_statistics :: proc(
-	ui_ctx: ^renderer.UI_Context,
-	ev_ctx: ^ev.Event_Context,
-	anim_ctx: ^anim.Context,
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^Event_Context,
+	anim_ctx: ^Context,
 	raw_state: rawptr,
 ) {
-	renderer.text(ui_ctx, ev_ctx, "Statistics content goes here")
+	text(ui_ctx, ev_ctx, "Statistics content goes here")
 }
 
 page_directory :: proc(
-	ui_ctx: ^renderer.UI_Context,
-	ev_ctx: ^ev.Event_Context,
-	anim_ctx: ^anim.Context,
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^Event_Context,
+	anim_ctx: ^Context,
 	raw_state: rawptr,
 ) {
 	state := (^App_State)(raw_state)
 
-	dir_scroll_id := renderer.scroll_begin(
+	dir_scroll_id := scroll_begin(
 		ui_ctx,
 		ev_ctx,
 		user_style = {
 			gap = 32,
-			width = lc.Percent{100},
-			height = lc.Percent{100},
-			padding = renderer.space(32, 48),
+			width = Percent{100},
+			height = Percent{100},
+			padding = space(32, 48),
 		},
 		salt = "dir_scroll",
 	)
-	defer renderer.scroll_end(ui_ctx, ev_ctx, dir_scroll_id, anim_ctx)
+	defer scroll_end(ui_ctx, ev_ctx, dir_scroll_id, anim_ctx)
 
-	renderer.text(
+	text(
 		ui_ctx,
 		ev_ctx,
 		state.list_items[state.main_router.current_idx],
@@ -292,7 +275,7 @@ page_directory :: proc(
 		display_data[i] = state.users[i][:]
 	}
 
-	renderer.table(
+	table(
 		ui_ctx,
 		ev_ctx,
 		state.table_headers,
@@ -301,58 +284,42 @@ page_directory :: proc(
 		cell_text_style = {font_name = WALLPOET},
 	)
 
-	renderer.element_open(
+	element_open(
 		ui_ctx,
 		{
 			style = {
 				direction = .ROW,
 				justify_content = .END,
 				gap = 12,
-				width = lc.Percent{100},
-				padding = renderer.space(16, 0, 0, 0),
+				width = Percent{100},
+				padding = space(16, 0, 0, 0),
 			},
 		},
 	)
-	defer renderer.element_close(ui_ctx)
+	defer element_close(ui_ctx)
 
-	if renderer.button(
-		ui_ctx,
-		ev_ctx,
-		"Add User",
-		user_style = {bg_color = renderer.Color{0.2, 0.6, 0.3, 1}},
-	) {
+	if button(ui_ctx, ev_ctx, "Add User", user_style = {bg_color = Color{0.2, 0.6, 0.3, 1}}) {
 		state.create_modal_open = true
 		clear(&state.form_user_name)
 		state.form_role_idx = 0
 		state.form_status_idx = 0
 	}
 
-	if renderer.button(
-		ui_ctx,
-		ev_ctx,
-		"Delete User",
-		user_style = {bg_color = renderer.Color{0.9, 0.2, 0.2, 1}},
-	) {
+	if button(ui_ctx, ev_ctx, "Delete User", user_style = {bg_color = Color{0.9, 0.2, 0.2, 1}}) {
 		state.delete_modal_open = true
 		clear(&state.target_user_id)
 	}
 
 	// Modals (Rendered Out-of-Flow)
-	if renderer.modal_begin(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx,
-		&state.create_modal_open,
-		salt = "create_modal",
-	) {
-		defer renderer.modal_end(ui_ctx, true)
-		renderer.text(
+	if modal_begin(ui_ctx, ev_ctx, anim_ctx, &state.create_modal_open, salt = "create_modal") {
+		defer modal_end(ui_ctx, true)
+		text(
 			ui_ctx,
 			ev_ctx,
 			"New User",
 			user_style = {font_size = 32, font_name = SANKOFA_DISPLAY},
 		)
-		renderer.text_input(
+		text_input(
 			ui_ctx,
 			ev_ctx,
 			&state.form_user_name,
@@ -361,7 +328,7 @@ page_directory :: proc(
 		)
 
 		@(static) role_open: bool
-		renderer.dropdown(
+		dropdown(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
@@ -373,7 +340,7 @@ page_directory :: proc(
 		)
 
 		@(static) status_open: bool
-		renderer.dropdown(
+		dropdown(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
@@ -384,27 +351,27 @@ page_directory :: proc(
 			salt = "status_drop",
 		)
 
-		renderer.element_open(
+		element_open(
 			ui_ctx,
 			{
 				style = {
 					direction = .ROW,
 					gap = 12,
 					justify_content = .END,
-					width = lc.Percent{100},
+					width = Percent{100},
 					padding = [4]f32{16, 0, 0, 0},
 				},
 			},
 		)
-		defer renderer.element_close(ui_ctx)
+		defer element_close(ui_ctx)
 
-		if renderer.button(ui_ctx, ev_ctx, "Cancel", user_style = {bg_color = renderer.Color{0.9, 0.9, 0.9, 1}, text_color = renderer.Color{0.1, 0.1, 0.1, 1}}) do state.create_modal_open = false
+		if button(ui_ctx, ev_ctx, "Cancel", user_style = {bg_color = Color{0.9, 0.9, 0.9, 1}, text_color = Color{0.1, 0.1, 0.1, 1}}) do state.create_modal_open = false
 
-		if renderer.button(
+		if button(
 			ui_ctx,
 			ev_ctx,
 			"Save User",
-			user_style = {bg_color = renderer.Color{0.15, 0.4, 0.8, 1}},
+			user_style = {bg_color = Color{0.15, 0.4, 0.8, 1}},
 		) {
 			new_id := fmt.tprintf("%d", state.next_id)
 			state.next_id += 1
@@ -423,27 +390,21 @@ page_directory :: proc(
 		}
 	}
 
-	if renderer.modal_begin(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx,
-		&state.delete_modal_open,
-		salt = "del_modal",
-	) {
-		defer renderer.modal_end(ui_ctx, true)
-		renderer.text(
+	if modal_begin(ui_ctx, ev_ctx, anim_ctx, &state.delete_modal_open, salt = "del_modal") {
+		defer modal_end(ui_ctx, true)
+		text(
 			ui_ctx,
 			ev_ctx,
 			"Delete User",
 			user_style = {font_size = 32, font_name = SANKOFA_DISPLAY},
 		)
-		renderer.text(
+		text(
 			ui_ctx,
 			ev_ctx,
 			"Enter the ID of the user you want to permanently delete.",
-			user_style = {text_color = renderer.Color{0.4, 0.4, 0.4, 1}},
+			user_style = {text_color = Color{0.4, 0.4, 0.4, 1}},
 		)
-		renderer.text_input(
+		text_input(
 			ui_ctx,
 			ev_ctx,
 			&state.target_user_id,
@@ -451,27 +412,27 @@ page_directory :: proc(
 			salt = "id_input",
 		)
 
-		renderer.element_open(
+		element_open(
 			ui_ctx,
 			{
 				style = {
 					direction = .ROW,
 					gap = 12,
 					justify_content = .END,
-					width = lc.Percent{100},
+					width = Percent{100},
 					padding = [4]f32{16, 0, 0, 0},
 				},
 			},
 		)
-		defer renderer.element_close(ui_ctx)
+		defer element_close(ui_ctx)
 
-		if renderer.button(ui_ctx, ev_ctx, "Cancel", user_style = {bg_color = renderer.Color{0.9, 0.9, 0.9, 1}, text_color = renderer.Color{0.1, 0.1, 0.1, 1}}) do state.delete_modal_open = false
+		if button(ui_ctx, ev_ctx, "Cancel", user_style = {bg_color = Color{0.9, 0.9, 0.9, 1}, text_color = Color{0.1, 0.1, 0.1, 1}}) do state.delete_modal_open = false
 
-		if renderer.button(
+		if button(
 			ui_ctx,
 			ev_ctx,
 			"Confirm Delete",
-			user_style = {bg_color = renderer.Color{0.9, 0.2, 0.2, 1}},
+			user_style = {bg_color = Color{0.9, 0.2, 0.2, 1}},
 		) {
 			target_str := string(state.target_user_id[:])
 			for i in 0 ..< len(state.users) {
@@ -486,34 +447,34 @@ page_directory :: proc(
 }
 
 page_settings :: proc(
-	ui_ctx: ^renderer.UI_Context,
-	ev_ctx: ^ev.Event_Context,
-	anim_ctx: ^anim.Context,
+	ui_ctx: ^UI_Context,
+	ev_ctx: ^Event_Context,
+	anim_ctx: ^Context,
 	raw_state: rawptr,
 ) {
 	state := (^App_State)(raw_state)
 
-	set_scroll_id := renderer.scroll_begin(
+	set_scroll_id := scroll_begin(
 		ui_ctx,
 		ev_ctx,
 		user_style = {
 			gap = 32,
-			width = lc.Percent{100},
-			height = lc.Percent{100},
-			padding = renderer.space(32, 48),
+			width = Percent{100},
+			height = Percent{100},
+			padding = space(32, 48),
 		},
 		salt = "set_scroll",
 	)
-	defer renderer.scroll_end(ui_ctx, ev_ctx, set_scroll_id, anim_ctx)
+	defer scroll_end(ui_ctx, ev_ctx, set_scroll_id, anim_ctx)
 
-	renderer.text(
+	text(
 		ui_ctx,
 		ev_ctx,
 		state.list_items[state.main_router.current_idx],
 		user_style = {font_size = 64, font_name = SANKOFA_DISPLAY},
 	)
 
-	if renderer.accordion_begin(
+	if accordion_begin(
 		ui_ctx,
 		ev_ctx,
 		anim_ctx,
@@ -521,14 +482,14 @@ page_settings :: proc(
 		"Advanced Settings",
 		&state.accordion_open,
 	) {
-		defer renderer.accordion_end(ui_ctx, true)
-		renderer.text(
+		defer accordion_end(ui_ctx, true)
+		text(
 			ui_ctx,
 			ev_ctx,
 			"Warning: Modifying these values may break the layout engine.",
-			user_style = {text_color = renderer.Color{0.6, 0.6, 0.6, 1}},
+			user_style = {text_color = Color{0.6, 0.6, 0.6, 1}},
 		)
-		renderer.switch_toggle(
+		switch_toggle(
 			ui_ctx,
 			ev_ctx,
 			anim_ctx,
@@ -565,23 +526,23 @@ main :: proc() {
 
 	sdl.SetRenderDrawBlendMode(sdl_rend, .BLEND)
 
-	ui_ctx := renderer.ui_context_create(1024, 768)
-	defer renderer.ui_context_destroy(ui_ctx)
+	ui_ctx := ui_context_create(1024, 768)
+	defer ui_context_destroy(ui_ctx)
 
-	ev_ctx := ev.Event_Context {
+	ev_ctx := Event_Context {
 		layout               = ui_ctx.layout,
-		listeners            = make(map[lc.Box_ID]ev.Event_Callbacks),
-		clicked_this_frame   = make(map[lc.Box_ID]bool),
-		scroll_offsets_x     = make(map[lc.Box_ID]f32),
-		scroll_offsets_y     = make(map[lc.Box_ID]f32),
-		text_cursors         = make(map[lc.Box_ID]int),
-		text_selection       = make(map[lc.Box_ID]int),
-		cursor_blink_start   = make(map[lc.Box_ID]u64),
-		cursor_last_position = make(map[lc.Box_ID]int),
+		listeners            = make(map[Box_ID]Event_Callbacks),
+		clicked_this_frame   = make(map[Box_ID]bool),
+		scroll_offsets_x     = make(map[Box_ID]f32),
+		scroll_offsets_y     = make(map[Box_ID]f32),
+		text_cursors         = make(map[Box_ID]int),
+		text_selection       = make(map[Box_ID]int),
+		cursor_blink_start   = make(map[Box_ID]u64),
+		cursor_last_position = make(map[Box_ID]int),
 	}
 
-	anim_ctx := anim.Context {
-		states = make(map[lc.Box_ID]^anim.Retained_State),
+	anim_ctx := Context {
+		states = make(map[Box_ID]^Retained_State),
 	}
 
 	cursor_arrow := sdl.CreateSystemCursor(.ARROW)
@@ -608,7 +569,7 @@ main :: proc() {
 		accordion_open   = true,
 		table_headers    = {"ID", "Name", "Role", "Status"},
 		users            = make([dynamic][4]string),
-		table_cols       = {lc.Fixed{60}, lc.Grow{1}, lc.Fixed{120}, lc.Fixed{100}},
+		table_cols       = {Fixed{60}, Grow{1}, Fixed{120}, Fixed{100}},
 		form_user_name   = make([dynamic]u8),
 		target_user_id   = make([dynamic]u8),
 		status_options   = {"Active", "Offline"},
@@ -631,7 +592,7 @@ main :: proc() {
 	append(&app.users, [4]string{"102", "Bob Smith", "Developer", "Offline"})
 	append(&app.users, [4]string{"103", "Charlie", "Designer", "Active"})
 
-	my_pages := []renderer.Page_Proc{page_dashboard, page_directory, page_settings}
+	my_pages := []Page_Proc{page_dashboard, page_directory, page_settings}
 	my_context_x, my_context_y: f32 = 0, 0
 	my_context_open := false
 
@@ -642,18 +603,18 @@ main :: proc() {
 		last_time = now
 		frame_dt := f32(min(dt, 0.1))
 
-		ev.begin_frame(&ev_ctx)
+		begin_frame(&ev_ctx)
 
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
-			ev.pump_events(&ev_ctx, &event)
+			pump_events(&ev_ctx, &event)
 			if event.type == .QUIT do running = false
 
 			if event.type == .KEYDOWN {
 				// Cycle Focus
 				if event.key.keysym.sym == .TAB {
 					has_shift := (transmute(u16)event.key.keysym.mod & 0x0003) != 0
-					ev.cycle_focus(&ev_ctx, reverse = has_shift)
+					cycle_focus(&ev_ctx, reverse = has_shift)
 				}
 				// Toggle Debug Mode
 				if event.key.keysym.sym == .F3 {
@@ -685,66 +646,66 @@ main :: proc() {
 		// ---------------------------------------------------------
 		// --- UI LAYOUT TREE
 		// ---------------------------------------------------------
-		renderer.ui_begin_frame(ui_ctx, sdl_rend, win_w, win_h)
+		ui_begin_frame(ui_ctx, sdl_rend, win_w, win_h)
 
 		{
-			renderer.element_open(
+			element_open(
 				ui_ctx,
 				{
 					style = {
 						direction = .ROW,
-						width = lc.ViewPercent{100},
-						height = lc.ViewPercent{100},
-						bg_color = renderer.Color{0.96, 0.96, 0.98, 1},
+						width = ViewPercent{100},
+						height = ViewPercent{100},
+						bg_color = Color{0.96, 0.96, 0.98, 1},
 					},
 				},
 			)
-			defer renderer.element_close(ui_ctx)
+			defer element_close(ui_ctx)
 
 			{
-				renderer.element_open(
+				element_open(
 					ui_ctx,
 					{
 						style = {
 							gap = 24,
 							direction = .COLUMN,
-							width = lc.Fixed{240},
-							height = lc.Percent{100},
-							padding = renderer.space(24, 16),
-							border = renderer.space(0, 1, 0, 0),
-							bg_color = renderer.Color{1, 1, 1, 1},
-							border_color = renderer.Color{0.85, 0.85, 0.85, 1},
+							width = Fixed{240},
+							height = Percent{100},
+							padding = space(24, 16),
+							border = space(0, 1, 0, 0),
+							bg_color = Color{1, 1, 1, 1},
+							border_color = Color{0.85, 0.85, 0.85, 1},
 						},
 					},
 				)
-				defer renderer.element_close(ui_ctx)
+				defer element_close(ui_ctx)
 
-				renderer.text(
+				text(
 					ui_ctx,
 					&ev_ctx,
 					"OVIETAOS",
 					user_style = {
 						font_size = 30,
 						font_name = CAACUPEONE,
-						text_color = renderer.Color{0.1, 0.1, 0.1, 1},
+						text_color = Color{0.1, 0.1, 0.1, 1},
 					},
 				)
-				renderer.list_view(
+				list_view(
 					ui_ctx,
 					&ev_ctx,
 					app.list_items,
 					&app.list_selected,
 					wrapper_style = {
-						height = lc.Grow{1},
+						height = Grow{1},
 						direction = .COLUMN,
-						width = lc.Percent{100},
-						border = renderer.space(0),
-						bg_color = renderer.Color{0, 0, 0, 0},
+						width = Percent{100},
+						border = space(0),
+						bg_color = Color{0, 0, 0, 0},
 					},
 				)
 			}
 
-			renderer.router_view(
+			router_view(
 				ui_ctx,
 				&ev_ctx,
 				&anim_ctx,
@@ -756,7 +717,7 @@ main :: proc() {
 			)
 
 			{
-				renderer.element_open(
+				element_open(
 					ui_ctx,
 					{
 						style = {
@@ -768,8 +729,8 @@ main :: proc() {
 						},
 					},
 				)
-				defer renderer.element_close(ui_ctx)
-				renderer.toast(
+				defer element_close(ui_ctx)
+				toast(
 					ui_ctx,
 					&ev_ctx,
 					"Action Successful",
@@ -779,7 +740,7 @@ main :: proc() {
 				)
 			}
 
-			if active, target := renderer.context_menu_begin(
+			if active, target := context_menu_begin(
 				ui_ctx,
 				&ev_ctx,
 				&anim_ctx,
@@ -787,42 +748,42 @@ main :: proc() {
 				my_context_y,
 				&my_context_open,
 			); active {
-				defer renderer.context_menu_end(ui_ctx, true)
-				if renderer.button(ui_ctx, &ev_ctx, "Copy ID", user_style = {text_align = .LEFT}) do my_context_open = false
-				if renderer.button(ui_ctx, &ev_ctx, "Inspect Element", user_style = {text_align = .LEFT}) do my_context_open = false
-				if renderer.button(ui_ctx, &ev_ctx, "Delete Node", user_style = {text_align = .LEFT, text_color = renderer.Color{0.9, 0.2, 0.2, 1}}) do my_context_open = false
+				defer context_menu_end(ui_ctx, true)
+				if button(ui_ctx, &ev_ctx, "Copy ID", user_style = {text_align = .LEFT}) do my_context_open = false
+				if button(ui_ctx, &ev_ctx, "Inspect Element", user_style = {text_align = .LEFT}) do my_context_open = false
+				if button(ui_ctx, &ev_ctx, "Delete Node", user_style = {text_align = .LEFT, text_color = Color{0.9, 0.2, 0.2, 1}}) do my_context_open = false
 			}
 
 			if app.debug_mode_open {
-				renderer.debug_panel(ui_ctx, &ev_ctx, &anim_ctx)
+				debug_panel(ui_ctx, &ev_ctx, &anim_ctx)
 			}
 		}
 
-		roots := renderer.ui_layout_tree(ui_ctx)
+		roots := ui_layout_tree(ui_ctx)
 		for root in roots {
-			anim.apply_structural(&anim_ctx, root)
+			apply_structural(&anim_ctx, root)
 		}
-		renderer.ui_compute(ui_ctx)
-		anim.process_lifecycles(&anim_ctx, ui_ctx.layout)
-		anim.update(&anim_ctx.engine, frame_dt)
+		ui_compute(ui_ctx)
+		process_lifecycles(&anim_ctx, ui_ctx.layout)
+		update(&anim_ctx.engine, frame_dt)
 
-		visual_cb :: proc(user_data: rawptr, state: ^anim.Retained_State) {
-			el := (^renderer.Element)(user_data)
+		visual_cb :: proc(user_data: rawptr, state: ^Retained_State) {
+			el := (^Element)(user_data)
 			if el == nil do return
 
 			el.resolved_opacity = state.opacity
 
-			if state.has_bg_color do el.style.bg_color = transmute(renderer.Color)state.bg_color
-			if state.has_text_color do el.style.text_color = transmute(renderer.Color)state.text_color
-			if state.has_border_color do el.style.border_color = transmute(renderer.Color)state.border_color
+			if state.has_bg_color do el.style.bg_color = transmute(Color)state.bg_color
+			if state.has_text_color do el.style.text_color = transmute(Color)state.text_color
+			if state.has_border_color do el.style.border_color = transmute(Color)state.border_color
 		}
 		for root in roots {
-			anim.apply_visual(&anim_ctx, root, visual_cb)
+			apply_visual(&anim_ctx, root, visual_cb)
 		}
 
 		sdl.SetRenderDrawColor(sdl_rend, 240, 240, 245, 255)
 		sdl.RenderClear(sdl_rend)
-		renderer.render_tree(ui_ctx, sdl_rend, roots)
+		render_tree(ui_ctx, sdl_rend, roots)
 		sdl.RenderPresent(sdl_rend)
 	}
 }

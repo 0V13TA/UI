@@ -1,6 +1,5 @@
-package events
+package UI
 
-import lc "../layout_calc"
 import "core:strings"
 import sdl "vendor:sdl2"
 
@@ -18,13 +17,13 @@ Event_Callbacks :: struct {
 
 	// Mouse
 	on_click:       proc(e: ^UI_Event, data: rawptr),
-	on_hover_enter: proc(id: lc.Box_ID, data: rawptr),
-	on_hover_exit:  proc(id: lc.Box_ID, data: rawptr),
+	on_hover_enter: proc(id: Box_ID, data: rawptr),
+	on_hover_exit:  proc(id: Box_ID, data: rawptr),
 	on_scroll:      proc(e: ^UI_Event, data: rawptr),
 
 	// Keyboard & Focus
-	on_focus_enter: proc(id: lc.Box_ID, data: rawptr),
-	on_focus_exit:  proc(id: lc.Box_ID, data: rawptr),
+	on_focus_enter: proc(id: Box_ID, data: rawptr),
+	on_focus_exit:  proc(id: Box_ID, data: rawptr),
 	on_key_down:    proc(e: ^UI_Event, data: rawptr),
 	on_text_input:  proc(e: ^UI_Event, data: rawptr),
 
@@ -34,27 +33,27 @@ Event_Callbacks :: struct {
 }
 
 Event_Context :: struct {
-	layout:               ^lc.Layout_Context,
-	listeners:            map[lc.Box_ID]Event_Callbacks,
-	hovered_id:           lc.Box_ID,
-	pressed_id:           lc.Box_ID,
-	focused_id:           lc.Box_ID,
-	prev_pressed_id:      lc.Box_ID,
-	context_menu_target:  lc.Box_ID,
-	clicked_this_frame:   map[lc.Box_ID]bool,
-	scroll_offsets_x:     map[lc.Box_ID]f32,
-	scroll_offsets_y:     map[lc.Box_ID]f32,
-	text_cursors:         map[lc.Box_ID]int,
-	text_selection:       map[lc.Box_ID]int,
-	cursor_blink_start:   map[lc.Box_ID]u64,
-	cursor_last_position: map[lc.Box_ID]int,
+	layout:               ^Layout_Context,
+	listeners:            map[Box_ID]Event_Callbacks,
+	hovered_id:           Box_ID,
+	pressed_id:           Box_ID,
+	focused_id:           Box_ID,
+	prev_pressed_id:      Box_ID,
+	context_menu_target:  Box_ID,
+	clicked_this_frame:   map[Box_ID]bool,
+	scroll_offsets_x:     map[Box_ID]f32,
+	scroll_offsets_y:     map[Box_ID]f32,
+	text_cursors:         map[Box_ID]int,
+	text_selection:       map[Box_ID]int,
+	cursor_blink_start:   map[Box_ID]u64,
+	cursor_last_position: map[Box_ID]int,
 	focused_buffer:       ^[dynamic]u8,
-	focus_order:          [dynamic]lc.Box_ID,
+	focus_order:          [dynamic]Box_ID,
 }
 
 UI_Event :: struct {
-	target:           lc.Box_ID, // where the event originated
-	current_target:   lc.Box_ID, // who is handling it right now
+	target:           Box_ID, // where the event originated
+	current_target:   Box_ID, // who is handling it right now
 
 	// Mouse specific
 	mouse_x, mouse_y: f32,
@@ -100,7 +99,7 @@ cycle_focus :: proc(ctx: ^Event_Context, reverse: bool) {
 	ctx.focused_id = ctx.focus_order[idx]
 }
 
-register :: proc(ctx: ^Event_Context, id: lc.Box_ID, callbacks: Event_Callbacks) {
+register :: proc(ctx: ^Event_Context, id: Box_ID, callbacks: Event_Callbacks) {
 	ctx.listeners[id] = callbacks
 	if callbacks.focusable {
 		append(&ctx.focus_order, id) // Collect the natural DOM order
@@ -108,7 +107,7 @@ register :: proc(ctx: ^Event_Context, id: lc.Box_ID, callbacks: Event_Callbacks)
 }
 
 // Safely removes a listener, ensuring lifecycle hooks fire if it was active
-unregister :: proc(ctx: ^Event_Context, id: lc.Box_ID) {
+unregister :: proc(ctx: ^Event_Context, id: Box_ID) {
 	// 1. Gracefully remove focus
 	if ctx.focused_id == id {
 		set_focus(ctx, 0)
@@ -125,7 +124,7 @@ unregister :: proc(ctx: ^Event_Context, id: lc.Box_ID) {
 	delete_key(&ctx.listeners, id)
 }
 
-set_focus :: proc(ctx: ^Event_Context, new_focus: lc.Box_ID) {
+set_focus :: proc(ctx: ^Event_Context, new_focus: Box_ID) {
 	if ctx.focused_id == new_focus do return
 
 	if old_cb, ok := ctx.listeners[ctx.focused_id]; ok && old_cb.on_focus_exit != nil {
@@ -139,7 +138,7 @@ set_focus :: proc(ctx: ^Event_Context, new_focus: lc.Box_ID) {
 	}
 }
 
-update_hover :: proc(ctx: ^Event_Context, new_hovered_id: lc.Box_ID) {
+update_hover :: proc(ctx: ^Event_Context, new_hovered_id: Box_ID) {
 	if ctx.hovered_id != new_hovered_id {
 		if old_cb, ok := ctx.listeners[ctx.hovered_id]; ok && old_cb.on_hover_exit != nil {
 			old_cb.on_hover_exit(ctx.hovered_id, old_cb.user_data)
@@ -151,7 +150,7 @@ update_hover :: proc(ctx: ^Event_Context, new_hovered_id: lc.Box_ID) {
 	}
 }
 
-get_hovered_box :: proc(ctx: ^Event_Context, box: ^lc.Box, mx, my: f32) -> ^lc.Box {
+get_hovered_box :: proc(ctx: ^Event_Context, box: ^Box, mx, my: f32) -> ^Box {
 	if clip, ok := box.clip_rect.?; ok {
 		if mx < clip.x || mx > clip.x + clip.width || my < clip.y || my > clip.y + clip.height {
 			return nil
@@ -175,7 +174,7 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 	mx, my: i32
 	sdl.GetMouseState(&mx, &my)
 
-	hovered_box: ^lc.Box = nil
+	hovered_box: ^Box = nil
 	#reverse for root in ctx.layout.root_boxes {
 		if hit := get_hovered_box(ctx, root, f32(mx), f32(my)); hit != nil {
 			hovered_box = hit
@@ -191,7 +190,7 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 	#partial switch e.type {
 	case .MOUSEBUTTONDOWN:
 		if e.button.button == sdl.BUTTON_LEFT {
-			focus_target: lc.Box_ID = 0
+			focus_target: Box_ID = 0
 			curr := hovered_box
 			for curr != nil {
 				if cb, ok := ctx.listeners[curr.id]; ok && cb.focusable {
@@ -212,7 +211,7 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 		}
 		if e.button.button == sdl.BUTTON_RIGHT {
 			// Snap the right click to the nearest interactive parent
-			target: lc.Box_ID = 0
+			target: Box_ID = 0
 			curr := hovered_box
 			for curr != nil {
 				if cb, ok := ctx.listeners[curr.id]; ok && cb.focusable {
@@ -229,7 +228,7 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 	case .MOUSEBUTTONUP:
 		if e.button.button == sdl.BUTTON_LEFT {
 			if ctx.pressed_id != 0 {
-				release_target: lc.Box_ID = 0
+				release_target: Box_ID = 0
 				curr := hovered_box
 				for curr != nil {
 					if cb, ok := ctx.listeners[curr.id]; ok && cb.focusable {
@@ -305,12 +304,7 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 	}
 }
 
-bubble_event :: proc(
-	ctx: ^Event_Context,
-	start_node: ^lc.Box,
-	event_type: Event_Type,
-	e: ^UI_Event,
-) {
+bubble_event :: proc(ctx: ^Event_Context, start_node: ^Box, event_type: Event_Type, e: ^UI_Event) {
 	current := start_node
 
 	for current != nil && !e.stop_propagation {
@@ -373,7 +367,7 @@ bubble_event :: proc(
 
 dispatch_custom_event :: proc(
 	ctx: ^Event_Context,
-	target_id: lc.Box_ID,
+	target_id: Box_ID,
 	event_name: string,
 	payload: rawptr = nil,
 ) {
