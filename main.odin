@@ -30,10 +30,9 @@ main :: proc() {
 				defer element_close(app.ui)
 
 
-				text(app.ui, app.ev, "Text Area ☺️", user_style = {font_size = 60})
+				text(app, "Text Area ☺️", user_style = {font_size = 60})
 				textarea(
-					app.ui,
-					app.ev,
+					app,
 					&buffer,
 					placeholder = "Type your multi-line message here...\nPress Enter for new lines.",
 					wrapper_style = {

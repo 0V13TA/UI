@@ -8,7 +8,10 @@ import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 import "vendor:sdl2/ttf"
 
-is_tree_hovered :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, target_id: Box_ID) -> bool {
+is_tree_hovered :: proc(app: ^App, target_id: Box_ID) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+
 	curr := ev_ctx.hovered_id
 	for curr != 0 {
 		if curr == target_id do return true
@@ -23,14 +26,16 @@ is_tree_hovered :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, target_id: 
 }
 
 text :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	text: string,
 	user_style := Style{},
 	salt := "",
 	id: string = "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 	final_id := ID(hash_input)
 
@@ -119,21 +124,22 @@ DEFAULT_BUTTON_STYLE :: Style {
 }
 
 button :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	text: string,
 	user_style := Style{},
 	salt := "",
 	id: Box_ID = 0,
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	final_id := id
 	if final_id == 0 {
 		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 		final_id = ID(hash_input)
 	}
 
-	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, final_id)
+	is_hovered := is_tree_hovered(app, final_id)
 	is_pressed := ev_ctx.pressed_id == final_id
 	is_clicked := ev_ctx.clicked_this_frame[final_id] or_else false
 
@@ -173,12 +179,13 @@ DEFAULT_TOOLTIP_STYLE :: Style {
 }
 
 tooltip_begin :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	target_id: Box_ID,
 	user_style := Style{},
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	if ev_ctx.hovered_id != target_id do return false
 
 	target_x, target_y, target_w, target_h: f32 = 0, 0, 0, 0
@@ -199,13 +206,12 @@ tooltip_begin :: proc(
 	return true
 }
 
-tooltip_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
-	if is_open do element_close(ui_ctx)
+tooltip_end :: proc(app: ^App, is_open: bool) {
+	if is_open do element_close(app.ui)
 }
 
 scroll_begin :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	id: Box_ID = 0,
 	scroll_y: bool = true,
 	scroll_x: bool = false,
@@ -213,6 +219,8 @@ scroll_begin :: proc(
 	salt := "",
 	loc := #caller_location,
 ) -> Box_ID {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	final_id := id
 	if final_id == 0 {
 		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
@@ -242,12 +250,11 @@ scroll_begin :: proc(
 	return final_id
 }
 
-scroll_end :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	id: Box_ID,
-	anim_ctx: ^Context = nil,
-) {
+scroll_end :: proc(app: ^App, id: Box_ID) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
+
 	if prev, ok := ui_ctx.layout.prev_all_boxes[id]; ok {
 		content_h: f32 = 0
 		for child in prev.children {
@@ -264,7 +271,7 @@ scroll_end :: proc(
 			thumb_y := (scroll_progress * (prev.computed_height - thumb_h)) + scroll_y
 
 			sb_id := ID(id, "scrollbar")
-			is_hovered := is_tree_hovered(ui_ctx, ev_ctx, id)
+			is_hovered := is_tree_hovered(app, id)
 
 			opacity: f32 = is_hovered ? 1.0 : 0.0
 
@@ -334,8 +341,7 @@ DEFAULT_CHECKBOX_TEXT_STYLE :: Style {
 }
 
 checkbox :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	label: string,
 	state: ^bool,
 	wrapper_style: Style = {},
@@ -347,6 +353,8 @@ checkbox :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	root_id := id != "" ? ID(id) : ID(loc, salt)
 	box_id := ID(root_id, "box")
 	text_id := ID(root_id, "text")
@@ -354,7 +362,7 @@ checkbox :: proc(
 	register(ev_ctx, root_id, Event_Callbacks{focusable = true, cursor = .HAND})
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
 
-	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
+	is_hovered := is_tree_hovered(app, root_id)
 
 	final_wrapper := merge_styles(DEFAULT_CHECKBOX_WRAPPER_STYLE, wrapper_style)
 	if is_hovered do final_wrapper.bg_color = hover_bg_color
@@ -399,8 +407,7 @@ DEFAULT_RADIO_TEXT_STYLE :: Style {
 }
 
 radio :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	label: string,
 	state: ^$T,
 	value: T,
@@ -413,6 +420,8 @@ radio :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	hash_input := id
 	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 
@@ -424,7 +433,7 @@ radio :: proc(
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = value
 	is_active := state^ == value
 
-	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
+	is_hovered := is_tree_hovered(app, root_id)
 	final_wrapper := wrapper_style
 	if is_hovered do final_wrapper.bg_color = hover_bg_color
 
@@ -475,9 +484,7 @@ DEFAULT_SLIDER_THUMB_STYLE :: Style {
 }
 
 slider :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
+	app: ^App,
 	value: ^f32,
 	min_val, max_val: f32,
 	wrapper_style: Style = DEFAULT_SLIDER_WRAPPER_STYLE,
@@ -490,6 +497,9 @@ slider :: proc(
 	changed: bool,
 	new_target: f32,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	root_id := ID(loc, salt)
 	fill_id := ID(root_id, "fill")
 	track_id := ID(root_id, "track")
@@ -739,8 +749,7 @@ _key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 }
 
 text_input :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	buffer: ^[dynamic]u8,
 	placeholder := "",
 	wrapper_style: Style = DEFAULT_TEXT_INPUT_WRAPPER_STYLE,
@@ -751,6 +760,8 @@ text_input :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	string_id := ID(root_id, "text")
 
@@ -906,8 +917,7 @@ text_input :: proc(
 	if is_focused do final_wrapper.border_color = focused_border_color
 
 	scroll_begin(
-		ui_ctx,
-		ev_ctx,
+		app,
 		id = root_id,
 		scroll_y = false,
 		scroll_x = true,
@@ -972,7 +982,7 @@ text_input :: proc(
 		element_close(ui_ctx)
 	}
 
-	scroll_end(ui_ctx, ev_ctx, root_id)
+	scroll_end(app, root_id)
 	return is_focused
 }
 
@@ -982,13 +992,14 @@ image :: proc {
 }
 
 image_texture :: proc(
-	ui_ctx: ^UI_Context,
+	app: ^App,
 	texture: ^sdl.Texture,
 	user_style := Style{},
 	salt := "",
 	id: Box_ID = 0,
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
 	final_id := id
 	if final_id == 0 {
 		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
@@ -1009,14 +1020,15 @@ image_texture :: proc(
 }
 
 image_path :: proc(
-	ui_ctx: ^UI_Context,
-	sdl_rend: ^sdl.Renderer,
+	app: ^App,
 	path: string,
 	user_style: Style = {},
 	salt := "",
 	id: Box_ID = 0,
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
+	sdl_rend := app.renderer
 	path_hash := hash.fnv32(transmute([]byte)path)
 	tex, exists := ui_ctx.image_cache[path_hash]
 	if !exists {
@@ -1025,18 +1037,19 @@ image_path :: proc(
 		if tex == nil do fmt.printfln("ERROR: Failed to load image '%s': %s", path, sdl.GetError())
 		ui_ctx.image_cache[path_hash] = tex
 	}
-	image_texture(ui_ctx, tex, user_style, salt, id, loc)
+	image_texture(app, tex, user_style, salt, id, loc)
 }
 
 image_button :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	sdl_rend: ^sdl.Renderer,
+	app: ^App,
 	path: string,
 	user_style: Style = {},
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	sdl_rend := app.renderer
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 	id := ID(hash_input)
 
@@ -1093,10 +1106,7 @@ DEFAULT_VIDEO_TIME_STYLE :: Style {
 }
 
 video :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
-	sdl_rend: ^sdl.Renderer,
+	app: ^App,
 	path: string,
 	dt: f64,
 	is_scrubbing: ^bool,
@@ -1119,6 +1129,11 @@ video :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
+	sdl_rend := app.renderer
+
 	hash_input := id
 	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
 	root_id := ID(hash_input)
@@ -1153,7 +1168,7 @@ video :: proc(
 
 		if player != nil {
 			overlay_id := ID(fmt.tprintf("%d_overlay", root_id))
-			should_show := is_tree_hovered(ui_ctx, ev_ctx, root_id) || is_scrubbing^
+			should_show := is_tree_hovered(app, root_id) || is_scrubbing^
 
 			if should_show != overlay_active^ {
 				overlay_active^ = should_show
@@ -1189,9 +1204,7 @@ video :: proc(
 
 					icon := player.is_playing ? pause_icon : play_icon
 					if image_button(
-						ui_ctx,
-						ev_ctx,
-						sdl_rend,
+						app,
 						icon,
 						user_style = play_btn_style,
 						salt = fmt.tprintf("%s_play", salt),
@@ -1210,8 +1223,7 @@ video :: proc(
 					final_time_style := merge_styles(DEFAULT_VIDEO_TIME_STYLE, time_style)
 
 					text(
-						ui_ctx,
-						ev_ctx,
+						app,
 						time_str,
 						user_style = final_time_style,
 						salt = fmt.tprintf("%s_time", salt),
@@ -1239,9 +1251,7 @@ video :: proc(
 					)
 
 					slider_changed, scrub_target := slider(
-						ui_ctx,
-						ev_ctx,
-						anim_ctx,
+						app,
 						slider_val,
 						0.0,
 						f32(player.duration),
@@ -1283,17 +1293,17 @@ DEFAULT_POPOVER_STYLE :: Style {
 	height        = Fit(true),
 }
 
-// NEW: Requires anim_ctx for slide/fade animations
 popover_begin :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
+	app: ^App,
 	target_id: Box_ID,
 	is_open: ^bool,
 	user_style: Style = {},
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	if !is_open^ do return false
 
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
@@ -1368,8 +1378,8 @@ popover_begin :: proc(
 	return true
 }
 
-popover_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
-	if is_open do element_close(ui_ctx)
+popover_end :: proc(app: ^App, is_open: bool) {
+	if is_open do element_close(app.ui)
 }
 
 DEFAULT_DROPDOWN_STYLE :: Style {
@@ -1395,9 +1405,7 @@ DEFAULT_DROPDOWN_POPOVER_STYLE :: Style {
 }
 
 dropdown :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context, // NEW
+	app: ^App,
 	label: string,
 	options: []string,
 	selected_idx: ^int,
@@ -1408,6 +1416,9 @@ dropdown :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	changed := false
 	hash_input := id
 	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
@@ -1420,21 +1431,19 @@ dropdown :: proc(
 
 	final_wrapper := merge_styles(DEFAULT_DROPDOWN_STYLE, wrapper_style)
 
-	if button(ui_ctx, ev_ctx, display_text, user_style = final_wrapper, id = root_id) do is_open^ = !is_open^
+	if button(app, display_text, user_style = final_wrapper, id = root_id) do is_open^ = !is_open^
 
 	final_popover := merge_styles(DEFAULT_DROPDOWN_POPOVER_STYLE, popover_style)
 
 	if popover_begin(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx, // Added Context
+		app, // Added Context
 		root_id,
 		is_open,
 		salt = salt,
 		loc = loc,
 		user_style = final_popover,
 	) {
-		defer popover_end(ui_ctx, true)
+		defer popover_end(app, true)
 
 		for opt, i in options {
 			opt_id := ID(fmt.tprintf("%d_opt_%d", root_id, i))
@@ -1444,8 +1453,7 @@ dropdown :: proc(
 			opt_text := is_selected ? Color{1, 1, 1, 1} : Color{0.2, 0.2, 0.2, 1}
 
 			if button(
-				ui_ctx,
-				ev_ctx,
+				app,
 				opt,
 				id = opt_id,
 				user_style = {
@@ -1490,9 +1498,7 @@ DEFAULT_MODAL_STYLE :: Style {
 }
 
 modal_begin :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context, // NEW
+	app: ^App,
 	is_open: ^bool,
 	dismiss_on_click_outside: bool = true,
 	backdrop_style: Style = {},
@@ -1500,6 +1506,9 @@ modal_begin :: proc(
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	if !is_open^ do return false
 
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
@@ -1548,10 +1557,10 @@ modal_begin :: proc(
 	return true
 }
 
-modal_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
+modal_end :: proc(app: ^App, is_open: bool) {
 	if is_open {
-		element_close(ui_ctx)
-		element_close(ui_ctx)
+		element_close(app.ui)
+		element_close(app.ui)
 	}
 }
 
@@ -1579,9 +1588,7 @@ DEFAULT_CONTEXT_MENU_STYLE :: Style {
 }
 
 context_menu_begin :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context, // NEW
+	app: ^App,
 	x, y: f32,
 	is_open: ^bool,
 	backdrop_style: Style = {},
@@ -1592,6 +1599,9 @@ context_menu_begin :: proc(
 	is_active: bool,
 	target_id: Box_ID,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	if !is_open^ do return false, 0
 
 	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
@@ -1637,8 +1647,8 @@ context_menu_begin :: proc(
 	return true, ev_ctx.context_menu_target
 }
 
-context_menu_end :: proc(ui_ctx: ^UI_Context, is_open: bool) {
-	if is_open do element_close(ui_ctx)
+context_menu_end :: proc(app: ^App, is_open: bool) {
+	if is_open do element_close(app.ui)
 }
 
 DEFAULT_SWITCH_WRAPPER_STYLE :: Style {
@@ -1670,9 +1680,7 @@ DEFAULT_SWITCH_THUMB_STYLE :: Style {
 }
 
 switch_toggle :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context, // NEW
+	app: ^App,
 	label: string,
 	state: ^bool,
 	wrapper_style: Style = {},
@@ -1686,6 +1694,9 @@ switch_toggle :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	track_id := ID(root_id, "track")
 	thumb_id := ID(root_id, "thumb")
@@ -1694,7 +1705,7 @@ switch_toggle :: proc(
 	register(ev_ctx, root_id, Event_Callbacks{focusable = true, cursor = .HAND})
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
 
-	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
+	is_hovered := is_tree_hovered(app, root_id)
 
 	final_wrapper := merge_styles(DEFAULT_SWITCH_WRAPPER_STYLE, wrapper_style)
 	if is_hovered do final_wrapper.bg_color = hover_bg_color
@@ -1762,9 +1773,7 @@ DEFAULT_MULTI_SELECT_POPOVER_STYLE :: Style {
 }
 
 multi_select :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context, // NEW
+	app: ^App,
 	label: string,
 	options: []string,
 	selected_states: []bool,
@@ -1775,6 +1784,9 @@ multi_select :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	changed := false
 	root_id := ID(id) if id != "" else ID(loc, salt)
 
@@ -1786,25 +1798,23 @@ multi_select :: proc(
 
 	final_wrapper := merge_styles(DEFAULT_DROPDOWN_STYLE, wrapper_style)
 
-	if button(ui_ctx, ev_ctx, display_text, user_style = final_wrapper, id = root_id) do is_open^ = !is_open^
+	if button(app, display_text, user_style = final_wrapper, id = root_id) do is_open^ = !is_open^
 
 	final_popover := merge_styles(DEFAULT_MULTI_SELECT_POPOVER_STYLE, popover_style)
 
 	if popover_begin(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx, // Added
+		app, // Added
 		root_id,
 		is_open,
 		salt = salt,
 		loc = loc,
 		user_style = final_popover,
 	) {
-		defer popover_end(ui_ctx, is_open^)
+		defer popover_end(app, is_open^)
 
 		for opt, i in options {
 			cb_salt := fmt.tprintf("%s_opt_%d", salt, i)
-			if checkbox(ui_ctx, ev_ctx, opt, &selected_states[i], salt = cb_salt, loc = loc) do changed = true
+			if checkbox(app, opt, &selected_states[i], salt = cb_salt, loc = loc) do changed = true
 		}
 	}
 	return changed
@@ -1822,9 +1832,7 @@ DEFAULT_COMBOBOX_POPOVER_STYLE :: Style {
 }
 
 combobox :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context, // NEW
+	app: ^App,
 	placeholder: string,
 	options: []string,
 	buffer: ^[dynamic]u8,
@@ -1836,6 +1844,9 @@ combobox :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	changed := false
 	root_id := ID(id) if id != "" else ID(loc, salt)
 
@@ -1845,8 +1856,7 @@ combobox :: proc(
 	final_wrapper := merge_styles(DEFAULT_TEXT_INPUT_WRAPPER_STYLE, wrapper_style)
 
 	is_focused := text_input(
-		ui_ctx,
-		ev_ctx,
+		app,
 		buffer,
 		placeholder = placeholder,
 		wrapper_style = final_wrapper,
@@ -1860,16 +1870,14 @@ combobox :: proc(
 	final_popover := merge_styles(DEFAULT_COMBOBOX_POPOVER_STYLE, popover_style)
 
 	if popover_begin(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx, // Added Context
+		app, // Added Context
 		input_id,
 		is_open,
 		salt = salt,
 		loc = loc,
 		user_style = final_popover,
 	) {
-		defer popover_end(ui_ctx, true)
+		defer popover_end(app, true)
 
 		for opt, i in options {
 			opt_lower := strings.to_lower(opt, context.temp_allocator)
@@ -1882,8 +1890,7 @@ combobox :: proc(
 				opt_text := Color{1, 1, 1, 1} if is_selected else Color{0.2, 0.2, 0.2, 1}
 
 				if button(
-					ui_ctx,
-					ev_ctx,
+					app,
 					opt,
 					id = opt_id,
 					user_style = {
@@ -1924,7 +1931,7 @@ DEFAULT_PROGRESS_FILL_STYLE :: Style {
 }
 
 progress_bar :: proc(
-	ui_ctx: ^UI_Context,
+	app: ^App,
 	value: f32,
 	min_val: f32 = 0.0,
 	max_val: f32 = 1.0,
@@ -1934,6 +1941,8 @@ progress_bar :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
+
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	fill_id := ID(root_id, "fill")
 
@@ -1969,13 +1978,14 @@ DEFAULT_SPINNER_DOT_STYLE :: Style {
 }
 
 spinner :: proc(
-	ui_ctx: ^UI_Context,
+	app: ^App,
 	wrapper_style: Style = {},
 	dot_style: Style = {},
 	salt := "",
 	id: string = "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
 	root_id := ID(id) if id != "" else ID(loc, salt)
 
 	final_wrapper := merge_styles(DEFAULT_SPINNER_WRAPPER_STYLE, wrapper_style)
@@ -2024,8 +2034,7 @@ DEFAULT_TOAST_STYLE :: Style {
 }
 
 toast :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	title: string,
 	message: string,
 	type: Toast_Type = .INFO,
@@ -2035,6 +2044,8 @@ toast :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	if !is_open^ do return false
 	closed_this_frame := false
 	root_id := ID(id) if id != "" else ID(loc, salt)
@@ -2070,16 +2081,14 @@ toast :: proc(
 	)
 
 	text(
-		ui_ctx,
-		ev_ctx,
+		app,
 		title,
 		user_style = {font_size = 18, text_color = Color{0.1, 0.1, 0.1, 1}},
 		salt = "title",
 	)
 	if message != "" {
 		text(
-			ui_ctx,
-			ev_ctx,
+			app,
 			message,
 			user_style = {font_size = 14, text_color = Color{0.4, 0.4, 0.4, 1}},
 			salt = "msg",
@@ -2088,8 +2097,7 @@ toast :: proc(
 	element_close(ui_ctx)
 
 	if button(
-		ui_ctx,
-		ev_ctx,
+		app,
 		"x",
 		salt = "close",
 		user_style = {
@@ -2124,8 +2132,7 @@ DEFAULT_TABS_TAB_STYLE :: Style {
 }
 
 tabs :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	labels: []string,
 	active_idx: ^int,
 	wrapper_style: Style = {},
@@ -2134,6 +2141,8 @@ tabs :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	changed := false
 	root_id := ID(id) if id != "" else ID(loc, salt)
 
@@ -2152,7 +2161,7 @@ tabs :: proc(
 		if tab_style.text_color == nil do final_tab.text_color = active_text
 		if tab_style.border_color == nil do final_tab.border_color = active_border
 
-		if button(ui_ctx, ev_ctx, label, id = tab_id, user_style = final_tab) {
+		if button(app, label, id = tab_id, user_style = final_tab) {
 			active_idx^ = i
 			changed = true
 		}
@@ -2199,9 +2208,7 @@ DEFAULT_ACCORDION_CONTENT_STYLE :: Style {
 }
 
 accordion_begin :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context, // NEW
+	app: ^App,
 	sdl_rend: ^sdl.Renderer,
 	title: string,
 	is_expanded: ^bool,
@@ -2215,6 +2222,9 @@ accordion_begin :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	header_id := ID(root_id, "header")
 	content_id := ID(root_id, "content")
@@ -2229,7 +2239,7 @@ accordion_begin :: proc(
 
 	final_header := merge_styles(DEFAULT_ACCORDION_HEADER_STYLE, header_style)
 
-	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, header_id)
+	is_hovered := is_tree_hovered(app, header_id)
 	if is_hovered {
 		if bg, ok := final_header.bg_color.?; ok {
 			final_header.bg_color = Color {
@@ -2245,11 +2255,11 @@ accordion_begin :: proc(
 
 	icon_path := is_expanded^ ? expanded_icon : collapsed_icon
 	final_icon := merge_styles(DEFAULT_ACCORDION_ICON_STYLE, icon_style)
-	image_path(ui_ctx, sdl_rend, icon_path, user_style = final_icon)
+	image_path(app, icon_path, user_style = final_icon)
 
 	text_col := final_header.text_color.? or_else Color{0.1, 0.1, 0.1, 1}
 	font_sz := final_header.font_size.? or_else 16
-	text(ui_ctx, ev_ctx, title, user_style = {text_color = text_col, font_size = font_sz})
+	text(app, title, user_style = {text_color = text_col, font_size = font_sz})
 
 	element_close(ui_ctx)
 
@@ -2278,10 +2288,10 @@ accordion_begin :: proc(
 	return false
 }
 
-accordion_end :: proc(ui_ctx: ^UI_Context, is_expanded: bool) {
+accordion_end :: proc(app: ^App, is_expanded: bool) {
 	if is_expanded {
-		element_close(ui_ctx)
-		element_close(ui_ctx)
+		element_close(app.ui)
+		element_close(app.ui)
 	}
 }
 
@@ -2331,8 +2341,7 @@ DEFAULT_TABLE_SCROLL_STYLE :: Style {
 }
 
 table :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	headers: []string,
 	rows: [][]string,
 	col_widths: []Sizing,
@@ -2346,6 +2355,8 @@ table :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	header_id := ID(root_id, "header")
 	body_id := ID(root_id, "body")
@@ -2359,15 +2370,14 @@ table :: proc(
 	final_header_text := merge_styles(DEFAULT_TABLE_HEADER_TEXT_STYLE, header_text_style)
 	for h, i in headers {
 		element_open(ui_ctx, Element{style = {width = col_widths[i], justify_content = .START}})
-		text(ui_ctx, ev_ctx, h, user_style = final_header_text)
+		text(app, h, user_style = final_header_text)
 		element_close(ui_ctx)
 	}
 	element_close(ui_ctx)
 
 	final_scroll_style := merge_styles(DEFAULT_TABLE_SCROLL_STYLE, scroll_style)
 	scroll_begin(
-		ui_ctx,
-		ev_ctx,
+		app,
 		id = body_id,
 		scroll_y = true,
 		scroll_x = false,
@@ -2392,14 +2402,14 @@ table :: proc(
 				ui_ctx,
 				Element{style = {width = col_widths[c_idx], justify_content = .START}},
 			)
-			text(ui_ctx, ev_ctx, cell, user_style = final_cell_text)
+			text(app, cell, user_style = final_cell_text)
 			element_close(ui_ctx)
 		}
 
 		element_close(ui_ctx)
 	}
 
-	scroll_end(ui_ctx, ev_ctx, body_id)
+	scroll_end(app, body_id)
 	element_close(ui_ctx)
 }
 
@@ -2429,8 +2439,7 @@ DEFAULT_LIST_ITEM_STYLE :: Style {
 }
 
 list_view :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	items: []string,
 	selected_idx: ^int,
 	wrapper_style: Style = {},
@@ -2440,6 +2449,8 @@ list_view :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	changed := false
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	scroll_id := ID(root_id, "scroll")
@@ -2448,14 +2459,7 @@ list_view :: proc(
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
 	final_scroll := merge_styles(DEFAULT_LIST_SCROLL_STYLE, scroll_style)
-	scroll_begin(
-		ui_ctx,
-		ev_ctx,
-		id = scroll_id,
-		scroll_y = true,
-		scroll_x = false,
-		user_style = final_scroll,
-	)
+	scroll_begin(app, id = scroll_id, scroll_y = true, scroll_x = false, user_style = final_scroll)
 
 	for item, i in items {
 		item_id := ID(scroll_id, fmt.tprintf("item_%d", i))
@@ -2469,13 +2473,13 @@ list_view :: proc(
 		if item_style.bg_color == nil do final_item.bg_color = opt_bg
 		if item_style.text_color == nil do final_item.text_color = opt_text
 
-		if button(ui_ctx, ev_ctx, item, id = item_id, user_style = final_item) {
+		if button(app, item, id = item_id, user_style = final_item) {
 			selected_idx^ = i
 			changed = true
 		}
 	}
 
-	scroll_end(ui_ctx, ev_ctx, scroll_id)
+	scroll_end(app, scroll_id)
 	element_close(ui_ctx)
 
 	return changed
@@ -2498,9 +2502,7 @@ Router_State :: struct {
 
 // The Animated Router Component
 router_view :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
+	app: ^App,
 	router_state: ^Router_State,
 	requested_idx: int,
 	pages: []Page_Proc,
@@ -2509,6 +2511,9 @@ router_view :: proc(
 	salt := "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	root_id := ID(loc, salt)
 
 	final_wrapper := merge_styles(
@@ -2578,10 +2583,7 @@ DEFAULT_CAROUSEL_VIEWPORT :: Style {
 }
 
 carousel_textures :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
-	sdl_rend: ^sdl.Renderer,
+	app: ^App,
 	images: []^sdl.Texture,
 	current_idx: ^int,
 	wrapper_style: Style = {},
@@ -2594,6 +2596,11 @@ carousel_textures :: proc(
 	salt := "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
+	sdl_rend := app.renderer
+
 	if len(images) == 0 do return
 
 	current_idx^ = current_idx^ % len(images)
@@ -2604,7 +2611,7 @@ carousel_textures :: proc(
 	if auto_play {
 		if root_id not_in last_tick do last_tick[root_id] = sdl.GetTicks()
 
-		if !is_tree_hovered(ui_ctx, ev_ctx, root_id) {
+		if !is_tree_hovered(app, root_id) {
 			current_tick := sdl.GetTicks()
 			if current_tick - last_tick[root_id] > auto_play_interval {
 				current_idx^ += 1
@@ -2672,12 +2679,12 @@ carousel_textures :: proc(
 			height     = Fixed{vp_height},
 			object_fit = .COVER,
 		}
-		image_texture(ui_ctx, tex, slide_style, salt = fmt.tprintf("slide_%d", i))
+		image_texture(app, tex, slide_style, salt = fmt.tprintf("slide_%d", i))
 	}
 	element_close(ui_ctx) // Track
 	element_close(ui_ctx) // Viewport
 
-	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, root_id)
+	is_hovered := is_tree_hovered(app, root_id)
 	arrows_state := get_state(anim_ctx, arrows_id)
 
 	@(static) prev_hover: map[Box_ID]bool
@@ -2721,26 +2728,12 @@ carousel_textures :: proc(
 			arrow_style,
 		)
 
-		if image_button(
-			ui_ctx,
-			ev_ctx,
-			sdl_rend,
-			left_arrow,
-			user_style = final_arrow_style,
-			salt = "prev",
-		) {
+		if image_button(app, left_arrow, user_style = final_arrow_style, salt = "prev") {
 			current_idx^ -= 1
 			if auto_play do last_tick[root_id] = sdl.GetTicks()
 		}
 
-		if image_button(
-			ui_ctx,
-			ev_ctx,
-			sdl_rend,
-			right_arrow,
-			user_style = final_arrow_style,
-			salt = "next",
-		) {
+		if image_button(app, right_arrow, user_style = final_arrow_style, salt = "next") {
 			current_idx^ += 1
 			if auto_play do last_tick[root_id] = sdl.GetTicks()
 		}
@@ -2774,8 +2767,7 @@ carousel_textures :: proc(
 		dot_id := ID(dots_id, fmt.tprintf("dot_%d", i))
 
 		if button(
-			ui_ctx,
-			ev_ctx,
+			app,
 			"",
 			id = dot_id,
 			user_style = {
@@ -2812,10 +2804,7 @@ carousel_textures :: proc(
 }
 
 carousel_paths :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
-	sdl_rend: ^sdl.Renderer,
+	app: ^App,
 	images: []string,
 	current_idx: ^int,
 	wrapper_style: Style = {},
@@ -2828,6 +2817,11 @@ carousel_paths :: proc(
 	salt := "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
+	sdl_rend := app.renderer
+
 	textures := make([dynamic]^sdl.Texture, context.temp_allocator)
 	for path in images {
 		path_hash := hash.fnv32(transmute([]byte)path)
@@ -2842,10 +2836,7 @@ carousel_paths :: proc(
 	}
 
 	carousel_textures(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx,
-		sdl_rend,
+		app,
 		textures[:],
 		current_idx,
 		wrapper_style,
@@ -2912,9 +2903,7 @@ rgb_to_hsv :: proc(r, g, b: f32) -> [3]f32 {
 }
 
 color_picker :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
+	app: ^App,
 	label: string,
 	color: ^[4]f32,
 	is_open: ^bool,
@@ -2922,6 +2911,10 @@ color_picker :: proc(
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
+
 	changed := false
 	root_id := ID(loc, salt)
 	swatch_id := ID(root_id, "swatch")
@@ -2941,7 +2934,7 @@ color_picker :: proc(
 	final_wrapper := merge_styles(DEFAULT_COLOR_PICKER_WRAPPER, wrapper_style)
 	element_open(ui_ctx, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	text(ui_ctx, ev_ctx, label, user_style = {text_color = Color{0.2, 0.2, 0.2, 1}})
+	text(app, label, user_style = {text_color = Color{0.2, 0.2, 0.2, 1}})
 
 	final_swatch := DEFAULT_COLOR_PICKER_SWATCH
 	final_swatch.bg_color = transmute(Color)color^
@@ -2953,15 +2946,13 @@ color_picker :: proc(
 	element_close(ui_ctx)
 
 	if popover_begin(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx,
+		app,
 		swatch_id,
 		is_open,
 		user_style = {width = Fixed{240}, gap = 12},
 		salt = salt,
 	) {
-		defer popover_end(ui_ctx, true)
+		defer popover_end(app, true)
 
 		// Allocate Render Data on the layout frame allocator so it survives until render_tree!
 		Render_State :: struct {
@@ -2997,7 +2988,7 @@ color_picker :: proc(
 		}
 
 		canvas(
-			ui_ctx,
+			app,
 			proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
 				rs := (^Render_State)(data)
 				step: i32 = 4 // Granularity for performance
@@ -3054,7 +3045,7 @@ color_picker :: proc(
 			}
 		}
 
-		canvas(ui_ctx, proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
+		canvas(app, proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
 				rs := (^Render_State)(data)
 				step: i32 = 2
 				for x := bounds.x; x < bounds.x + bounds.w; x += step {
@@ -3097,7 +3088,7 @@ color_picker :: proc(
 		}
 
 		canvas(
-			ui_ctx,
+			app,
 			proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
 				rs := (^Render_State)(data)
 				rgb := hsv_to_rgb(rs.h, rs.s, rs.v)
@@ -3171,9 +3162,7 @@ days_in_month :: proc(year, month: int) -> int {
 }
 
 date_picker :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
+	app: ^App,
 	label: string,
 	date: ^[3]int, // [YYYY, MM, DD]
 	is_open: ^bool,
@@ -3181,6 +3170,10 @@ date_picker :: proc(
 	salt := "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
+
 	changed := false
 	root_id := ID(loc, salt)
 
@@ -3195,21 +3188,19 @@ date_picker :: proc(
 	if date^[0] == 0 do display_text = label
 
 	final_wrapper := merge_styles(DEFAULT_DATE_PICKER_WRAPPER, wrapper_style)
-	if button(ui_ctx, ev_ctx, display_text, user_style = final_wrapper, id = root_id) {
+	if button(app, display_text, user_style = final_wrapper, id = root_id) {
 		is_open^ = !is_open^
 		if is_open^ && date^[0] != 0 do views[root_id] = {date^[0], date^[1]}
 	}
 
 	if popover_begin(
-		ui_ctx,
-		ev_ctx,
-		anim_ctx,
+		app,
 		root_id,
 		is_open,
 		user_style = {width = Fixed{300}, padding = space(16), gap = 12},
 		salt = salt,
 	) {
-		defer popover_end(ui_ctx, true)
+		defer popover_end(app, true)
 
 		// Take a pointer to the map value to allow direct mutation
 		v := &views[root_id]
@@ -3226,15 +3217,15 @@ date_picker :: proc(
 				},
 			},
 		)
-		if button(ui_ctx, ev_ctx, "<", user_style = {padding = space(6, 12)}) {
+		if button(app, "<", user_style = {padding = space(6, 12)}) {
 			v[1] -= 1
 			if v[1] < 1 {
 				v[1] = 12
 				v[0] -= 1
 			}
 		}
-		text(ui_ctx, ev_ctx, fmt.tprintf("%d - %02d", v[0], v[1]), user_style = {font_size = 18})
-		if button(ui_ctx, ev_ctx, ">", user_style = {padding = space(6, 12)}) {
+		text(app, fmt.tprintf("%d - %02d", v[0], v[1]), user_style = {font_size = 18})
+		if button(app, ">", user_style = {padding = space(6, 12)}) {
 			v[1] += 1
 			if v[1] > 12 {
 				v[1] = 1
@@ -3251,8 +3242,7 @@ date_picker :: proc(
 		)
 		for d in days_of_week {
 			text(
-				ui_ctx,
-				ev_ctx,
+				app,
 				d,
 				user_style = {
 					text_color = Color{0.5, 0.5, 0.5, 1},
@@ -3284,8 +3274,7 @@ date_picker :: proc(
 			tc := Color{1, 1, 1, 1} if is_sel else Color{0.1, 0.1, 0.1, 1}
 
 			if button(
-				ui_ctx,
-				ev_ctx,
+				app,
 				fmt.tprintf("%d", d),
 				user_style = {
 					width = Fixed{32},
@@ -3310,7 +3299,7 @@ date_picker :: proc(
 }
 
 canvas :: proc(
-	ui_ctx: ^UI_Context,
+	app: ^App,
 	draw_proc: proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr),
 	data: rawptr = nil,
 	user_style := Style{},
@@ -3318,6 +3307,7 @@ canvas :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) {
+	ui_ctx := app.ui
 	// Generate a stable ID based on the caller location or a provided string
 	final_id := id != "" ? ID(id) : ID(loc, salt)
 
@@ -3339,7 +3329,10 @@ canvas :: proc(
 	element_close(ui_ctx)
 }
 
-debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Context) {
+debug_panel :: proc(app: ^App) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	prev_roots := ui_ctx.layout.prev_root_boxes
 
 	// State trackers
@@ -3419,18 +3412,12 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 			},
 		},
 	)
-	text(
-		ui_ctx,
-		ev_ctx,
-		"Debug Inspector",
-		user_style = {text_color = Color{1, 1, 1, 1}, font_size = 18},
-	)
+	text(app, "Debug Inspector", user_style = {text_color = Color{1, 1, 1, 1}, font_size = 18})
 	element_close(ui_ctx)
 
 	// Panel Body (Scrollable Tree)
 	scroll_id := scroll_begin(
-		ui_ctx,
-		ev_ctx,
+		app,
 		scroll_y = true,
 		scroll_x = true,
 		user_style = {width = Percent{100}, height = Grow{1}}, // Pushes info bar to bottom
@@ -3439,18 +3426,9 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 
 	for root in prev_roots {
 		if root.id == debug_panel_id || root.id == highlight_id || root.id == info_bar_id do continue
-		_render_debug_node(
-			ui_ctx,
-			ev_ctx,
-			anim_ctx,
-			root,
-			0,
-			&tree_hover_target,
-			&tree_click_target,
-			pinned_node_id,
-		)
+		_render_debug_node(app, root, 0, &tree_hover_target, &tree_click_target, pinned_node_id)
 	}
-	scroll_end(ui_ctx, ev_ctx, scroll_id, anim_ctx)
+	scroll_end(app, scroll_id)
 
 	// --- RESOLVE HOVER AND PIN TARGETS ---
 	hover_target := ev_ctx.hovered_id
@@ -3489,8 +3467,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 
 	// Information Bar (Docked natively at the bottom of the column!)
 	info_scroll_id := scroll_begin(
-		ui_ctx,
-		ev_ctx,
+		app,
 		scroll_y = true,
 		user_style = {
 			width        = Percent{100},
@@ -3512,8 +3489,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 
 			// -- IDENTITY & BOUNDS --
 			text(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"IDENTITY & BOUNDS",
 				user_style = {
 					text_color = Color{0.4, 0.8, 0.4, 1},
@@ -3522,29 +3498,26 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 				},
 				salt = "h_id",
 			)
-			_debug_kv(ui_ctx, ev_ctx, "Name", name, "kv_name")
-			_debug_kv(ui_ctx, ev_ctx, "ID", fmt.tprintf("%d", target.id), "kv_id")
+			_debug_kv(app, "Name", name, "kv_name")
+			_debug_kv(app, "ID", fmt.tprintf("%d", target.id), "kv_id")
 			_debug_kv(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"Absolute Pos (X, Y)",
 				fmt.tprintf("[%.0f, %.0f]", target.x, target.y),
 				"kv_pos",
 			)
 			_debug_kv(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"Computed Size",
 				fmt.tprintf("%.0f x %.0f", target.computed_width, target.computed_height),
 				"kv_size",
 			)
 
-			_debug_divider(ui_ctx)
+			_debug_divider(app)
 
 			// -- FLEX & LAYOUT --
 			text(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"FLEX & LAYOUT",
 				user_style = {
 					text_color = Color{0.4, 0.8, 0.4, 1},
@@ -3553,32 +3526,19 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 				},
 				salt = "h_flex",
 			)
-			_debug_kv(ui_ctx, ev_ctx, "Direction", fmt.tprintf("%v", target.direction), "kv_dir")
-			_debug_kv(ui_ctx, ev_ctx, "Width", fmt.tprintf("%v", target.width), "kv_w")
-			_debug_kv(ui_ctx, ev_ctx, "Height", fmt.tprintf("%v", target.height), "kv_h")
-			_debug_kv(
-				ui_ctx,
-				ev_ctx,
-				"Justify Content",
-				fmt.tprintf("%v", target.justify_content),
-				"kv_just",
-			)
-			_debug_kv(
-				ui_ctx,
-				ev_ctx,
-				"Align Items",
-				fmt.tprintf("%v", target.align_items),
-				"kv_align",
-			)
-			_debug_kv(ui_ctx, ev_ctx, "Flex Wrap", fmt.tprintf("%v", target.wrap), "kv_wrap")
-			_debug_kv(ui_ctx, ev_ctx, "Basis", fmt.tprintf("%.0f", target.basis), "kv_bas")
+			_debug_kv(app, "Direction", fmt.tprintf("%v", target.direction), "kv_dir")
+			_debug_kv(app, "Width", fmt.tprintf("%v", target.width), "kv_w")
+			_debug_kv(app, "Height", fmt.tprintf("%v", target.height), "kv_h")
+			_debug_kv(app, "Justify Content", fmt.tprintf("%v", target.justify_content), "kv_just")
+			_debug_kv(app, "Align Items", fmt.tprintf("%v", target.align_items), "kv_align")
+			_debug_kv(app, "Flex Wrap", fmt.tprintf("%v", target.wrap), "kv_wrap")
+			_debug_kv(app, "Basis", fmt.tprintf("%.0f", target.basis), "kv_bas")
 
-			_debug_divider(ui_ctx)
+			_debug_divider(app)
 
 			// -- BOX MODEL --
 			text(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"BOX MODEL",
 				user_style = {
 					text_color = Color{0.4, 0.8, 0.4, 1},
@@ -3587,24 +3547,22 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 				},
 				salt = "h_box",
 			)
-			_debug_kv(ui_ctx, ev_ctx, "Padding", fmt.tprintf("%v", target.padding), "kv_pad")
-			_debug_kv(ui_ctx, ev_ctx, "Margin", fmt.tprintf("%v", target.margin), "kv_mar")
-			_debug_kv(ui_ctx, ev_ctx, "Border", fmt.tprintf("%v", target.border), "kv_bor")
-			_debug_kv(ui_ctx, ev_ctx, "Gap", fmt.tprintf("%.0f", target.gap), "kv_gap")
+			_debug_kv(app, "Padding", fmt.tprintf("%v", target.padding), "kv_pad")
+			_debug_kv(app, "Margin", fmt.tprintf("%v", target.margin), "kv_mar")
+			_debug_kv(app, "Border", fmt.tprintf("%v", target.border), "kv_bor")
+			_debug_kv(app, "Gap", fmt.tprintf("%.0f", target.gap), "kv_gap")
 			_debug_kv(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"Overflow (X / Y)",
 				fmt.tprintf("%v / %v", target.overflow_x, target.overflow_y),
 				"kv_over",
 			)
 
-			_debug_divider(ui_ctx)
+			_debug_divider(app)
 
 			// -- POSITIONING --
 			text(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"POSITIONING",
 				user_style = {
 					text_color = Color{0.4, 0.8, 0.4, 1},
@@ -3613,30 +3571,27 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 				},
 				salt = "h_pos",
 			)
-			_debug_kv(ui_ctx, ev_ctx, "Type", fmt.tprintf("%v", target.position), "kv_postype")
-			_debug_kv(ui_ctx, ev_ctx, "Z-Index", fmt.tprintf("%d", target.z_index), "kv_z")
+			_debug_kv(app, "Type", fmt.tprintf("%v", target.position), "kv_postype")
+			_debug_kv(app, "Z-Index", fmt.tprintf("%d", target.z_index), "kv_z")
 			_debug_kv(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"Top / Bottom",
 				fmt.tprintf("%v / %v", target.top, target.bottom),
 				"kv_tb",
 			)
 			_debug_kv(
-				ui_ctx,
-				ev_ctx,
+				app,
 				"Left / Right",
 				fmt.tprintf("%v / %v", target.left, target.right),
 				"kv_lr",
 			)
 
 			if el != nil {
-				_debug_divider(ui_ctx)
+				_debug_divider(app)
 
 				// -- VISUALS & TEXT --
 				text(
-					ui_ctx,
-					ev_ctx,
+					app,
 					"VISUALS & TEXT",
 					user_style = {
 						text_color = Color{0.4, 0.8, 0.4, 1},
@@ -3648,8 +3603,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 
 				c_bg := el.resolved_bg_color
 				_debug_kv(
-					ui_ctx,
-					ev_ctx,
+					app,
 					"Bg Color",
 					fmt.tprintf("[%.2f, %.2f, %.2f, %.2f]", c_bg[0], c_bg[1], c_bg[2], c_bg[3]),
 					"kv_bg",
@@ -3657,64 +3611,31 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 
 				c_bd := el.resolved_border_color
 				_debug_kv(
-					ui_ctx,
-					ev_ctx,
+					app,
 					"Border Color",
 					fmt.tprintf("[%.2f, %.2f, %.2f, %.2f]", c_bd[0], c_bd[1], c_bd[2], c_bd[3]),
 					"kv_bdc",
 				)
 
 				_debug_kv(
-					ui_ctx,
-					ev_ctx,
+					app,
 					"Border Radius",
 					fmt.tprintf("%v", el.resolved_border_radius),
 					"kv_rad",
 				)
-				_debug_kv(
-					ui_ctx,
-					ev_ctx,
-					"Opacity",
-					fmt.tprintf("%.2f", el.resolved_opacity),
-					"kv_op",
-				)
-				_debug_kv(
-					ui_ctx,
-					ev_ctx,
-					"Object Fit",
-					fmt.tprintf("%v", el.resolved_object_fit),
-					"kv_objf",
-				)
+				_debug_kv(app, "Opacity", fmt.tprintf("%.2f", el.resolved_opacity), "kv_op")
+				_debug_kv(app, "Object Fit", fmt.tprintf("%v", el.resolved_object_fit), "kv_objf")
 
 				c_tx := el.resolved_text_color
 				_debug_kv(
-					ui_ctx,
-					ev_ctx,
+					app,
 					"Text Color",
 					fmt.tprintf("[%.2f, %.2f, %.2f, %.2f]", c_tx[0], c_tx[1], c_tx[2], c_tx[3]),
 					"kv_txc",
 				)
-				_debug_kv(
-					ui_ctx,
-					ev_ctx,
-					"Font Size",
-					fmt.tprintf("%.1f", el.resolved_font_size),
-					"kv_fs",
-				)
-				_debug_kv(
-					ui_ctx,
-					ev_ctx,
-					"Text Wrap",
-					fmt.tprintf("%v", el.resolved_text_wrap),
-					"kv_tw",
-				)
-				_debug_kv(
-					ui_ctx,
-					ev_ctx,
-					"Text Align",
-					fmt.tprintf("%v", el.resolved_text_align),
-					"kv_ta",
-				)
+				_debug_kv(app, "Font Size", fmt.tprintf("%.1f", el.resolved_font_size), "kv_fs")
+				_debug_kv(app, "Text Wrap", fmt.tprintf("%v", el.resolved_text_wrap), "kv_tw")
+				_debug_kv(app, "Text Align", fmt.tprintf("%v", el.resolved_text_align), "kv_ta")
 			}
 		}
 	} else {
@@ -3723,8 +3644,7 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 			{style = {height = Grow{1}, justify_content = .CENTER, align_items = .CENTER}},
 		)
 		text(
-			ui_ctx,
-			ev_ctx,
+			app,
 			"Hover or click an element\nto inspect.",
 			user_style = {
 				text_color = Color{0.4, 0.4, 0.4, 1},
@@ -3736,20 +3656,21 @@ debug_panel :: proc(ui_ctx: ^UI_Context, ev_ctx: ^Event_Context, anim_ctx: ^Cont
 		element_close(ui_ctx)
 	}
 
-	scroll_end(ui_ctx, ev_ctx, info_scroll_id, anim_ctx)
+	scroll_end(app, info_scroll_id)
 }
 
 @(private = "file")
 _render_debug_node :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
+	app: ^App,
 	box: ^Box,
 	depth: f32,
 	hovered_target: ^Box_ID,
 	clicked_target: ^Box_ID,
 	pinned_id: Box_ID,
 ) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
+	anim_ctx := app.anim
 	if box == nil do return
 
 	name := get_debug_name(box.id)
@@ -3761,7 +3682,7 @@ _render_debug_node :: proc(
 	@(static) expanded_nodes: map[Box_ID]bool
 	if box.id not_in expanded_nodes do expanded_nodes[box.id] = false
 
-	is_hovered := is_tree_hovered(ui_ctx, ev_ctx, row_id)
+	is_hovered := is_tree_hovered(app, row_id)
 	if is_hovered do hovered_target^ = box.id
 
 	register(ev_ctx, row_id, Event_Callbacks{focusable = true, cursor = .HAND})
@@ -3798,8 +3719,7 @@ _render_debug_node :: proc(
 	t_color := has_children ? Color{0.9, 0.9, 0.9, 1} : Color{0.5, 0.7, 1.0, 1}
 
 	text(
-		ui_ctx,
-		ev_ctx,
+		app,
 		fmt.tprintf("%s%s", prefix, name),
 		user_style = {text_color = t_color, font_size = 14},
 		salt = fmt.tprintf("debug_name_%d", box.id),
@@ -3813,8 +3733,7 @@ _render_debug_node :: proc(
 		box.y,
 	)
 	text(
-		ui_ctx,
-		ev_ctx,
+		app,
 		stats,
 		user_style = {
 			text_color = Color{0.5, 0.5, 0.5, 1},
@@ -3828,28 +3747,15 @@ _render_debug_node :: proc(
 
 	if has_children && expanded_nodes[box.id] {
 		for child in box.children {
-			_render_debug_node(
-				ui_ctx,
-				ev_ctx,
-				anim_ctx,
-				child,
-				depth + 1,
-				hovered_target,
-				clicked_target,
-				pinned_id,
-			)
+			_render_debug_node(app, child, depth + 1, hovered_target, clicked_target, pinned_id)
 		}
 	}
 }
 
 @(private = "file")
-_debug_kv :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	label: string,
-	val: string,
-	salt: string,
-) {
+_debug_kv :: proc(app: ^App, label: string, val: string, salt: string) {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	element_open(
 		ui_ctx,
 		Element {
@@ -3862,15 +3768,13 @@ _debug_kv :: proc(
 		},
 	)
 	text(
-		ui_ctx,
-		ev_ctx,
+		app,
 		label,
 		user_style = {text_color = Color{0.6, 0.6, 0.6, 1}, font_size = 12, width = Shrink{1}},
 		salt = fmt.tprintf("%s_lbl", salt),
 	)
 	text(
-		ui_ctx,
-		ev_ctx,
+		app,
 		val,
 		user_style = {
 			text_color = Color{0.8, 0.8, 0.8, 1},
@@ -3884,9 +3788,9 @@ _debug_kv :: proc(
 }
 
 @(private = "file")
-_debug_divider :: proc(ui_ctx: ^UI_Context) {
+_debug_divider :: proc(app: ^App) {
 	element_open(
-		ui_ctx,
+		app.ui,
 		{
 			style = {
 				width = Percent{100},
@@ -3896,7 +3800,7 @@ _debug_divider :: proc(ui_ctx: ^UI_Context) {
 			},
 		},
 	)
-	element_close(ui_ctx)
+	element_close(app.ui)
 }
 
 DEFAULT_TEXTAREA_WRAPPER_STYLE :: Style {
@@ -4262,8 +4166,7 @@ calc_textarea_cursor_idx :: proc(
 
 
 textarea :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
+	app: ^App,
 	buffer: ^Gap_Buffer,
 	placeholder := "",
 	wrapper_style: Style = DEFAULT_TEXTAREA_WRAPPER_STYLE,
@@ -4273,6 +4176,8 @@ textarea :: proc(
 	id: string = "",
 	loc := #caller_location,
 ) -> bool {
+	ui_ctx := app.ui
+	ev_ctx := app.ev
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	string_id := ID(root_id, "text")
 
@@ -4339,8 +4244,7 @@ textarea :: proc(
 	}
 
 	scroll_begin(
-		ui_ctx,
-		ev_ctx,
+		app,
 		id = root_id,
 		scroll_y = true,
 		scroll_x = false,
@@ -4424,6 +4328,6 @@ textarea :: proc(
 		element_close(ui_ctx)
 	}
 
-	scroll_end(ui_ctx, ev_ctx, root_id)
+	scroll_end(app, root_id)
 	return is_focused
 }
