@@ -197,7 +197,7 @@ get_class_name :: proc(c: Class) -> string {
 
 get_font :: proc(ctx: ^UI_Context, path: string, size: f32) -> ^ttf.Font {
 	// Fallback to a default font if none is specified
-	actual_path := path != "" ? path : "./assets/font/Kablammo-Regular-VariableFont_MORF.ttf"
+	actual_path := path != "" ? path : "./assets/font/CaacupeOne-Regular.ttf"
 	actual_size := size > 0 ? i32(size) : 16
 
 	key := Font_Key {
