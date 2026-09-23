@@ -1,51 +1,765 @@
 package UI
+
+import "core:fmt"
+import "core:math"
+import "core:math/rand"
+import "core:strings"
 import sdl "vendor:sdl2"
 
+// --- APPLICATION STATE ---
+
+User_Record :: struct {
+	id:          int,
+	name_buf:    [dynamic]u8,
+	role_idx:    int,
+	is_active:   bool,
+	theme_color: [4]f32,
+	join_date:   [3]int,
+}
+
+Showcase_State :: struct {
+	// Navigation
+	router:            Router_State,
+	nav_items:         []string,
+	nav_idx:           int,
+
+	// CRUD State (User Directory)
+	users:             [dynamic]User_Record,
+	selected_user_idx: int,
+	role_options:      []string,
+	search_buf:        [dynamic]u8,
+	combo_open:        bool,
+	color_picker_open: bool,
+	date_picker_open:  bool,
+	modal_open:        bool,
+
+	// Widget Lab State
+	lab_tab_idx:       int,
+	volume_val:        f32,
+	brightness_val:    f32,
+	wifi_enabled:      bool,
+	bt_enabled:        bool,
+	notes_buffer:      Gap_Buffer,
+	toast_open:        bool,
+
+	// Overlays
+	context_x:         f32,
+	context_y:         f32,
+	context_open:      bool,
+	show_debug:        bool,
+}
+
 main :: proc() {
-	app := app_init("My UI Toolkit", 500, 500, sdl.WINDOW_SHOWN | sdl.WINDOW_ALLOW_HIGHDPI)
+	app := app_init(
+		"Ovieta OS - UI Toolkit Showcase",
+		1280,
+		800,
+		sdl.WINDOW_SHOWN | sdl.WINDOW_ALLOW_HIGHDPI | sdl.WINDOW_RESIZABLE,
+	)
+	if app == nil do return
 	defer app_destroy(app)
-	buffer: Gap_Buffer
-	gap_buffer_init(&buffer)
-	defer gap_buffer_destroy(&buffer)
+
+	state := new(Showcase_State)
+	state.nav_items = []string{"Dashboard", "User Directory", "Widget Lab"}
+	state.role_options = []string{"Administrator", "Editor", "Viewer", "Guest"}
+	state.selected_user_idx = -1
+	state.volume_val = 0.65
+	state.brightness_val = 0.8
+	state.wifi_enabled = true
+
+	gap_buffer_init(&state.notes_buffer)
+	defer gap_buffer_destroy(&state.notes_buffer)
+
+	seed_initial_users(state)
 
 	for !app.quit {
-		{
-			app_begin_frame(app)
-			defer app_end_frame(app)
+		app_begin_frame(app)
 
-			{
-				element_open(
-					app.ui,
-					{
-						style = {
-							width = ViewPercent{100},
-							height = ViewPercent{100},
-							bg_color = COLOR_WHITE,
-							justify_content = .CENTER,
-							align_items = .CENTER,
-							direction = .COLUMN,
-						},
-					},
-				)
-				defer element_close(app.ui)
+		// ---------------------------------------------------------
+		// ROOT LAYOUT (Horizontal Split: Sidebar + Main Content)
+		// ---------------------------------------------------------
+		element_open(
+			app.ui,
+			Element {
+				style = {
+					direction = .ROW,
+					width = ViewPercent{100},
+					height = ViewPercent{100},
+					bg_color = Color{0.96, 0.96, 0.98, 1.0},
+				},
+			},
+		)
+
+		// --- 1. SIDEBAR ---
+		element_open(
+			app.ui,
+			Element {
+				style = {
+					direction    = .COLUMN,
+					width        = Fixed{260},
+					height       = Percent{100},
+					bg_color     = Color{1.0, 1.0, 1.0, 1.0},
+					border       = space(0, 1, 0, 0),
+					border_color = Color{0.85, 0.85, 0.85, 1.0},
+					padding      = space(32, 24),
+					gap          = 32,
+					z_index      = 50, // Keep shadow/borders above content
+				},
+			},
+		)
+
+		text(
+			app,
+			"Ovieta OS",
+			user_style = {font_size = 24, text_color = Color{0.1, 0.1, 0.1, 1.0}},
+		)
+
+		list_view(
+			app,
+			state.nav_items,
+			&state.nav_idx,
+			wrapper_style = {border = space(0), bg_color = COLOR_TRANSPARENT},
+			item_style = {border_radius = space(6), padding = space(12, 16)},
+		)
+
+		element_open(app.ui, {style = {height = Grow{1}}}) // Spacer
+		element_close(app.ui)
+
+		switch_toggle(app, "Debug Mode", &state.show_debug)
+
+		element_close(app.ui) // End Sidebar
 
 
-				text(app, "Text Area ☺️", user_style = {font_size = 60})
-				textarea(
-					app,
-					&buffer,
-					placeholder = "Type your multi-line message here...\nPress Enter for new lines.",
-					wrapper_style = {
-						border = space(2),
-						padding = space(10),
-						width = Percent{50},
-						height = Percent{50},
-						bg_color = COLOR_WHITE,
-						border_color = COLOR_BLACK,
-					},
-					salt = "my_main_textarea",
-				)
-			}
+		// --- 2. MAIN CONTENT ROUTER ---
+		pages := []Page_Proc{page_dashboard, page_directory, page_widget_lab}
+
+		router_view(
+			app,
+			&state.router,
+			state.nav_idx,
+			pages,
+			state,
+			wrapper_style = {padding = space(48), bg_color = COLOR_TRANSPARENT},
+		)
+
+		element_close(app.ui) // End Root Layout
+
+		// ---------------------------------------------------------
+		// FLOATING OVERLAYS (Rendered last to sit on top)
+		// ---------------------------------------------------------
+
+		if state.toast_open {
+			element_open(
+				app.ui,
+				{style = {position = .FIXED, right = 32.0, bottom = 32.0, z_index = 4000}},
+			)
+			toast(
+				app,
+				"System Notification",
+				"Your changes have been saved successfully.",
+				.SUCCESS,
+				&state.toast_open,
+			)
+			element_close(app.ui)
 		}
+
+		// Fix: context_menu_begin returns (is_active: bool, target_id: Box_ID)
+		if active, _ := context_menu_begin(
+			app,
+			state.context_x,
+			state.context_y,
+			&state.context_open,
+		); active {
+			if button(app, "Refresh View", user_style = {text_align = .LEFT}) do state.context_open = false
+			if button(app, "System Settings", user_style = {text_align = .LEFT}) do state.context_open = false
+			context_menu_end(app, true)
+		}
+
+		if state.show_debug do debug_panel(app, &state.show_debug)
+
+		app_end_frame(app)
+	}
+}
+
+// ==============================================================================
+// PAGE 1: DASHBOARD
+// ==============================================================================
+page_dashboard :: proc(app: ^App, app_state: rawptr) {
+	state := (^Showcase_State)(app_state)
+	ui_ctx := app.ui
+
+	element_open(
+		ui_ctx,
+		{style = {direction = .COLUMN, gap = 24, width = Percent{100}, height = Percent{100}}},
+	)
+
+	text(app, "Dashboard Overview", user_style = {font_size = 36})
+	text(
+		app,
+		"Welcome to the Ovieta OS Toolkit showcase. This app demonstrates immediate mode routing, robust data binding, and hardware-accelerated layouts.",
+		user_style = {text_color = Color{0.4, 0.4, 0.4, 1.0}},
+	)
+
+	element_open(ui_ctx, {style = {direction = .ROW, gap = 24, width = Percent{100}}})
+
+	// Quick Stats Cards
+	_stat_card(app, "Total Users", fmt.tprintf("%d", len(state.users)), Color{0.2, 0.5, 0.9, 1.0})
+
+	active_count := 0
+	for u in state.users do if u.is_active do active_count += 1
+	_stat_card(app, "Active Accounts", fmt.tprintf("%d", active_count), Color{0.2, 0.8, 0.4, 1.0})
+
+	element_close(ui_ctx) // End Row
+
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				width = Percent{100},
+				height = Fixed{1},
+				bg_color = Color{0.8, 0.8, 0.8, 1.0},
+				margin = space(24, 0),
+			},
+		},
+	)
+	element_close(ui_ctx)
+
+	@(static) acc_1, acc_2: bool
+	if accordion_begin(app, app.renderer, "What is Immediate Mode?", &acc_1) {
+		text(
+			app,
+			"Unlike retained-mode interfaces where the UI tree persists in memory and you mutate it via objects, an immediate-mode GUI rebuilds the layout every frame. This completely eliminates state-syncing bugs between your data and your UI.",
+			user_style = {font_size = 15, text_color = Color{0.3, 0.3, 0.3, 1.0}},
+		)
+		accordion_end(app, acc_1)
+	}
+
+	if accordion_begin(app, app.renderer, "How does routing work here?", &acc_2) {
+		text(
+			app,
+			"The router uses structural animations. When the navigation index changes, the engine fires a tween on the container's X-axis and Opacity. Once the fade-out completes, it swaps the active procedure pointer and slides the new view in.",
+			user_style = {font_size = 15, text_color = Color{0.3, 0.3, 0.3, 1.0}},
+		)
+		accordion_end(app, acc_2)
+	}
+
+	element_close(ui_ctx) // End Page
+}
+
+@(private = "file")
+_stat_card :: proc(app: ^App, label, val: string, accent: Color) {
+	ui_ctx := app.ui
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				direction = .COLUMN,
+				width = Grow{1},
+				padding = space(24),
+				bg_color = Color{1, 1, 1, 1},
+				border_color = Color{0.9, 0.9, 0.9, 1},
+				border_radius = space(8),
+				border = space(1, 4, 1, 1),
+			},
+		},
+	)
+
+	text(app, label, user_style = {font_size = 14, text_color = Color{0.5, 0.5, 0.5, 1.0}})
+	text(app, val, user_style = {font_size = 32, text_color = accent})
+	element_close(ui_ctx)
+}
+
+// ==============================================================================
+// PAGE 2: USER DIRECTORY (Master-Detail CRUD)
+// ==============================================================================
+page_directory :: proc(app: ^App, app_state: rawptr) {
+	state := (^Showcase_State)(app_state)
+	ui_ctx := app.ui
+
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				direction = .COLUMN,
+				gap = 24,
+				width = Percent{100},
+				height = Percent{100},
+				overflow_y = .HIDDEN,
+			},
+		},
+	)
+
+	// Page Header & Actions
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				direction = .ROW,
+				justify_content = .SPACE_BETWEEN,
+				align_items = .CENTER,
+				width = Percent{100},
+			},
+		},
+	)
+	text(app, "Directory", user_style = {font_size = 36})
+
+	if button(app, "+ Add User", user_style = {bg_color = Color{0.15, 0.4, 0.8, 1.0}}) {
+		new_user := User_Record {
+			id          = rand.int_max(9999),
+			role_idx    = 2,
+			is_active   = true,
+			theme_color = {0.2, 0.8, 0.4, 1.0},
+			join_date   = {2026, 9, 23},
+		}
+		new_user.name_buf = make([dynamic]u8)
+		for c in "New Employee" do append(&new_user.name_buf, u8(c))
+		append(&state.users, new_user)
+		state.selected_user_idx = len(state.users) - 1
+	}
+	element_close(ui_ctx)
+
+	// Master-Detail Split Layout
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				direction = .ROW,
+				gap = 24,
+				width = Percent{100},
+				height = Grow{1},
+				overflow_y = .HIDDEN,
+			},
+		},
+	)
+
+	// LEFT: Master List
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				direction = .COLUMN,
+				width = Fixed{300},
+				height = Percent{100},
+				bg_color = Color{1, 1, 1, 1},
+				border = space(1),
+				border_color = Color{0.8, 0.8, 0.8, 1},
+				border_radius = space(8),
+				overflow_y = .HIDDEN,
+			},
+		},
+	)
+
+	scroll_id := scroll_begin(
+		app,
+		scroll_y = true,
+		user_style = {width = Percent{100}, height = Percent{100}},
+	)
+	for u, i in state.users {
+		is_sel := state.selected_user_idx == i
+		bg := is_sel ? Color{0.15, 0.4, 0.8, 0.1} : Color{0, 0, 0, 0}
+		border_col := is_sel ? Color{0.15, 0.4, 0.8, 1.0} : Color{0.9, 0.9, 0.9, 1.0}
+
+		if button(
+			app,
+			"",
+			id = ID(fmt.tprintf("usr_row_%d", u.id)),
+			user_style = {
+				width = Percent{100},
+				height = Fixed{60},
+				padding = space(12),
+				bg_color = bg,
+				border = space(0, 0, 1, 0),
+				border_color = border_col,
+				border_radius = space(0),
+			},
+		) {
+			state.selected_user_idx = i
+		}
+
+		// Custom overlay on the button since standard button only takes a single text string
+		if prev, ok := ui_ctx.layout.prev_all_boxes[ID(fmt.tprintf("usr_row_%d", u.id))]; ok {
+			// Fix: Removed pointer_events_none = true
+			element_open(
+				ui_ctx,
+				{
+					style = {
+						position = .ABSOLUTE,
+						left = prev.x + 12,
+						top = prev.y + 12,
+						direction = .ROW,
+						gap = 12,
+						align_items = .CENTER,
+					},
+				},
+			)
+
+			// Avatar Circle
+			element_open(
+				ui_ctx,
+				{
+					style = {
+						width = Fixed{36},
+						height = Fixed{36},
+						border_radius = space(18),
+						bg_color = transmute(Color)u.theme_color,
+					},
+				},
+			)
+			element_close(ui_ctx)
+
+			element_open(ui_ctx, {style = {direction = .COLUMN, justify_content = .CENTER}})
+			text(
+				app,
+				string(u.name_buf[:]),
+				user_style = {font_size = 16, text_color = Color{0.1, 0.1, 0.1, 1}},
+			)
+			text(
+				app,
+				state.role_options[u.role_idx],
+				user_style = {font_size = 12, text_color = Color{0.5, 0.5, 0.5, 1}},
+			)
+			element_close(ui_ctx)
+			element_close(ui_ctx)
+		}
+	}
+	scroll_end(app, scroll_id)
+	element_close(ui_ctx) // End Left Panel
+
+	// RIGHT: Detail Form
+	if state.selected_user_idx >= 0 && state.selected_user_idx < len(state.users) {
+		u := &state.users[state.selected_user_idx]
+
+		element_open(
+			ui_ctx,
+			{
+				style = {
+					direction = .COLUMN,
+					width = Grow{1},
+					height = Percent{100},
+					bg_color = Color{1, 1, 1, 1},
+					border = space(1),
+					border_color = Color{0.8, 0.8, 0.8, 1},
+					border_radius = space(8),
+					padding = space(32),
+					gap = 24,
+					overflow_y = .SCROLL,
+				},
+			},
+		)
+
+		text(app, "Edit User", user_style = {font_size = 24})
+
+		text(
+			app,
+			"Full Name",
+			user_style = {font_size = 14, text_color = Color{0.4, 0.4, 0.4, 1.0}},
+		)
+		text_input(app, &u.name_buf, placeholder = "Enter name...", salt = "detail_name")
+
+		text(
+			app,
+			"Role Assignment",
+			user_style = {font_size = 14, text_color = Color{0.4, 0.4, 0.4, 1.0}},
+		)
+		combobox(
+			app,
+			"Search roles...",
+			state.role_options,
+			&state.search_buf,
+			&u.role_idx,
+			&state.combo_open,
+			salt = "detail_role",
+		)
+
+		element_open(
+			ui_ctx,
+			{
+				style = {
+					direction = .ROW,
+					justify_content = .SPACE_BETWEEN,
+					align_items = .CENTER,
+					width = Percent{100},
+					margin = space(12, 0),
+				},
+			},
+		)
+		text(app, "Account Active", user_style = {font_size = 16})
+		switch_toggle(app, "", &u.is_active, salt = "detail_active")
+		element_close(ui_ctx)
+
+		element_open(ui_ctx, {style = {direction = .ROW, gap = 48, width = Percent{100}}})
+		color_picker(
+			app,
+			"Profile Accent",
+			&u.theme_color,
+			&state.color_picker_open,
+			salt = "detail_color",
+		)
+		date_picker(app, "Start Date", &u.join_date, &state.date_picker_open, salt = "detail_date")
+		element_close(ui_ctx)
+
+		// Delete Button at the bottom
+		element_open(ui_ctx, {style = {height = Grow{1}}}) // Pushes delete to bottom
+		element_close(ui_ctx)
+
+		element_open(
+			ui_ctx,
+			{style = {direction = .ROW, justify_content = .END, width = Percent{100}}},
+		)
+		if button(
+			app,
+			"Delete User",
+			user_style = {bg_color = Color{0.9, 0.2, 0.2, 1.0}, text_color = Color{1, 1, 1, 1}},
+		) {
+			state.modal_open = true
+		}
+		element_close(ui_ctx)
+
+		element_close(ui_ctx) // End Right Panel
+	} else {
+		// Empty State
+		element_open(
+			ui_ctx,
+			{
+				style = {
+					direction = .COLUMN,
+					justify_content = .CENTER,
+					align_items = .CENTER,
+					width = Grow{1},
+					height = Percent{100},
+					bg_color = Color{1, 1, 1, 1},
+					border = space(1),
+					border_color = Color{0.8, 0.8, 0.8, 1},
+					border_radius = space(8),
+				},
+			},
+		)
+		text(
+			app,
+			"Select a user to view details.",
+			user_style = {text_color = Color{0.5, 0.5, 0.5, 1.0}},
+		)
+		element_close(ui_ctx)
+	}
+
+	element_close(ui_ctx) // End Split
+	element_close(ui_ctx) // End Page
+
+	// --- DELETE CONFIRMATION MODAL ---
+	if modal_begin(app, &state.modal_open) {
+		text(
+			app,
+			"Confirm Deletion",
+			user_style = {font_size = 24, text_color = Color{0.9, 0.2, 0.2, 1.0}},
+		)
+		text(
+			app,
+			"Are you sure you want to delete this user? This action cannot be undone.",
+			user_style = {text_color = Color{0.3, 0.3, 0.3, 1.0}},
+		)
+
+		element_open(
+			ui_ctx,
+			{
+				style = {
+					direction = .ROW,
+					gap = 16,
+					justify_content = .END,
+					width = Percent{100},
+					margin = space(16, 0, 0, 0),
+				},
+			},
+		)
+
+		if button(app, "Cancel", user_style = {bg_color = Color{0.9, 0.9, 0.9, 1.0}, text_color = Color{0.1, 0.1, 0.1, 1.0}}) do state.modal_open = false
+		if button(app, "Delete Forever", user_style = {bg_color = Color{0.9, 0.2, 0.2, 1.0}}) {
+			ordered_remove(&state.users, state.selected_user_idx)
+			state.selected_user_idx = -1
+			state.modal_open = false
+			state.toast_open = true
+		}
+
+		element_close(ui_ctx)
+		modal_end(app, true)
+	}
+}
+
+// ==============================================================================
+// PAGE 3: WIDGET LAB
+// ==============================================================================
+page_widget_lab :: proc(app: ^App, app_state: rawptr) {
+	state := (^Showcase_State)(app_state)
+	ui_ctx := app.ui
+
+	element_open(
+		ui_ctx,
+		{style = {direction = .COLUMN, gap = 24, width = Percent{100}, height = Percent{100}}},
+	)
+	text(app, "Widget Laboratory", user_style = {font_size = 36})
+
+	tabs(
+		app,
+		[]string{"Gap Buffer Textarea", "Sliders & Progress", "Canvas Demo"},
+		&state.lab_tab_idx,
+	)
+
+	element_open(
+		ui_ctx,
+		{
+			style = {
+				direction = .COLUMN,
+				width = Percent{100},
+				height = Grow{1},
+				bg_color = Color{1, 1, 1, 1},
+				border = space(1),
+				border_color = Color{0.8, 0.8, 0.8, 1},
+				border_radius = space(0, 8, 8, 8),
+				padding = space(32),
+				gap = 24,
+			},
+		},
+	)
+
+	if state.lab_tab_idx == 0 {
+		text(app, "Layout-Aware Text Area", user_style = {font_size = 20})
+		text(
+			app,
+			"This textarea binds to a Gap_Buffer, handling visual text wrapping, text selection, and mouse-click-to-seek natively. Try typing a very long paragraph.",
+			user_style = {text_color = Color{0.5, 0.5, 0.5, 1.0}},
+		)
+
+		textarea(
+			app,
+			&state.notes_buffer,
+			placeholder = "Start typing your notes here...",
+			wrapper_style = {height = Grow{1}},
+		)
+	} else if state.lab_tab_idx == 1 {
+		text(app, "Hardware Controls", user_style = {font_size = 20})
+
+		// Volume Slider
+		element_open(
+			ui_ctx,
+			{style = {direction = .ROW, gap = 16, align_items = .CENTER, width = Percent{100}}},
+		)
+		text(app, "Vol", user_style = {width = Fixed{40}})
+		slider(app, &state.volume_val, 0.0, 1.0, wrapper_style = {width = Grow{1}})
+		text(
+			app,
+			fmt.tprintf("%d%%", int(state.volume_val * 100)),
+			user_style = {width = Fixed{50}, text_align = .RIGHT},
+		)
+		element_close(ui_ctx)
+
+		// Brightness Slider
+		element_open(
+			ui_ctx,
+			{style = {direction = .ROW, gap = 16, align_items = .CENTER, width = Percent{100}}},
+		)
+		text(app, "Lux", user_style = {width = Fixed{40}})
+		slider(
+			app,
+			&state.brightness_val,
+			0.0,
+			1.0,
+			wrapper_style = {width = Grow{1}},
+			fill_style = {bg_color = Color{0.9, 0.7, 0.1, 1.0}},
+			thumb_style = {bg_color = Color{0.9, 0.8, 0.2, 1.0}},
+			salt = "lux_slider",
+		)
+		text(
+			app,
+			fmt.tprintf("%d%%", int(state.brightness_val * 100)),
+			user_style = {width = Fixed{50}, text_align = .RIGHT},
+		)
+		element_close(ui_ctx)
+
+		element_open(
+			ui_ctx,
+			{
+				style = {
+					width = Percent{100},
+					height = Fixed{1},
+					bg_color = Color{0.9, 0.9, 0.9, 1.0},
+					margin = space(16, 0),
+				},
+			},
+		)
+		element_close(ui_ctx)
+
+		// Progress & Spinner
+		text(app, "Background Task Progress")
+		progress_bar(
+			app,
+			state.brightness_val,
+			wrapper_style = {height = Fixed{12}, border_radius = space(6)},
+			fill_style = {bg_color = Color{0.2, 0.8, 0.4, 1.0}},
+		)
+
+		element_open(
+			ui_ctx,
+			{style = {direction = .ROW, gap = 12, align_items = .CENTER, margin = space(16, 0)}},
+		)
+		spinner(app)
+		text(app, "Syncing to cloud...", user_style = {text_color = Color{0.5, 0.5, 0.5, 1.0}})
+		element_close(ui_ctx)
+
+	} else if state.lab_tab_idx == 2 {
+		text(app, "Custom Canvas API", user_style = {font_size = 20})
+		text(
+			app,
+			"The canvas element passes the layout-resolved SDL.Rect to your custom draw procedure, automatically handling clipping.",
+			user_style = {text_color = Color{0.5, 0.5, 0.5, 1.0}},
+		)
+
+		canvas(app, proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
+				time_s := f32(sdl.GetTicks()) / 1000.0
+				cx := bounds.x + bounds.w / 2
+				cy := bounds.y + bounds.h / 2
+
+				for i in 0 ..< 20 {
+					offset := f32(i) * 0.2
+					r := i32(math.sin(time_s + offset) * 100.0 + 150.0)
+
+					sdl.SetRenderDrawColor(renderer, u8(100 + i * 5), 150, 255, 255)
+					rect := sdl.Rect{cx - r / 2, cy - r / 2, r, r}
+					sdl.RenderDrawRect(renderer, &rect)
+				}
+			}, user_style = {
+				width = Percent{100},
+				height = Grow{1},
+				border = space(1),
+				border_color = Color{0.8, 0.8, 0.8, 1},
+			})
+	}
+
+	element_close(ui_ctx) // End Tab Content
+	element_close(ui_ctx) // End Page
+}
+
+// ==============================================================================
+// HELPERS
+// ==============================================================================
+@(private = "file")
+seed_initial_users :: proc(state: ^Showcase_State) {
+	names := []string{"Ada Lovelace", "Alan Turing", "Grace Hopper", "John von Neumann"}
+	colors := [][4]f32 {
+		{0.9, 0.3, 0.4, 1.0},
+		{0.2, 0.6, 0.9, 1.0},
+		{0.8, 0.4, 0.8, 1.0},
+		{0.2, 0.8, 0.5, 1.0},
+	}
+
+	for i in 0 ..< 4 {
+		u := User_Record {
+			id          = 1000 + i,
+			role_idx    = i % 2,
+			is_active   = i != 3,
+			theme_color = colors[i],
+			join_date   = {2024, i + 1, 15},
+		}
+		u.name_buf = make([dynamic]u8)
+		for c in names[i] do append(&u.name_buf, u8(c))
+		append(&state.users, u)
 	}
 }

@@ -2485,13 +2485,7 @@ list_view :: proc(
 	return changed
 }
 
-// Define the signature that all page procedures must match
-Page_Proc :: proc(
-	ui_ctx: ^UI_Context,
-	ev_ctx: ^Event_Context,
-	anim_ctx: ^Context,
-	app_state: rawptr,
-)
+Page_Proc :: proc(app: ^App, app_state: rawptr)
 
 // The state needed to track transitions
 Router_State :: struct {
@@ -2512,7 +2506,6 @@ router_view :: proc(
 	loc := #caller_location,
 ) {
 	ui_ctx := app.ui
-	ev_ctx := app.ev
 	anim_ctx := app.anim
 	root_id := ID(loc, salt)
 
@@ -2560,7 +2553,7 @@ router_view :: proc(
 
 	// Execute the isolated page procedure
 	if router_state.current_idx >= 0 && router_state.current_idx < len(pages) {
-		pages[router_state.current_idx](ui_ctx, ev_ctx, anim_ctx, app_state)
+		pages[router_state.current_idx](app, app_state) // PASSED `app` DIRECTLY
 	}
 
 	element_close(ui_ctx)
@@ -3329,7 +3322,7 @@ canvas :: proc(
 	element_close(ui_ctx)
 }
 
-debug_panel :: proc(app: ^App) {
+debug_panel :: proc(app: ^App, is_open: ^bool) {
 	ui_ctx := app.ui
 	ev_ctx := app.ev
 	anim_ctx := app.anim
@@ -3340,16 +3333,9 @@ debug_panel :: proc(app: ^App) {
 	@(static) pinned_node_id: Box_ID
 	@(static) tree_hover_target: Box_ID
 	@(static) tree_click_target: Box_ID
-	@(static) prev_mouse_down: bool
 
 	tree_hover_target = 0
 	tree_click_target = 0
-
-	// Global mouse click detection for pinning from the main UI
-	mouse_state := sdl.GetMouseState(nil, nil)
-	is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
-	just_clicked := is_mouse_down && !prev_mouse_down
-	prev_mouse_down = is_mouse_down
 
 	debug_panel_id := ID("DEBUG_PANEL_ROOT")
 	highlight_id := ID("DEBUG_HIGHLIGHT_OVERLAY")
@@ -3409,10 +3395,25 @@ debug_panel :: proc(app: ^App) {
 				border = space(0, 0, 1, 0),
 				border_color = Color{0.25, 0.25, 0.25, 1},
 				bg_color = Color{0.15, 0.15, 0.18, 1},
+				direction = .ROW,
+				justify_content = .SPACE_BETWEEN,
+				align_items = .CENTER,
 			},
 		},
 	)
 	text(app, "Debug Inspector", user_style = {text_color = Color{1, 1, 1, 1}, font_size = 18})
+	if button(
+		app,
+		"X",
+		salt = "close_debug",
+		user_style = {
+			bg_color = Color{0, 0, 0, 0},
+			text_color = Color{0.5, 0.5, 0.5, 1},
+			padding = space(4, 12),
+		},
+	) {
+		is_open^ = false
+	}
 	element_close(ui_ctx)
 
 	// Panel Body (Scrollable Tree)
@@ -3431,26 +3432,8 @@ debug_panel :: proc(app: ^App) {
 	scroll_end(app, scroll_id)
 
 	// --- RESOLVE HOVER AND PIN TARGETS ---
-	hover_target := ev_ctx.hovered_id
-	is_debug := false
-	curr := hover_target
-	for curr != 0 {
-		if curr == debug_panel_id || curr == highlight_id || curr == info_bar_id {
-			is_debug = true
-			break
-		}
-		if prev, ok := ui_ctx.layout.prev_all_boxes[curr]; ok && prev.parent != nil {
-			curr = prev.parent.id
-		} else {
-			break
-		}
-	}
-	if is_debug do hover_target = 0
-
 	if tree_click_target != 0 {
 		pinned_node_id = tree_click_target
-	} else if just_clicked && hover_target != 0 {
-		pinned_node_id = hover_target
 	}
 
 	if pinned_node_id != 0 && pinned_node_id not_in ui_ctx.layout.prev_all_boxes {
@@ -3459,8 +3442,6 @@ debug_panel :: proc(app: ^App) {
 
 	if tree_hover_target != 0 {
 		active_target_id = tree_hover_target
-	} else if hover_target != 0 {
-		active_target_id = hover_target
 	} else {
 		active_target_id = pinned_node_id
 	}
@@ -4233,7 +4214,7 @@ textarea :: proc(
 	font_size := final_text.font_size.? or_else parent_font_size
 	active_font := get_font(ui_ctx, font_path, font_size)
 
-  is_pressed := ev_ctx.pressed_id == root_id
+	is_pressed := ev_ctx.pressed_id == root_id
 	was_pressed := ev_ctx.prev_pressed_id == root_id
 	just_pressed := is_pressed && !was_pressed
 	is_dragging := is_pressed && was_pressed
@@ -4246,16 +4227,27 @@ textarea :: proc(
 			// Convert global mouse coordinates to local scrolled space
 			scroll_x := ev_ctx.scroll_offsets_x[root_id]
 			scroll_y := ev_ctx.scroll_offsets_y[root_id]
-			
-			local_x := f32(mx) - prev_outer.x - prev_outer.border[3] - prev_outer.padding[3] + scroll_x
-			local_y := f32(my) - prev_outer.y - prev_outer.border[0] - prev_outer.padding[0] + scroll_y
+
+			local_x :=
+				f32(mx) - prev_outer.x - prev_outer.border[3] - prev_outer.padding[3] + scroll_x
+			local_y :=
+				f32(my) - prev_outer.y - prev_outer.border[0] - prev_outer.padding[0] + scroll_y
 
 			// Determine inner viewport width for text wrapping bounds
-			viewport_width := prev_outer.computed_width - get_horizontal(prev_outer.padding) - get_horizontal(prev_outer.border)
+			viewport_width :=
+				prev_outer.computed_width -
+				get_horizontal(prev_outer.padding) -
+				get_horizontal(prev_outer.border)
 			if viewport_width <= 0 do viewport_width = 1000.0
 
 			// Find the visual index
-			best_cursor := calc_textarea_cursor_idx(active_font, display_text, local_x, local_y, viewport_width)
+			best_cursor := calc_textarea_cursor_idx(
+				active_font,
+				display_text,
+				local_x,
+				local_y,
+				viewport_width,
+			)
 
 			// Update the gap buffer (keep_anchor = true if dragging to create a selection)
 			gap_buffer_move_cursor(buffer, best_cursor, is_dragging)
