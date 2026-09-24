@@ -1540,7 +1540,8 @@ ui_compute :: proc(ctx: ^UI_Context) {
 }
 
 
-element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location) -> ^Element {
+element_open :: proc(app: ^App, el_val: Element, loc := #caller_location) -> ^Element {
+	ctx := app.ui
 	el := new(Element, frame_allocator(ctx.layout))
 	el^ = el_val
 
@@ -1556,8 +1557,8 @@ element_open :: proc(ctx: ^UI_Context, el_val: Element, loc := #caller_location)
 	return el
 }
 
-element_close :: proc(ctx: ^UI_Context) {
-	box_close(ctx.layout)
+element_close :: proc(app: ^App) {
+	box_close(app.ui.layout)
 }
 
 COLOR_WHITE :: Color{1.0, 1.0, 1.0, 1.0}

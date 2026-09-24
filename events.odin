@@ -38,6 +38,7 @@ Event_Context :: struct {
 	hovered_id:           Box_ID,
 	pressed_id:           Box_ID,
 	focused_id:           Box_ID,
+	prev_focused_id:      Box_ID,
 	prev_pressed_id:      Box_ID,
 	context_menu_target:  Box_ID,
 	clicked_this_frame:   map[Box_ID]bool,
@@ -74,6 +75,7 @@ UI_Event :: struct {
 
 begin_frame :: proc(ctx: ^Event_Context) {
 	clear(&ctx.clicked_this_frame)
+	ctx.prev_focused_id = ctx.focused_id
 	ctx.prev_pressed_id = ctx.pressed_id
 	clear(&ctx.focus_order) // (From your earlier changes)
 }

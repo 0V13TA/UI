@@ -211,6 +211,7 @@ app_end_frame :: proc(app: ^App) {
 	// Draw the generated UI Box Tree
 	render_tree(app.ui, app.renderer, roots)
 
-	// 6. Swap Buffers
+	// Swap Buffers
 	sdl.RenderPresent(app.renderer)
+	free_all(context.temp_allocator)
 }
