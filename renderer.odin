@@ -1539,16 +1539,40 @@ ui_compute :: proc(ctx: ^UI_Context) {
 	end_layout(ctx.layout)
 }
 
+@(private)
+resolve_id :: proc(app: ^App, id: Box_ID, salt: string = "", loc := #caller_location) -> Box_ID {
+	// Explicit ID provided
+	if id != 0 && id != CASCADE_ID {
+		return id
+	}
+
+	// Cascade ID requested
+	if id == CASCADE_ID {
+		layout := app.ui.layout
+		if len(layout.parent_stack) > 0 {
+			parent := layout.parent_stack[len(layout.parent_stack) - 1]
+			child_idx := len(parent.children)
+			id_str := fmt.tprintf("%d_%d_%d", parent.id, child_idx, loc.line)
+			return Box_ID(hash.fnv32a(transmute([]byte)id_str))
+		}
+		// Fallback if CASCADE_ID is used at the root (no parent)
+		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
+		return Box_ID(hash.fnv32a(transmute([]byte)loc_str))
+	}
+
+	// Default auto-generation (id == 0)
+	if salt == "" {
+		return id_from_string(fmt.tprintf("%s:%d", loc.file_path, loc.line))
+	}
+	return id_from_string(fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt))
+}
 
 element_open :: proc(app: ^App, el_val: Element, loc := #caller_location) -> ^Element {
 	ctx := app.ui
 	el := new(Element, frame_allocator(ctx.layout))
 	el^ = el_val
 
-	// Auto-generate an ID if omitted, natively tracking it in layout_calc
-	if el._box.id == 0 {
-		el._box.id = ID(loc)
-	}
+	el._box.id = resolve_id(app, el._box.id, "", loc)
 
 	apply_styles(el, ctx)
 	el._box.user_data = el
@@ -1561,10 +1585,12 @@ element_close :: proc(app: ^App) {
 	box_close(app.ui.layout)
 }
 
+COLOR_RED :: Color{1.0, 0.0, 0.0, 1.0}
+COLOR_BLUE :: Color{0.0, 0.0, 1.0, 1.0}
+COLOR_GREEN :: Color{0.0, 1.0, 0.0, 1.0}
 COLOR_WHITE :: Color{1.0, 1.0, 1.0, 1.0}
 COLOR_BLACK :: Color{0.0, 0.0, 0.0, 1.0}
 COLOR_TRANSPARENT :: Color{0.0, 0.0, 0.0, 0.0}
-COLOR_RED :: Color{1.0, 0.0, 0.0, 1.0}
 
 // Assuming standard 0xRRGGBBAA format
 hex :: proc(val: u32) -> Color {

@@ -27,17 +27,16 @@ is_tree_hovered :: proc(app: ^App, target_id: Box_ID) -> bool {
 
 text :: proc(
 	app: ^App,
-	text: string,
+	text: string = "",
 	user_style := Style{},
 	salt := "",
-	id: string = "",
+	id: Box_ID = CASCADE_ID,
 	loc := #caller_location,
 ) {
 	ui_ctx := app.ui
 	ev_ctx := app.ev
 
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	final_id := ID(hash_input)
+	final_id := resolve_id(app, id, salt, loc)
 
 	register(ev_ctx, final_id, Event_Callbacks{focusable = true})
 
@@ -123,9 +122,10 @@ DEFAULT_BUTTON_STYLE :: Style {
 	bg_color      = Color{0.15, 0.4, 0.8, 1.0},
 }
 
+
 button :: proc(
 	app: ^App,
-	text: string,
+	text: string = "",
 	user_style := Style{},
 	salt := "",
 	id: Box_ID = 0,
@@ -133,11 +133,7 @@ button :: proc(
 ) -> bool {
 	ui_ctx := app.ui
 	ev_ctx := app.ev
-	final_id := id
-	if final_id == 0 {
-		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-		final_id = ID(hash_input)
-	}
+	final_id := resolve_id(app, id, salt, loc)
 
 	is_hovered := is_tree_hovered(app, final_id)
 	is_pressed := ev_ctx.pressed_id == final_id
@@ -1647,7 +1643,7 @@ context_menu_begin :: proc(
 	return true, ev_ctx.context_menu_target
 }
 
-context_menu_end :: proc(app: ^App, is_open: bool) {
+context_menu_end :: proc(app: ^App, is_open: bool = true) {
 	if is_open do element_close(app)
 }
 
@@ -2209,7 +2205,6 @@ DEFAULT_ACCORDION_CONTENT_STYLE :: Style {
 
 accordion_begin :: proc(
 	app: ^App,
-	sdl_rend: ^sdl.Renderer,
 	title: string,
 	is_expanded: ^bool,
 	expanded_icon: string = "assets/pictures/icons/down.png",
@@ -2225,6 +2220,9 @@ accordion_begin :: proc(
 	ui_ctx := app.ui
 	ev_ctx := app.ev
 	anim_ctx := app.anim
+	sdl_rend := app.renderer
+
+	final_id := id == "" ? fmt.tprintf("%s:%d:%d", loc.file_path, loc.line, loc.column) : id
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	header_id := ID(root_id, "header")
 	content_id := ID(root_id, "content")
@@ -2253,13 +2251,22 @@ accordion_begin :: proc(
 
 	element_open(app, Element{_box = {id = header_id}, style = final_header}, loc)
 
+	// Generate unique IDs for the icon and text based on the root_id
+	icon_id := ID(root_id, "icon")
+	title_id := ID(root_id, "title")
+
 	icon_path := is_expanded^ ? expanded_icon : collapsed_icon
 	final_icon := merge_styles(DEFAULT_ACCORDION_ICON_STYLE, icon_style)
-	image_path(app, icon_path, user_style = final_icon)
+
+	// Pass the unique ID or salt to the image_path function
+	// (Adjust the parameter name `id` or `salt` based on your exact UI library signature)
+	image_path(app, icon_path, id = icon_id, user_style = final_icon)
 
 	text_col := final_header.text_color.? or_else Color{0.1, 0.1, 0.1, 1}
 	font_sz := final_header.font_size.? or_else 16
-	text(app, title, user_style = {text_color = text_col, font_size = font_sz})
+
+	// Pass the unique ID or salt to the text function
+	text(app, title, id = title_id, user_style = {text_color = text_col, font_size = font_sz})
 
 	element_close(app)
 
@@ -2437,6 +2444,7 @@ DEFAULT_LIST_ITEM_STYLE :: Style {
 	text_align    = .LEFT,
 	border_radius = [4]f32{0, 0, 0, 0},
 }
+
 
 list_view :: proc(
 	app: ^App,
@@ -3315,6 +3323,19 @@ canvas :: proc(
 			custom_render_data = data,
 		},
 		loc,
+	)
+	element_close(app)
+}
+
+spacer :: proc(app: ^App, fills_horizontally: bool = false, fills_vertically: bool = true) {
+	element_open(
+		app,
+		{
+			style = {
+				height = fills_vertically ? Grow{1} : Fixed{0},
+				width = fills_horizontally ? Grow{1} : Fixed{0},
+			},
+		},
 	)
 	element_close(app)
 }

@@ -572,6 +572,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 
 		if button(app, "Cancel", user_style = {bg_color = Color{0.9, 0.9, 0.9, 1.0}, text_color = Color{0.1, 0.1, 0.1, 1.0}}) do state.modal_open = false
 		if button(app, "Delete Forever", user_style = {bg_color = Color{0.9, 0.2, 0.2, 1.0}}) {
+      delete(state.users[state.selected_user_idx].name_buf)
 			ordered_remove(&state.users, state.selected_user_idx)
 			state.selected_user_idx = -1
 			state.modal_open = false

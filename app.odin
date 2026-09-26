@@ -101,18 +101,20 @@ app_destroy :: proc(app: ^App) {
 
 	// Clean up event context maps
 	delete(app.ev.listeners)
-	delete(app.ev.clicked_this_frame)
-	delete(app.ev.scroll_offsets_x)
-	delete(app.ev.scroll_offsets_y)
+	delete(app.ev.focus_order)
 	delete(app.ev.text_cursors)
 	delete(app.ev.text_selection)
+	delete(app.ev.scroll_offsets_x)
+	delete(app.ev.scroll_offsets_y)
 	delete(app.ev.cursor_blink_start)
+	delete(app.ev.clicked_this_frame)
 	delete(app.ev.cursor_last_position)
 	free(app.ev)
 
 	// Clean up animation context maps
 	for _, state in app.anim.states do free(state)
 	delete(app.anim.states)
+	delete(app.anim.engine.tweens)
 	free(app.anim)
 
 	ui_context_destroy(app.ui)

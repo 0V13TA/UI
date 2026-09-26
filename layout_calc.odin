@@ -112,6 +112,7 @@ Position :: enum {
 }
 
 Box_ID :: distinct u32
+CASCADE_ID :: 1
 Box :: struct {
 	id:                    Box_ID,
 	user_data:             rawptr,
@@ -295,6 +296,7 @@ chained_arena_allocator :: proc(ca: ^Layout_Chained_Arena) -> mem.Allocator {
 
 // --- Helper Functions ---
 
+
 ID :: proc {
 	id_from_loc,
 	id_from_string,
@@ -389,9 +391,20 @@ new_box_from_config :: proc(
 	if err != nil do panic(fmt.tprintf("Failed to allocate memory for Box at %s:%d", loc.file_path, loc.line))
 
 	box^ = box_config
+
+	// --- UPDATED ID GENERATION ---
 	if box.id == 0 {
-		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
-		box.id = Box_ID(hash.fnv32a(transmute([]byte)loc_str))
+		if len(ctx.parent_stack) > 0 {
+			// Cascade from parent: Hash(ParentID + SiblingIndex + Line)
+			parent := ctx.parent_stack[len(ctx.parent_stack) - 1]
+			child_idx := len(parent.children)
+			id_str := fmt.tprintf("%d_%d_%d", parent.id, child_idx, loc.line)
+			box.id = Box_ID(hash.fnv32a(transmute([]byte)id_str))
+		} else {
+			// Root element fallback: Hash(FilePath + Line)
+			loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
+			box.id = Box_ID(hash.fnv32a(transmute([]byte)loc_str))
+		}
 	}
 
 	if prev_box, ok := ctx.prev_all_boxes[box.id]; ok {
