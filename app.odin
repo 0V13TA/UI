@@ -94,6 +94,7 @@ app_init :: proc(
 
 app_destroy :: proc(app: ^App) {
 	sdl.StopTextInput()
+	component_state_destroy()
 
 	// Clean up cursors
 	sdl.FreeCursor(app.cursor_arrow)

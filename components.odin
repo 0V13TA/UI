@@ -8,6 +8,16 @@ import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 import "vendor:sdl2/ttf"
 
+switch_toggle_prev_state: map[Box_ID]bool
+accordion_prev_expanded:  map[Box_ID]bool
+
+component_state_destroy :: proc() {
+	delete(switch_toggle_prev_state)
+	switch_toggle_prev_state = nil
+	delete(accordion_prev_expanded)
+	accordion_prev_expanded = nil
+}
+
 is_tree_hovered :: proc(app: ^App, target_id: Box_ID) -> bool {
 	ui_ctx := app.ui
 	ev_ctx := app.ev
@@ -1735,10 +1745,9 @@ switch_toggle :: proc(
 	element_close(app)
 
 	// --- NEW: FIRE ANIMATION TWEENS ON TOGGLE ---
-	@(static) prev_state: map[Box_ID]bool
-	if root_id not_in prev_state do prev_state[root_id] = state^
-	just_toggled := prev_state[root_id] != state^
-	prev_state[root_id] = state^
+	if root_id not_in switch_toggle_prev_state do switch_toggle_prev_state[root_id] = state^
+	just_toggled := switch_toggle_prev_state[root_id] != state^
+	switch_toggle_prev_state[root_id] = state^
 
 	if just_toggled {
 		to(
@@ -2281,10 +2290,9 @@ accordion_begin :: proc(
 	element_close(app)
 
 	// --- NEW: FIRE ANIMATION TWEENS ON EXPAND ---
-	@(static) prev_exp: map[Box_ID]bool
-	if root_id not_in prev_exp do prev_exp[root_id] = is_expanded^
-	just_expanded := is_expanded^ && !prev_exp[root_id]
-	prev_exp[root_id] = is_expanded^
+	if root_id not_in accordion_prev_expanded do accordion_prev_expanded[root_id] = is_expanded^
+	just_expanded := is_expanded^ && !accordion_prev_expanded[root_id]
+	accordion_prev_expanded[root_id] = is_expanded^
 
 	if is_expanded^ {
 		final_content := merge_styles(DEFAULT_ACCORDION_CONTENT_STYLE, content_style)

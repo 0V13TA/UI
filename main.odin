@@ -83,6 +83,7 @@ main :: proc() {
 	defer app_destroy(app)
 
 	state := new(Showcase_State)
+	defer free(state)
 	state.nav_items = []string{"Dashboard", "User Directory", "Widget Lab", "RSS Reader"}
 	state.role_options = []string{"Administrator", "Editor", "Viewer", "Guest"}
 	state.selected_user_idx = -1
@@ -99,6 +100,8 @@ main :: proc() {
 	seed_initial_rss(state)
 
 	defer {
+		for user in state.users do delete(user.name_buf)
+		delete(state.users)
 		for f in state.rss_feeds do delete(f.articles)
 		delete(state.rss_feeds)
 		delete(state.rss_feed_names)
@@ -651,7 +654,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 					theme_color = {0.2, 0.8, 0.4, 1.0},
 					join_date   = {2026, 9, 23},
 				}
-				new_user.name_buf = make([dynamic]u8)
+				new_user.name_buf = make([dynamic]u8, 0, len("New Employee"))
 				for c in "New Employee" do append(&new_user.name_buf, u8(c))
 				append(&state.users, new_user)
 				state.selected_user_idx = len(state.users) - 1
@@ -1520,7 +1523,7 @@ seed_initial_users :: proc(state: ^Showcase_State) {
 			theme_color = colors[i],
 			join_date   = {2024, i + 1, 15},
 		}
-		u.name_buf = make([dynamic]u8)
+		u.name_buf = make([dynamic]u8, 0, len(names[i]))
 		for c in names[i] do append(&u.name_buf, u8(c))
 		append(&state.users, u)
 	}
