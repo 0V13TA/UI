@@ -118,6 +118,10 @@ Box :: struct {
 	user_data:             rawptr,
 	warned:                bool,
 	pointer_events:        bool,
+	disabled:              bool,
+	selectable:            bool,
+	focus_color:           Color,
+	focus_width:           f32,
 
 	// Sizing Intent
 	width:                 Sizing,
@@ -396,6 +400,8 @@ new_box_from_config :: proc(
 	box^ = box_config
 
 	box.pointer_events = true
+	box.focus_color = Color{0.12, 0.45, 0.92, 1.0}
+	box.focus_width = 2
 
 	if box.id == 0 {
 		if len(ctx.parent_stack) > 0 {

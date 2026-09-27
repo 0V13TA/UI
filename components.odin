@@ -48,7 +48,15 @@ text :: proc(
 
 	final_id := resolve_id(app, id, salt, loc)
 
-	register(ev_ctx, final_id, Event_Callbacks{focusable = true, skip_tab = true})
+	register(
+		ev_ctx,
+		final_id,
+		Event_Callbacks {
+			focusable = user_style.focusable.? or_else true,
+			disabled  = user_style.disabled.? or_else false,
+			skip_tab  = true,
+		},
+	)
 
 	is_pressed := ev_ctx.pressed_id == final_id
 	just_pressed := is_pressed && ev_ctx.prev_pressed_id != final_id
@@ -64,6 +72,11 @@ text :: proc(
 
 	final_style := user_style
 	if user_style.text_wrap == nil do final_style.text_wrap = .WORD
+	if user_style.selectable == nil do final_style.selectable = true
+	if !(final_style.selectable.? or_else true) {
+		ev_ctx.text_selection[final_id] = 0
+		ev_ctx.text_cursors[final_id] = 0
+	}
 	if ev_ctx.text_cursors[final_id] != ev_ctx.text_selection[final_id] {
 		final_style.selection_start = ev_ctx.text_selection[final_id]
 		final_style.selection_end = ev_ctx.text_cursors[final_id]
@@ -86,9 +99,7 @@ text :: proc(
 
 	if is_pressed {
 		if prev_box, ok := ui_ctx.layout.prev_all_boxes[final_id]; ok {
-			mx, my: i32
-			sdl.GetMouseState(&mx, &my)
-			local_x := f32(mx) - prev_box.x
+			local_x := ev_ctx.pointer_x - prev_box.x
 
 			dummy_el := Element {
 				resolved_font = active_font,
@@ -111,9 +122,11 @@ text :: proc(
 				}
 			}
 
-			ev_ctx.text_cursors[final_id] = best_cursor
-			if just_pressed {
-				ev_ctx.text_selection[final_id] = best_cursor
+			if prev_box.selectable {
+				ev_ctx.text_cursors[final_id] = best_cursor
+				if just_pressed {
+					ev_ctx.text_selection[final_id] = best_cursor
+				}
 			}
 		}
 	}
@@ -158,7 +171,10 @@ button :: proc(
 	final_style := merge_styles(DEFAULT_BUTTON_STYLE, user_style)
 	bg := final_style.bg_color.? or_else Color{0.15, 0.4, 0.8, 1.0}
 
-	if is_pressed {
+	is_disabled := user_style.disabled.? or_else false
+	if is_disabled {
+		final_style.opacity = user_style.opacity.? or_else 0.5
+	} else if is_pressed {
 		final_style.bg_color = Color{bg[0] * 0.7, bg[1] * 0.7, bg[2] * 0.7, bg[3]}
 	} else if is_hovered {
 		final_style.bg_color = Color {

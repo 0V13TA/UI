@@ -73,6 +73,8 @@ app_init :: proc(
 
 	app.ev = new(Event_Context)
 	app.ev.layout = app.ui.layout
+	app.ev.viewport_w = f32(width)
+	app.ev.viewport_h = f32(height)
 	app.ev.listeners = make(map[Box_ID]Event_Callbacks)
 	app.ev.previous_listeners = make(map[Box_ID]Event_Callbacks)
 	app.ev.clicked_this_frame = make(map[Box_ID]bool)
@@ -151,6 +153,8 @@ app_begin_frame :: proc(app: ^App) {
 			if event.window.event == .RESIZED || event.window.event == .SIZE_CHANGED {
 				app.window_w = event.window.data1
 				app.window_h = event.window.data2
+				app.ev.viewport_w = f32(app.window_w)
+				app.ev.viewport_h = f32(app.window_h)
 			}
 
 		}
@@ -173,7 +177,7 @@ app_end_frame :: proc(app: ^App) {
 	if app.ev.focused_id != 0 {
 		_, box_exists := app.ui.layout.all_boxes[app.ev.focused_id]
 		callbacks, has_callbacks := app.ev.listeners[app.ev.focused_id]
-		if !box_exists || !has_callbacks || !callbacks.focusable do set_focus(app.ev, 0)
+		if !box_exists || !has_callbacks || !callbacks.focusable || callbacks.disabled do set_focus(app.ev, 0)
 	}
 	if app.ev.pressed_id != 0 && app.ev.pressed_id not_in app.ui.layout.all_boxes {
 		app.ev.pressed_id = 0
@@ -192,7 +196,7 @@ app_end_frame :: proc(app: ^App) {
 	if hovered, ok := app.ui.layout.all_boxes[app.ev.hovered_id]; ok {
 		for current := hovered; current != nil; current = current.parent {
 			if cb, has_callbacks := app.ev.listeners[current.id];
-			   has_callbacks && cb.cursor != .ARROW {
+			   has_callbacks && !cb.disabled && cb.cursor != .ARROW {
 				#partial switch cb.cursor {
 				case .HAND:
 					target_cursor = app.cursor_hand
@@ -235,14 +239,16 @@ app_end_frame :: proc(app: ^App) {
 				sdl.RenderSetClipRect(app.renderer, &clip_rect)
 			}
 
-			for inset in -2 ..< 1 {
+			ring_width := i32(max(focused.focus_width, 0.0))
+			r, g, b, a := to_sdl_color(focused.focus_color)
+			for inset in -ring_width ..< 0 {
 				rect := sdl.Rect {
 					i32(focused.x) + i32(inset),
 					i32(focused.y) + i32(inset),
 					i32(focused.computed_width) - i32(inset) * 2,
 					i32(focused.computed_height) - i32(inset) * 2,
 				}
-				sdl.SetRenderDrawColor(app.renderer, 30, 115, 235, 255)
+				sdl.SetRenderDrawColor(app.renderer, r, g, b, a)
 				sdl.RenderDrawRect(app.renderer, &rect)
 			}
 			if previous_clip != nil do sdl.RenderSetClipRect(app.renderer, nil)

@@ -55,6 +55,13 @@ Style :: struct {
 	selection_start: Maybe(int),
 	selection_end:   Maybe(int),
 	selection_color: Maybe(Color),
+	selectable:     Maybe(bool),
+	focusable:      Maybe(bool),
+	disabled:       Maybe(bool),
+	draggable:      Maybe(bool),
+	drop_target:    Maybe(bool),
+	focus_color:    Maybe(Color),
+	focus_width:    Maybe(f32),
 
 	// Typography
 	font_size:       Maybe(f32),
@@ -814,6 +821,18 @@ apply_style_block :: proc(el: ^Element, s: Style, ctx: ^UI_Context) {
 	if v, ok := s.pointer_events.?; ok {
 		el._box.pointer_events = v
 	}
+	if v, ok := s.disabled.?; ok {
+		el._box.disabled = v
+	}
+	if v, ok := s.selectable.?; ok {
+		el._box.selectable = v
+	}
+	if v, ok := s.focus_color.?; ok {
+		el._box.focus_color = v
+	}
+	if v, ok := s.focus_width.?; ok {
+		el._box.focus_width = max(v, 0.0)
+	}
 
 	if v, ok := s.top.?; ok {
 		el._box.top = v
@@ -938,6 +957,13 @@ merge_styles :: proc(base: Style, override: Style) -> Style {
 	if override.selection_start != nil do result.selection_start = override.selection_start
 	if override.selection_end != nil do result.selection_end = override.selection_end
 	if override.selection_color != nil do result.selection_color = override.selection_color
+	if override.selectable != nil do result.selectable = override.selectable
+	if override.focusable != nil do result.focusable = override.focusable
+	if override.disabled != nil do result.disabled = override.disabled
+	if override.draggable != nil do result.draggable = override.draggable
+	if override.drop_target != nil do result.drop_target = override.drop_target
+	if override.focus_color != nil do result.focus_color = override.focus_color
+	if override.focus_width != nil do result.focus_width = override.focus_width
 
 	// Positioning
 	if override.position != nil do result.position = override.position
@@ -1574,6 +1600,15 @@ element_open :: proc(app: ^App, el_val: Element, loc := #caller_location) -> ^El
 	el._box.id = resolve_id(app, el._box.id, "", loc)
 
 	apply_styles(el, ctx)
+	callbacks, has_callbacks := app.ev.listeners[el._box.id]
+	if has_callbacks || el.style.focusable != nil || el.style.disabled != nil ||
+	   el.style.draggable != nil || el.style.drop_target != nil {
+		if v, ok := el.style.focusable.?; ok do callbacks.focusable = v
+		if v, ok := el.style.disabled.?; ok do callbacks.disabled = v
+		if v, ok := el.style.draggable.?; ok do callbacks.draggable = v
+		if v, ok := el.style.drop_target.?; ok do callbacks.drop_target = v
+		register(app.ev, el._box.id, callbacks)
+	}
 	el._box.user_data = el
 	box_open(ctx.layout, el._box, loc)
 

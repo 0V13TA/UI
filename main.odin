@@ -70,6 +70,11 @@ Showcase_State :: struct {
 	context_y:                f32,
 	context_open:             bool,
 	show_debug:               bool,
+
+	// Interaction demo state
+	interaction_touch_count:  int,
+	interaction_drop_count:   int,
+	interaction_dragging:     bool,
 }
 
 main :: proc() {
@@ -84,7 +89,7 @@ main :: proc() {
 
 	state := new(Showcase_State)
 	defer free(state)
-	state.nav_items = []string{"Dashboard", "User Directory", "Widget Lab", "RSS Reader"}
+	state.nav_items = []string{"Dashboard", "User Directory", "Widget Lab", "RSS Reader", "Interactions"}
 	state.role_options = []string{"Administrator", "Editor", "Viewer", "Guest"}
 	state.selected_user_idx = -1
 	state.volume_val = 0.65
@@ -171,7 +176,7 @@ main :: proc() {
 			} // End Sidebar
 
 			// --- 2. MAIN CONTENT ROUTER ---
-			pages := []Page_Proc{page_dashboard, page_directory, page_widget_lab, page_rss_reader}
+			pages := []Page_Proc{page_dashboard, page_directory, page_widget_lab, page_rss_reader, page_interactions}
 			router_view(
 				app,
 				&state.router,
@@ -1584,4 +1589,272 @@ seed_initial_rss :: proc(state: ^Showcase_State) {
 	append(&state.rss_feeds, feed2)
 
 	for f in state.rss_feeds do append(&state.rss_feed_names, f.title)
+}
+
+@(private = "file")
+interaction_touch_start :: proc(e: ^UI_Event, data: rawptr) {
+	state := (^Showcase_State)(data)
+	state.interaction_touch_count += 1
+}
+
+@(private = "file")
+interaction_drag_start :: proc(e: ^UI_Event, data: rawptr) {
+	(^Showcase_State)(data).interaction_dragging = true
+}
+
+@(private = "file")
+interaction_drag_end :: proc(e: ^UI_Event, data: rawptr) {
+	(^Showcase_State)(data).interaction_dragging = false
+}
+
+@(private = "file")
+interaction_drop :: proc(e: ^UI_Event, data: rawptr) {
+	state := (^Showcase_State)(data)
+	state.interaction_drop_count += 1
+}
+
+page_interactions :: proc(app: ^App, app_state: rawptr) {
+	state := (^Showcase_State)(app_state)
+
+	{
+		element_open(
+			app,
+			{
+				style = {
+					direction = .COLUMN,
+					gap = 20,
+					width = Percent{100},
+					height = Percent{100},
+					overflow_y = .SCROLL,
+				},
+			},
+		)
+		defer element_close(app)
+
+		text(app, "Interactions", user_style = {font_size = 32})
+		text(
+			app,
+			"Pointer, touch, keyboard focus, selection, and drag-and-drop events work through the same element tree.",
+			user_style = {font_size = 14, text_color = Color{0.45, 0.48, 0.54, 1}},
+		)
+
+		{
+			element_open(
+				app,
+				{
+					style = {
+						direction = .ROW,
+						gap = 16,
+						width = Percent{100},
+					},
+				},
+			)
+			defer element_close(app)
+
+			{
+				element_open(
+					app,
+					{
+						style = {
+							direction = .COLUMN,
+							gap = 12,
+							width = Grow{1},
+							padding = space(20),
+							bg_color = Color{1, 1, 1, 1},
+							border = space(1),
+							border_color = Color{0.88, 0.89, 0.92, 1},
+							border_radius = space(8),
+						},
+					},
+				)
+				defer element_close(app)
+				text(app, "Focus and disabled states", user_style = {font_size = 18})
+				text(
+					app,
+					"Use Tab to move focus. The first control has a custom focus ring; the second is disabled.",
+					user_style = {font_size = 13, text_color = Color{0.45, 0.48, 0.54, 1}},
+				)
+				button(
+					app,
+					"Custom focus style",
+					user_style = {
+						focus_color = Color{0.72, 0.24, 0.82, 1},
+						focus_width = 3,
+					},
+				)
+				button(
+					app,
+					"Disabled control",
+					user_style = {disabled = true, bg_color = Color{0.45, 0.48, 0.54, 1}},
+				)
+				button(
+					app,
+					"Pointer only (not focusable)",
+					user_style = {
+						focusable = false,
+						bg_color = Color{0.38, 0.42, 0.5, 1},
+					},
+				)
+			}
+
+			{
+				element_open(
+					app,
+					{
+						style = {
+							direction = .COLUMN,
+							gap = 12,
+							width = Grow{1},
+							padding = space(20),
+							bg_color = Color{1, 1, 1, 1},
+							border = space(1),
+							border_color = Color{0.88, 0.89, 0.92, 1},
+							border_radius = space(8),
+						},
+					},
+				)
+				defer element_close(app)
+				text(app, "Text selection", user_style = {font_size = 18})
+				text(
+					app,
+					"Drag across this text to select it with a purple highlight.",
+					user_style = {
+						selectable = true,
+						selection_color = Color{0.63, 0.25, 0.82, 0.42},
+					},
+				)
+				text(
+					app,
+					"This text is not selectable.",
+					user_style = {selectable = false, text_color = Color{0.5, 0.52, 0.57, 1}},
+				)
+			}
+		}
+
+		{
+			element_open(
+				app,
+				{
+					style = {
+						direction = .ROW,
+						gap = 16,
+						width = Percent{100},
+					},
+				},
+			)
+			defer element_close(app)
+
+			{
+				drag_id := ID("interaction_drag_source")
+				register(
+					app.ev,
+					drag_id,
+					Event_Callbacks {
+						draggable      = true,
+						on_drag_start  = interaction_drag_start,
+						on_drag_end    = interaction_drag_end,
+						user_data      = state,
+					},
+				)
+				element_open(
+					app,
+					Element {
+						_box = {id = drag_id},
+						text = "Drag this tile",
+						style = {
+							width = Grow{1},
+							height = Fixed{120},
+							padding = space(20),
+							bg_color = state.interaction_dragging ? Color{0.76, 0.85, 1, 1} :
+								Color{1, 1, 1, 1},
+							border = space(2),
+							border_color = Color{0.16, 0.38, 0.78, 1},
+							border_radius = space(8),
+							focusable = true,
+							draggable = true,
+						},
+					},
+				)
+				defer element_close(app)
+				text(app, "Mouse or touch drag", user_style = {font_size = 18})
+				text(
+					app,
+					fmt.tprintf(
+						"Drag state: %s",
+						state.interaction_dragging ? "active" : "idle",
+					),
+					user_style = {font_size = 13, text_color = Color{0.45, 0.48, 0.54, 1}},
+				)
+			}
+
+			{
+				drop_id := ID("interaction_drop_target")
+				register(
+					app.ev,
+					drop_id,
+					Event_Callbacks {
+						drop_target = true,
+						on_drop     = interaction_drop,
+						user_data   = state,
+					},
+				)
+				element_open(
+					app,
+					Element {
+						_box = {id = drop_id},
+						style = {
+							width = Grow{1},
+							height = Fixed{120},
+							padding = space(20),
+							bg_color = Color{0.94, 0.97, 0.94, 1},
+							border = space(2),
+							border_color = Color{0.18, 0.62, 0.38, 1},
+							border_radius = space(8),
+							drop_target = true,
+						},
+					},
+				)
+				defer element_close(app)
+				text(app, "Drop target", user_style = {font_size = 18})
+				text(
+					app,
+					fmt.tprintf("Successful drops: %d", state.interaction_drop_count),
+					user_style = {font_size = 13, text_color = Color{0.35, 0.46, 0.38, 1}},
+				)
+			}
+		}
+
+		{
+			touch_id := ID("interaction_touch_target")
+			register(
+				app.ev,
+				touch_id,
+				Event_Callbacks {
+					on_touch_start = interaction_touch_start,
+					user_data      = state,
+				},
+			)
+			element_open(
+				app,
+				Element {
+					_box = {id = touch_id},
+					style = {
+						width = Percent{100},
+						padding = space(18),
+						bg_color = Color{0.9, 0.94, 1, 1},
+						border_radius = space(8),
+					},
+				},
+			)
+			defer element_close(app)
+			text(
+				app,
+				fmt.tprintf(
+					"Touch this panel to send Touch_Start (%d touches so far)",
+					state.interaction_touch_count,
+				),
+				user_style = {font_size = 15},
+			)
+		}
+	}
 }
