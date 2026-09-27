@@ -116,7 +116,7 @@ main :: proc() {
 					},
 				},
 			)
-				defer element_close(app)
+			defer element_close(app)
 
 			{
 				element_open(
@@ -135,7 +135,7 @@ main :: proc() {
 						},
 					},
 				)
-					defer element_close(app)
+				defer element_close(app)
 
 				text(
 					app,
@@ -153,7 +153,7 @@ main :: proc() {
 
 				{
 					element_open(app, {style = {height = Grow{1}}})
-						defer element_close(app) // Spacer
+					defer element_close(app) // Spacer
 				}
 
 				switch_toggle(app, "Debug Mode", &state.show_debug)
@@ -182,7 +182,7 @@ main :: proc() {
 					app,
 					{style = {position = .FIXED, right = 32.0, bottom = 32.0, z_index = 4000}},
 				)
-					defer element_close(app)
+				defer element_close(app)
 				toast(
 					app,
 					"System Notification",
@@ -222,7 +222,7 @@ page_dashboard :: proc(app: ^App, app_state: rawptr) {
 			app,
 			{style = {direction = .COLUMN, gap = 24, width = Percent{100}, height = Percent{100}}},
 		)
-			defer element_close(app)
+		defer element_close(app)
 
 		text(app, "Dashboard Overview", user_style = {font_size = 36})
 		text(
@@ -233,14 +233,24 @@ page_dashboard :: proc(app: ^App, app_state: rawptr) {
 
 		{
 			element_open(app, {style = {direction = .ROW, gap = 24, width = Percent{100}}})
-				defer element_close(app)
+			defer element_close(app)
 
 			// Quick Stats Cards
-			_stat_card(app, "Total Users", fmt.tprintf("%d", len(state.users)), Color{0.2, 0.5, 0.9, 1.0})
+			_stat_card(
+				app,
+				"Total Users",
+				fmt.tprintf("%d", len(state.users)),
+				Color{0.2, 0.5, 0.9, 1.0},
+			)
 
 			active_count := 0
 			for u in state.users do if u.is_active do active_count += 1
-			_stat_card(app, "Active Accounts", fmt.tprintf("%d", active_count), Color{0.2, 0.8, 0.4, 1.0})
+			_stat_card(
+				app,
+				"Active Accounts",
+				fmt.tprintf("%d", active_count),
+				Color{0.2, 0.8, 0.4, 1.0},
+			)
 
 		} // End Row
 
@@ -256,7 +266,7 @@ page_dashboard :: proc(app: ^App, app_state: rawptr) {
 					},
 				},
 			)
-				defer element_close(app)
+			defer element_close(app)
 		}
 
 		@(static) acc_1, acc_2: bool
@@ -299,7 +309,7 @@ _stat_card :: proc(app: ^App, label, val: string, accent: Color) {
 				},
 			},
 		)
-			defer element_close(app)
+		defer element_close(app)
 
 		text(app, label, user_style = {font_size = 14, text_color = Color{0.5, 0.5, 0.5, 1.0}})
 		text(app, val, user_style = {font_size = 32, text_color = accent})
@@ -326,7 +336,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 				},
 			},
 		)
-			defer element_close(app)
+		defer element_close(app)
 
 		// Page Header & Actions
 		{
@@ -341,7 +351,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 					},
 				},
 			)
-				defer element_close(app)
+			defer element_close(app)
 			text(app, "Directory", user_style = {font_size = 36})
 			if button(app, "+ Add User", user_style = {bg_color = Color{0.15, 0.4, 0.8, 1.0}}) {
 				new_user := User_Record {
@@ -372,7 +382,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 					},
 				},
 			)
-				defer element_close(app)
+			defer element_close(app)
 
 			// LEFT: Master List
 			{
@@ -391,7 +401,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 						},
 					},
 				)
-					defer element_close(app)
+				defer element_close(app)
 
 				{
 					scroll_id := scroll_begin(
@@ -399,12 +409,13 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 						scroll_y = true,
 						user_style = {width = Percent{100}, height = Percent{100}},
 					)
-						defer scroll_end(app, scroll_id)
+					defer scroll_end(app, scroll_id)
 
 					for u, i in state.users {
 						is_sel := state.selected_user_idx == i
 						bg := is_sel ? Color{0.15, 0.4, 0.8, 0.1} : Color{0, 0, 0, 0}
-						border_col := is_sel ? Color{0.15, 0.4, 0.8, 1.0} : Color{0.9, 0.9, 0.9, 1.0}
+						border_col :=
+							is_sel ? Color{0.15, 0.4, 0.8, 1.0} : Color{0.9, 0.9, 0.9, 1.0}
 
 						if button(
 							app,
@@ -422,7 +433,9 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 							state.selected_user_idx = i
 						}
 
-						if prev, ok := app.ui.layout.prev_all_boxes[ID(fmt.tprintf("usr_row_%d", u.id))]; ok {
+						if prev, ok :=
+							   app.ui.layout.prev_all_boxes[ID(fmt.tprintf("usr_row_%d", u.id))];
+						   ok {
 							{
 								element_open(
 									app,
@@ -437,7 +450,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 										},
 									},
 								)
-									defer element_close(app)
+								defer element_close(app)
 
 								// Avatar Circle
 								{
@@ -452,21 +465,30 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 											},
 										},
 									)
-										defer element_close(app)
+									defer element_close(app)
 								}
 
 								{
-									element_open(app, {style = {direction = .COLUMN, justify_content = .CENTER}})
-										defer element_close(app)
+									element_open(
+										app,
+										{style = {direction = .COLUMN, justify_content = .CENTER}},
+									)
+									defer element_close(app)
 									text(
 										app,
 										string(u.name_buf[:]),
-										user_style = {font_size = 16, text_color = Color{0.1, 0.1, 0.1, 1}},
+										user_style = {
+											font_size = 16,
+											text_color = Color{0.1, 0.1, 0.1, 1},
+										},
 									)
 									text(
 										app,
 										state.role_options[u.role_idx],
-										user_style = {font_size = 12, text_color = Color{0.5, 0.5, 0.5, 1}},
+										user_style = {
+											font_size = 12,
+											text_color = Color{0.5, 0.5, 0.5, 1},
+										},
 									)
 								}
 							}
@@ -497,7 +519,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 							},
 						},
 					)
-						defer element_close(app)
+					defer element_close(app)
 
 					text(app, "Edit User", user_style = {font_size = 24})
 
@@ -506,7 +528,12 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 						"Full Name",
 						user_style = {font_size = 14, text_color = Color{0.4, 0.4, 0.4, 1.0}},
 					)
-					text_input(app, &u.name_buf, placeholder = "Enter name...", salt = "detail_name")
+					text_input(
+						app,
+						&u.name_buf,
+						placeholder = "Enter name...",
+						salt = "detail_name",
+					)
 
 					text(
 						app,
@@ -536,14 +563,17 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 								},
 							},
 						)
-							defer element_close(app)
+						defer element_close(app)
 						text(app, "Account Active", user_style = {font_size = 16})
 						switch_toggle(app, "", &u.is_active, salt = "detail_active")
 					}
 
 					{
-						element_open(app, {style = {direction = .ROW, gap = 48, width = Percent{100}}})
-							defer element_close(app)
+						element_open(
+							app,
+							{style = {direction = .ROW, gap = 48, width = Percent{100}}},
+						)
+						defer element_close(app)
 						color_picker(
 							app,
 							"Profile Accent",
@@ -551,25 +581,40 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 							&state.color_picker_open,
 							salt = "detail_color",
 						)
-						date_picker(app, "Start Date", &u.join_date, &state.date_picker_open, salt = "detail_date")
+						date_picker(
+							app,
+							"Start Date",
+							&u.join_date,
+							&state.date_picker_open,
+							salt = "detail_date",
+						)
 					}
 
 					// Delete Button at the bottom
 					{
 						element_open(app, {style = {height = Grow{1}}})
-							defer element_close(app) // Pushes delete to bottom
+						defer element_close(app) // Pushes delete to bottom
 					}
 
 					{
 						element_open(
 							app,
-							{style = {direction = .ROW, justify_content = .END, width = Percent{100}}},
+							{
+								style = {
+									direction = .ROW,
+									justify_content = .END,
+									width = Percent{100},
+								},
+							},
 						)
-							defer element_close(app)
+						defer element_close(app)
 						if button(
 							app,
 							"Delete User",
-							user_style = {bg_color = Color{0.9, 0.2, 0.2, 1.0}, text_color = Color{1, 1, 1, 1}},
+							user_style = {
+								bg_color = Color{0.9, 0.2, 0.2, 1.0},
+								text_color = Color{1, 1, 1, 1},
+							},
 						) {
 							state.modal_open = true
 						}
@@ -595,7 +640,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 							},
 						},
 					)
-						defer element_close(app)
+					defer element_close(app)
 					text(
 						app,
 						"Select a user to view details.",
@@ -632,7 +677,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 						},
 					},
 				)
-					defer element_close(app)
+				defer element_close(app)
 				if button(
 					app,
 					"Cancel",
@@ -642,7 +687,11 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 					},
 				) {state.modal_open = false}
 
-				if button(app, "Delete Forever", user_style = {bg_color = Color{0.9, 0.2, 0.2, 1.0}}) {
+				if button(
+					app,
+					"Delete Forever",
+					user_style = {bg_color = Color{0.9, 0.2, 0.2, 1.0}},
+				) {
 					delete(state.users[state.selected_user_idx].name_buf)
 					ordered_remove(&state.users, state.selected_user_idx)
 					state.selected_user_idx = -1
@@ -668,7 +717,7 @@ page_widget_lab :: proc(app: ^App, app_state: rawptr) {
 			app,
 			{style = {direction = .COLUMN, gap = 24, width = Percent{100}, height = Percent{100}}},
 		)
-			defer element_close(app)
+		defer element_close(app)
 
 		text(app, "Widget Laboratory", user_style = {font_size = 36})
 
@@ -695,7 +744,7 @@ page_widget_lab :: proc(app: ^App, app_state: rawptr) {
 					},
 				},
 			)
-				defer element_close(app)
+			defer element_close(app)
 
 			if state.lab_tab_idx == 0 {
 				text(app, "Layout-Aware Text Area", user_style = {font_size = 20})
@@ -718,9 +767,16 @@ page_widget_lab :: proc(app: ^App, app_state: rawptr) {
 				{
 					element_open(
 						app,
-						{style = {direction = .ROW, gap = 16, align_items = .CENTER, width = Percent{100}}},
+						{
+							style = {
+								direction = .ROW,
+								gap = 16,
+								align_items = .CENTER,
+								width = Percent{100},
+							},
+						},
 					)
-						defer element_close(app)
+					defer element_close(app)
 					text(app, "Vol", user_style = {width = Fixed{40}})
 					slider(app, &state.volume_val, 0.0, 1.0, wrapper_style = {width = Grow{1}})
 					text(
@@ -734,9 +790,16 @@ page_widget_lab :: proc(app: ^App, app_state: rawptr) {
 				{
 					element_open(
 						app,
-						{style = {direction = .ROW, gap = 16, align_items = .CENTER, width = Percent{100}}},
+						{
+							style = {
+								direction = .ROW,
+								gap = 16,
+								align_items = .CENTER,
+								width = Percent{100},
+							},
+						},
 					)
-						defer element_close(app)
+					defer element_close(app)
 					text(app, "Lux", user_style = {width = Fixed{40}})
 					slider(
 						app,
@@ -767,7 +830,7 @@ page_widget_lab :: proc(app: ^App, app_state: rawptr) {
 							},
 						},
 					)
-						defer element_close(app)
+					defer element_close(app)
 				}
 
 				// Progress & Spinner
@@ -782,11 +845,22 @@ page_widget_lab :: proc(app: ^App, app_state: rawptr) {
 				{
 					element_open(
 						app,
-						{style = {direction = .ROW, gap = 12, align_items = .CENTER, margin = space(16, 0)}},
+						{
+							style = {
+								direction = .ROW,
+								gap = 12,
+								align_items = .CENTER,
+								margin = space(16, 0),
+							},
+						},
 					)
-						defer element_close(app)
+					defer element_close(app)
 					spinner(app)
-					text(app, "Syncing to cloud...", user_style = {text_color = Color{0.5, 0.5, 0.5, 1.0}})
+					text(
+						app,
+						"Syncing to cloud...",
+						user_style = {text_color = Color{0.5, 0.5, 0.5, 1.0}},
+					)
 				}
 
 			} else if state.lab_tab_idx == 2 {
@@ -840,7 +914,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 				},
 			},
 		)
-			defer element_close(app)
+		defer element_close(app)
 
 		// Header
 		{
@@ -855,7 +929,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 					},
 				},
 			)
-				defer element_close(app)
+			defer element_close(app)
 			text(app, "RSS Reader", user_style = {font_size = 36})
 		}
 
@@ -873,7 +947,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 					},
 				},
 			)
-				defer element_close(app)
+			defer element_close(app)
 
 			// Left Panel (Feeds & Articles)
 			{
@@ -892,7 +966,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 						},
 					},
 				)
-					defer element_close(app)
+				defer element_close(app)
 
 				// Feed Selector
 				{
@@ -906,7 +980,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 							},
 						},
 					)
-						defer element_close(app)
+					defer element_close(app)
 					dropdown(
 						app,
 						"Select Feed",
@@ -924,13 +998,15 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 						scroll_y = true,
 						user_style = {width = Percent{100}, height = Grow{1}},
 					)
-						defer scroll_end(app, scroll_id)
-					if state.rss_selected_feed_idx >= 0 && state.rss_selected_feed_idx < len(state.rss_feeds) {
+					defer scroll_end(app, scroll_id)
+					if state.rss_selected_feed_idx >= 0 &&
+					   state.rss_selected_feed_idx < len(state.rss_feeds) {
 						feed := &state.rss_feeds[state.rss_selected_feed_idx]
 						for &art, i in feed.articles {
 							is_sel := state.rss_selected_article_idx == i
 							bg := is_sel ? Color{0.15, 0.4, 0.8, 0.1} : Color{0, 0, 0, 0}
-							border_col := is_sel ? Color{0.15, 0.4, 0.8, 1.0} : Color{0.9, 0.9, 0.9, 1.0}
+							border_col :=
+								is_sel ? Color{0.15, 0.4, 0.8, 1.0} : Color{0.9, 0.9, 0.9, 1.0}
 
 							if button(
 								app,
@@ -952,8 +1028,8 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 
 							// Overlay the title and date cleanly over the structural button
 							if prev, ok :=
-								app.ui.layout.prev_all_boxes[ID(fmt.tprintf("art_%d_%d", state.rss_selected_feed_idx, i))];
-							ok {
+								   app.ui.layout.prev_all_boxes[ID(fmt.tprintf("art_%d_%d", state.rss_selected_feed_idx, i))];
+							   ok {
 								{
 									element_open(
 										app,
@@ -968,17 +1044,25 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 											},
 										},
 									)
-										defer element_close(app)
-									title_col := art.is_read ? Color{0.4, 0.4, 0.4, 1} : Color{0.1, 0.1, 0.1, 1}
+									defer element_close(app)
+									title_col :=
+										art.is_read ? Color{0.4, 0.4, 0.4, 1} : Color{0.1, 0.1, 0.1, 1}
 									text(
 										app,
 										art.title,
-										user_style = {font_size = 16, text_color = title_col, text_wrap = .NONE},
+										user_style = {
+											font_size = 16,
+											text_color = title_col,
+											text_wrap = .NONE,
+										},
 									)
 									text(
 										app,
 										art.date,
-										user_style = {font_size = 12, text_color = Color{0.6, 0.6, 0.6, 1}},
+										user_style = {
+											font_size = 12,
+											text_color = Color{0.6, 0.6, 0.6, 1},
+										},
 									)
 								}
 							}
@@ -1011,7 +1095,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 								},
 							},
 						)
-							defer element_close(app)
+						defer element_close(app)
 
 						{
 							content_scroll := scroll_begin(
@@ -1024,17 +1108,23 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 									gap = 16,
 								},
 							)
-								defer scroll_end(app, content_scroll)
+							defer scroll_end(app, content_scroll)
 
 							text(
 								app,
 								art.title,
-								user_style = {font_size = 28, text_color = Color{0.1, 0.1, 0.1, 1}},
+								user_style = {
+									font_size = 28,
+									text_color = Color{0.1, 0.1, 0.1, 1},
+								},
 							)
 							text(
 								app,
 								fmt.tprintf("Published: %s", art.date),
-								user_style = {font_size = 14, text_color = Color{0.5, 0.5, 0.5, 1}},
+								user_style = {
+									font_size = 14,
+									text_color = Color{0.5, 0.5, 0.5, 1},
+								},
 							)
 
 							{
@@ -1049,7 +1139,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 										},
 									},
 								)
-									defer element_close(app)
+								defer element_close(app)
 							}
 
 							text(
@@ -1084,7 +1174,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 							},
 						},
 					)
-						defer element_close(app)
+					defer element_close(app)
 					text(
 						app,
 						"Select an article to read.",
