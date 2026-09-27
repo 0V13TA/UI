@@ -74,6 +74,7 @@ app_init :: proc(
 	app.ev = new(Event_Context)
 	app.ev.layout = app.ui.layout
 	app.ev.listeners = make(map[Box_ID]Event_Callbacks)
+	app.ev.previous_listeners = make(map[Box_ID]Event_Callbacks)
 	app.ev.clicked_this_frame = make(map[Box_ID]bool)
 	app.ev.scroll_offsets_x = make(map[Box_ID]f32)
 	app.ev.scroll_offsets_y = make(map[Box_ID]f32)
@@ -101,6 +102,7 @@ app_destroy :: proc(app: ^App) {
 
 	// Clean up event context maps
 	delete(app.ev.listeners)
+	delete(app.ev.previous_listeners)
 	delete(app.ev.focus_order)
 	delete(app.ev.text_cursors)
 	delete(app.ev.text_selection)
@@ -152,19 +154,9 @@ app_begin_frame :: proc(app: ^App) {
 
 		}
 	}
+	app.ev.listeners, app.ev.previous_listeners = app.ev.previous_listeners, app.ev.listeners
+	clear(&app.ev.listeners)
 	clear(&app.ev.focus_order)
-
-	// Resolve Cursor State
-	target_cursor := app.cursor_arrow
-	if cb, ok := app.ev.listeners[app.ev.hovered_id]; ok {
-		#partial switch cb.cursor {
-		case .HAND:
-			target_cursor = app.cursor_hand
-		case .IBEAM:
-			target_cursor = app.cursor_ibeam
-		}
-	}
-	if sdl.GetCursor() != target_cursor do sdl.SetCursor(target_cursor)
 
 	// Setup Renderer
 	r, g, b, a := to_sdl_color(app.bg_color)
@@ -182,6 +174,9 @@ app_end_frame :: proc(app: ^App) {
 		callbacks, has_callbacks := app.ev.listeners[app.ev.focused_id]
 		if !box_exists || !has_callbacks || !callbacks.focusable do set_focus(app.ev, 0)
 	}
+	if app.ev.pressed_id != 0 && app.ev.pressed_id not_in app.ui.layout.all_boxes {
+		app.ev.pressed_id = 0
+	}
 
 	// Apply structural animations before constraints are resolved
 	for root in roots {
@@ -190,6 +185,24 @@ app_end_frame :: proc(app: ^App) {
 
 	// Resolve Layout Engine Boundaries
 	ui_compute(app.ui)
+	refresh_hover(app.ev)
+
+	target_cursor := app.cursor_arrow
+	if hovered, ok := app.ui.layout.all_boxes[app.ev.hovered_id]; ok {
+		for current := hovered; current != nil; current = current.parent {
+			if cb, has_callbacks := app.ev.listeners[current.id];
+			   has_callbacks && cb.cursor != .ARROW {
+				#partial switch cb.cursor {
+				case .HAND:
+					target_cursor = app.cursor_hand
+				case .IBEAM:
+					target_cursor = app.cursor_ibeam
+				}
+				break
+			}
+		}
+	}
+	if sdl.GetCursor() != target_cursor do sdl.SetCursor(target_cursor)
 
 	// Process Animation Lifecycles & Delta Ticks
 	process_lifecycles(app.anim, app.ui.layout)

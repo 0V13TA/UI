@@ -37,6 +37,7 @@ Event_Callbacks :: struct {
 Event_Context :: struct {
 	layout:               ^Layout_Context,
 	listeners:            map[Box_ID]Event_Callbacks,
+	previous_listeners:   map[Box_ID]Event_Callbacks,
 	hovered_id:           Box_ID,
 	pressed_id:           Box_ID,
 	focused_id:           Box_ID,
@@ -55,6 +56,12 @@ Event_Context :: struct {
 	focused_buffer:       ^[dynamic]u8,
 	focus_order:          [dynamic]Box_ID,
 	focused_gap_buffer:   ^Gap_Buffer,
+}
+
+event_callbacks :: proc(ctx: ^Event_Context, id: Box_ID) -> (Event_Callbacks, bool) {
+	if callbacks, ok := ctx.listeners[id]; ok do return callbacks, true
+	if callbacks, ok := ctx.previous_listeners[id]; ok do return callbacks, true
+	return {}, false
 }
 
 UI_Event :: struct {
@@ -106,6 +113,20 @@ cycle_focus :: proc(ctx: ^Event_Context, reverse: bool) {
 	set_focus(ctx, ctx.focus_order[idx])
 }
 
+refresh_hover :: proc(ctx: ^Event_Context) {
+	mx, my: i32
+	sdl.GetMouseState(&mx, &my)
+
+	hovered_box: ^Box = nil
+	#reverse for root in ctx.layout.root_boxes {
+		if hit := get_hovered_box(ctx, root, f32(mx), f32(my)); hit != nil {
+			hovered_box = hit
+			break
+		}
+	}
+	update_hover(ctx, hovered_box != nil ? hovered_box.id : 0)
+}
+
 activate_focused :: proc(ctx: ^Event_Context, keycode: sdl.Keycode) -> bool {
 	if keycode != .RETURN && keycode != .KP_ENTER && keycode != .SPACE do return false
 	if target_box, ok := ctx.layout.all_boxes[ctx.focused_id]; ok {
@@ -145,6 +166,12 @@ unregister :: proc(ctx: ^Event_Context, id: Box_ID) {
 	if ctx.pressed_id == id {
 		ctx.pressed_id = 0
 	}
+	for focus_id, i in ctx.focus_order {
+		if focus_id == id {
+			ordered_remove(&ctx.focus_order, i)
+			break
+		}
+	}
 
 	delete_key(&ctx.listeners, id)
 }
@@ -152,24 +179,24 @@ unregister :: proc(ctx: ^Event_Context, id: Box_ID) {
 set_focus :: proc(ctx: ^Event_Context, new_focus: Box_ID) {
 	if ctx.focused_id == new_focus do return
 
-	if old_cb, ok := ctx.listeners[ctx.focused_id]; ok && old_cb.on_focus_exit != nil {
+	if old_cb, ok := event_callbacks(ctx, ctx.focused_id); ok && old_cb.on_focus_exit != nil {
 		old_cb.on_focus_exit(ctx.focused_id, old_cb.user_data)
 	}
 
 	ctx.focused_id = new_focus
 	if new_focus == 0 do ctx.focus_visible = false
 
-	if new_cb, ok := ctx.listeners[new_focus]; ok && new_cb.on_focus_enter != nil {
+	if new_cb, ok := event_callbacks(ctx, new_focus); ok && new_cb.on_focus_enter != nil {
 		new_cb.on_focus_enter(new_focus, new_cb.user_data)
 	}
 }
 
 update_hover :: proc(ctx: ^Event_Context, new_hovered_id: Box_ID) {
 	if ctx.hovered_id != new_hovered_id {
-		if old_cb, ok := ctx.listeners[ctx.hovered_id]; ok && old_cb.on_hover_exit != nil {
+		if old_cb, ok := event_callbacks(ctx, ctx.hovered_id); ok && old_cb.on_hover_exit != nil {
 			old_cb.on_hover_exit(ctx.hovered_id, old_cb.user_data)
 		}
-		if new_cb, ok := ctx.listeners[new_hovered_id]; ok && new_cb.on_hover_enter != nil {
+		if new_cb, ok := event_callbacks(ctx, new_hovered_id); ok && new_cb.on_hover_enter != nil {
 			new_cb.on_hover_enter(new_hovered_id, new_cb.user_data)
 		}
 		ctx.hovered_id = new_hovered_id
@@ -308,8 +335,10 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 
 	case .KEYDOWN:
 		if e.key.keysym.sym == .TAB {
-			has_shift := (transmute(u16)e.key.keysym.mod & 0x0003) != 0
-			cycle_focus(ctx, reverse = has_shift)
+			if e.key.repeat == 0 {
+				has_shift := (transmute(u16)e.key.keysym.mod & 0x0003) != 0
+				cycle_focus(ctx, reverse = has_shift)
+			}
 			break
 		}
 
@@ -395,7 +424,7 @@ bubble_event :: proc(ctx: ^Event_Context, start_node: ^Box, event_type: Event_Ty
 			ctx.clicked_this_frame[current.id] = true
 		}
 		// 2. Trigger User Callbacks
-		if cb, ok := ctx.listeners[current.id]; ok {
+		if cb, ok := event_callbacks(ctx, current.id); ok {
 			if event_type == .Click && cb.on_click != nil do cb.on_click(e, cb.user_data)
 			if event_type == .Scroll && cb.on_scroll != nil do cb.on_scroll(e, cb.user_data)
 			if event_type == .Key_Down && cb.on_key_down != nil do cb.on_key_down(e, cb.user_data)

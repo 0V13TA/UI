@@ -91,7 +91,9 @@ tl_play :: proc(tl: ^Timeline) {
 		count := len(boxes)
 
 		if count > 0 {
-			total_duration := step.props.duration + (step.props.stagger * f32(count - 1))
+			last_target_delay := step.props.delay + step.props.stagger * f32(count - 1)
+			total_delay := max(step.props.delay, last_target_delay, 0.0)
+			total_duration := max(step.props.duration, 0.0) + total_delay
 			adjusted_props := step.props
 			adjusted_props.delay += start_time
 

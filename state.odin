@@ -43,7 +43,7 @@ process_lifecycles :: proc(ctx: ^Context, layout: ^Layout_Context) {
 	// Identify retained states for boxes that no longer exist in the layout tree
 	for id, state in ctx.states {
 		if id not_in layout.all_boxes {
-			// Free the heap allocation to prevent memory leaks
+			cancel_state_tweens(&ctx.engine, state)
 			free(state)
 			append(&stale_ids, id)
 		}
@@ -52,6 +52,25 @@ process_lifecycles :: proc(ctx: ^Context, layout: ^Layout_Context) {
 	// Remove the stale keys from the map
 	for id in stale_ids {
 		delete_key(&ctx.states, id)
+	}
+}
+
+@(private = "file")
+cancel_state_tweens :: proc(engine: ^Engine, state: ^Retained_State) {
+	#reverse for tween, i in engine.tweens {
+		uses_state := false
+		switch target in tween.target {
+		case ^f32:
+			uses_state = target == &state.x || target == &state.y ||
+			             target == &state.width || target == &state.height ||
+			             target == &state.opacity
+		case ^[4]f32:
+			uses_state = target == &state.bg_color || target == &state.text_color ||
+			             target == &state.border_color
+		case ^Sizing:
+			uses_state = false
+		}
+		if uses_state do unordered_remove(&engine.tweens, i)
 	}
 }
 
