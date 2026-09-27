@@ -52,6 +52,12 @@ Showcase_State :: struct {
 	notes_buffer:             Gap_Buffer,
 	toast_open:               bool,
 
+	// Dashboard State
+	dashboard_range_idx:      int,
+	dashboard_paused:         bool,
+	dashboard_clock_ms:       u32,
+	dashboard_refresh_count:  int,
+
 	// RSS Reader State
 	rss_feeds:                [dynamic]RSS_Feed,
 	rss_feed_names:           [dynamic]string,
@@ -100,6 +106,7 @@ main :: proc() {
 
 	for !app.quit {
 		app_begin_frame(app)
+		if !state.dashboard_paused do state.dashboard_clock_ms = sdl.GetTicks()
 
 		// ---------------------------------------------------------
 		// ROOT LAYOUT (Horizontal Split: Sidebar + Main Content)
@@ -216,79 +223,362 @@ main :: proc() {
 page_dashboard :: proc(app: ^App, app_state: rawptr) {
 	state := (^Showcase_State)(app_state)
 
-
 	{
 		element_open(
 			app,
-			{style = {direction = .COLUMN, gap = 24, width = Percent{100}, height = Percent{100}}},
+			{
+				style = {
+					direction = .COLUMN,
+					gap = 20,
+					width = Percent{100},
+					height = Percent{100},
+					overflow_y = .SCROLL,
+				},
+			},
 		)
 		defer element_close(app)
-
-		text(app, "Dashboard Overview", user_style = {font_size = 36})
-		text(
-			app,
-			"Welcome to the Ovieta OS Toolkit showcase. This app demonstrates immediate mode routing, robust data binding, and hardware-accelerated layouts.",
-			user_style = {text_color = Color{0.4, 0.4, 0.4, 1.0}},
-		)
-
-		{
-			element_open(app, {style = {direction = .ROW, gap = 24, width = Percent{100}}})
-			defer element_close(app)
-
-			// Quick Stats Cards
-			_stat_card(
-				app,
-				"Total Users",
-				fmt.tprintf("%d", len(state.users)),
-				Color{0.2, 0.5, 0.9, 1.0},
-			)
-
-			active_count := 0
-			for u in state.users do if u.is_active do active_count += 1
-			_stat_card(
-				app,
-				"Active Accounts",
-				fmt.tprintf("%d", active_count),
-				Color{0.2, 0.8, 0.4, 1.0},
-			)
-
-		} // End Row
 
 		{
 			element_open(
 				app,
 				{
 					style = {
+						direction = .ROW,
+						align_items = .CENTER,
+						justify_content = .SPACE_BETWEEN,
 						width = Percent{100},
-						height = Fixed{1},
-						bg_color = Color{0.8, 0.8, 0.8, 1.0},
-						margin = space(24, 0),
 					},
 				},
 			)
 			defer element_close(app)
+
+			{
+				element_open(app, {style = {direction = .COLUMN, gap = 4}})
+				defer element_close(app)
+				text(app, "System Overview", user_style = {font_size = 32})
+				text(
+					app,
+					"Demo environment · animated sample telemetry",
+					user_style = {font_size = 14, text_color = Color{0.45, 0.48, 0.54, 1}},
+				)
+			}
+
+			{
+				element_open(app, {style = {direction = .ROW, gap = 10, align_items = .CENTER}})
+				defer element_close(app)
+				if button(
+					app,
+					state.dashboard_paused ? "Resume Live" : "Pause Live",
+					user_style = {
+						bg_color = state.dashboard_paused ? Color{0.92, 0.93, 0.95, 1} :
+							Color{0.88, 0.95, 0.91, 1},
+						text_color = Color{0.14, 0.35, 0.24, 1},
+					},
+				) {
+					state.dashboard_paused = !state.dashboard_paused
+					if !state.dashboard_paused do state.dashboard_clock_ms = sdl.GetTicks()
+				}
+				if button(app, "Refresh", user_style = {bg_color = Color{0.16, 0.38, 0.78, 1}}) {
+					state.dashboard_refresh_count += 1
+					state.dashboard_clock_ms = sdl.GetTicks()
+				}
+			}
 		}
 
-		@(static) acc_1, acc_2: bool
-		if accordion_begin(app, "What is Immediate Mode?", &acc_1) {
-			text(
+		{
+			element_open(app, {style = {direction = .ROW, gap = 16, width = Percent{100}}})
+			defer element_close(app)
+			_stat_card(app, "Requests / min", "2,481", Color{0.16, 0.38, 0.78, 1})
+			_stat_card(app, "Avg. latency", "84 ms", Color{0.53, 0.34, 0.78, 1})
+			_stat_card(app, "Error rate", "0.12%", Color{0.13, 0.62, 0.38, 1})
+			_stat_card(app, "Active sessions", "1,204", Color{0.86, 0.52, 0.12, 1})
+		}
+
+		{
+			element_open(app, {style = {direction = .ROW, gap = 16, width = Percent{100}}})
+			defer element_close(app)
+
+			{
+				element_open(
+					app,
+					{
+						style = {
+							direction = .COLUMN,
+							width = Grow{1},
+							height = Fixed{310},
+							gap = 12,
+							padding = space(20),
+							bg_color = Color{1, 1, 1, 1},
+							border = space(1),
+							border_color = Color{0.88, 0.89, 0.92, 1},
+							border_radius = space(8),
+						},
+					},
+				)
+				defer element_close(app)
+
+				{
+					element_open(
+						app,
+						{
+							style = {
+								direction = .ROW,
+								align_items = .CENTER,
+								justify_content = .SPACE_BETWEEN,
+								width = Percent{100},
+							},
+						},
+					)
+					defer element_close(app)
+					{
+						element_open(app, {style = {direction = .COLUMN, gap = 3}})
+						defer element_close(app)
+						text(app, "Traffic & resource usage", user_style = {font_size = 18})
+						text(
+							app,
+							"CPU utilization and inbound requests",
+							user_style = {font_size = 12, text_color = Color{0.5, 0.52, 0.57, 1}},
+						)
+					}
+					tabs(
+						app,
+						[]string{"1 hour", "6 hours", "24 hours"},
+						&state.dashboard_range_idx,
+						salt = "dashboard_range",
+					)
+				}
+
+				canvas(
+					app,
+					_dashboard_chart,
+					state,
+					user_style = {
+						width = Percent{100},
+						height = Grow{1},
+						bg_color = Color{0.99, 0.99, 1, 1},
+						border_radius = space(4),
+					},
+					salt = "dashboard_traffic_chart",
+				)
+				{
+					element_open(app, {style = {direction = .ROW, gap = 18, align_items = .CENTER}})
+					defer element_close(app)
+					_dashboard_legend(app, "CPU", Color{0.16, 0.38, 0.78, 1})
+					_dashboard_legend(app, "Requests", Color{0.13, 0.68, 0.55, 1})
+					text(
+						app,
+						fmt.tprintf(
+							"Manual refreshes: %d",
+							state.dashboard_refresh_count,
+						),
+						user_style = {font_size = 12, text_color = Color{0.55, 0.57, 0.61, 1}},
+					)
+				}
+			}
+
+			{
+				element_open(
+					app,
+					{
+						style = {
+							direction = .COLUMN,
+							width = Fixed{230},
+							gap = 12,
+							padding = space(20),
+							bg_color = Color{1, 1, 1, 1},
+							border = space(1),
+							border_color = Color{0.88, 0.89, 0.92, 1},
+							border_radius = space(8),
+						},
+					},
+				)
+				defer element_close(app)
+				text(app, "Service health", user_style = {font_size = 18})
+				_dashboard_service(app, "API Gateway", "Operational", Color{0.12, 0.66, 0.38, 1})
+				_dashboard_service(app, "Auth Service", "Operational", Color{0.12, 0.66, 0.38, 1})
+				_dashboard_service(app, "Media Worker", "Degraded", Color{0.88, 0.55, 0.12, 1})
+				_dashboard_service(app, "Database", "Operational", Color{0.12, 0.66, 0.38, 1})
+				{
+					element_open(app, {style = {height = Fixed{1}, bg_color = Color{0.91, 0.92, 0.94, 1}}})
+					defer element_close(app)
+				}
+				text(app, "99.98%", user_style = {font_size = 28, text_color = Color{0.12, 0.55, 0.34, 1}})
+				text(
+					app,
+					"30-day availability",
+					user_style = {font_size = 12, text_color = Color{0.5, 0.52, 0.57, 1}},
+				)
+			}
+		}
+
+		{
+			element_open(
 				app,
-				"Unlike retained-mode interfaces where the UI tree persists in memory and you mutate it via objects, an immediate-mode GUI rebuilds the layout every frame. This completely eliminates state-syncing bugs between your data and your UI.",
-				user_style = {font_size = 15, text_color = Color{0.3, 0.3, 0.3, 1.0}},
+				{
+					style = {
+						direction = .COLUMN,
+						width = Percent{100},
+						gap = 12,
+						padding = space(18, 20),
+						bg_color = Color{1, 1, 1, 1},
+						border = space(1),
+						border_color = Color{0.88, 0.89, 0.92, 1},
+						border_radius = space(8),
+					},
+				},
 			)
-			accordion_end(app, acc_1)
+			defer element_close(app)
+			{
+				element_open(
+					app,
+					{
+						style = {
+							direction = .ROW,
+							justify_content = .SPACE_BETWEEN,
+							align_items = .CENTER,
+							width = Percent{100},
+						},
+					},
+				)
+				defer element_close(app)
+				text(app, "Recent activity", user_style = {font_size = 18})
+				text(app, "View all", user_style = {font_size = 13, text_color = Color{0.16, 0.38, 0.78, 1}})
+			}
+			_dashboard_activity(app, "Deployment completed", "api-gateway · v2.8.1 deployed to production", "2 min ago", Color{0.12, 0.66, 0.38, 1})
+			_dashboard_activity(app, "Elevated latency detected", "media-worker · p95 latency above 400 ms", "18 min ago", Color{0.88, 0.55, 0.12, 1})
+			_dashboard_activity(app, "Database backup finished", "primary-db · snapshot verified successfully", "42 min ago", Color{0.16, 0.38, 0.78, 1})
 		}
+	}
+}
 
-		if accordion_begin(app, "How does routing work here?", &acc_2) {
-			text(
-				app,
-				"The router uses structural animations. When the navigation index changes, the engine fires a tween on the container's X-axis and Opacity. Once the fade-out completes, it swaps the active procedure pointer and slides the new view in.",
-				user_style = {font_size = 15, text_color = Color{0.3, 0.3, 0.3, 1.0}},
-			)
-			accordion_end(app, acc_2)
-		}
+@(private = "file")
+_dashboard_chart :: proc(renderer: ^sdl.Renderer, bounds: sdl.Rect, data: rawptr) {
+	state := (^Showcase_State)(data)
+	left := bounds.x + 42
+	right := bounds.x + bounds.w - 12
+	top := bounds.y + 10
+	bottom := bounds.y + bounds.h - 25
+	if right <= left || bottom <= top do return
 
-	} // End Page
+	sdl.SetRenderDrawColor(renderer, 229, 232, 238, 255)
+	for row in 0 ..< 4 {
+		y := top + (bottom - top) * i32(row) / 3
+		sdl.RenderDrawLine(renderer, left, y, right, y)
+	}
+
+	for label in 0 ..< 4 {
+		y := top + (bottom - top) * i32(label) / 3
+		sdl.SetRenderDrawColor(renderer, 175, 180, 190, 255)
+		sdl.RenderDrawLine(renderer, left - 4, y, left, y)
+	}
+
+	seconds := f32(state.dashboard_clock_ms) / 1000.0
+	range_scale := f32(state.dashboard_range_idx + 1)
+	sdl.SetRenderDrawColor(renderer, 31, 92, 190, 255)
+	for sample in 0 ..< 63 {
+		x0 := left + (right - left) * i32(sample) / 63
+		x1 := left + (right - left) * i32(sample + 1) / 63
+		t0 := f32(sample) / 63
+		t1 := f32(sample + 1) / 63
+		v0 := 0.54 + 0.19 * math.sin(t0 * 11 * range_scale + seconds * 0.9) +
+		      0.08 * math.sin(t0 * 31 + seconds * 0.27)
+		v1 := 0.54 + 0.19 * math.sin(t1 * 11 * range_scale + seconds * 0.9) +
+		      0.08 * math.sin(t1 * 31 + seconds * 0.27)
+		y0 := bottom - i32(v0 * f32(bottom - top))
+		y1 := bottom - i32(v1 * f32(bottom - top))
+		sdl.RenderDrawLine(renderer, x0, y0, x1, y1)
+	}
+
+	sdl.SetRenderDrawColor(renderer, 20, 166, 132, 255)
+	for sample in 0 ..< 63 {
+		x0 := left + (right - left) * i32(sample) / 63
+		x1 := left + (right - left) * i32(sample + 1) / 63
+		t0 := f32(sample) / 63
+		t1 := f32(sample + 1) / 63
+		v0 := 0.28 + 0.12 * math.sin(t0 * 8 * range_scale + seconds * 0.62 + 1.3) +
+		      0.05 * math.sin(t0 * 24 + seconds * 0.4)
+		v1 := 0.28 + 0.12 * math.sin(t1 * 8 * range_scale + seconds * 0.62 + 1.3) +
+		      0.05 * math.sin(t1 * 24 + seconds * 0.4)
+		y0 := bottom - i32(v0 * f32(bottom - top))
+		y1 := bottom - i32(v1 * f32(bottom - top))
+		sdl.RenderDrawLine(renderer, x0, y0, x1, y1)
+	}
+}
+
+@(private = "file")
+_dashboard_legend :: proc(app: ^App, label: string, color: Color) {
+	element_open(app, {style = {direction = .ROW, gap = 7, align_items = .CENTER}})
+	defer element_close(app)
+	element_open(
+		app,
+		{
+			style = {
+				width = Fixed{9},
+				height = Fixed{9},
+				border_radius = space(5),
+				bg_color = color,
+			},
+		},
+	)
+	element_close(app)
+	text(app, label, user_style = {font_size = 12, text_color = Color{0.35, 0.37, 0.42, 1}})
+}
+
+@(private = "file")
+_dashboard_service :: proc(app: ^App, name, status: string, color: Color) {
+	element_open(app, {style = {direction = .ROW, gap = 8, align_items = .CENTER}})
+	defer element_close(app)
+	element_open(
+		app,
+		{
+			style = {
+				width = Fixed{8},
+				height = Fixed{8},
+				border_radius = space(4),
+				bg_color = color,
+			},
+		},
+	)
+	element_close(app)
+	element_open(app, {style = {direction = .COLUMN, gap = 2}})
+	defer element_close(app)
+	text(app, name, user_style = {font_size = 13})
+	text(app, status, user_style = {font_size = 11, text_color = Color{0.48, 0.5, 0.55, 1}})
+}
+
+@(private = "file")
+_dashboard_activity :: proc(app: ^App, title, detail, time: string, color: Color) {
+	element_open(
+		app,
+		{
+			style = {
+				direction = .ROW,
+				gap = 12,
+				align_items = .CENTER,
+				width = Percent{100},
+			},
+		},
+	)
+	defer element_close(app)
+	element_open(
+		app,
+		{
+			style = {
+				width = Fixed{8},
+				height = Fixed{8},
+				border_radius = space(4),
+				bg_color = color,
+			},
+		},
+	)
+	element_close(app)
+	{
+		element_open(app, {style = {direction = .COLUMN, gap = 2, width = Grow{1}}})
+		defer element_close(app)
+		text(app, title, user_style = {font_size = 13})
+		text(app, detail, user_style = {font_size = 11, text_color = Color{0.48, 0.5, 0.55, 1}})
+	}
+	text(app, time, user_style = {font_size = 11, text_color = Color{0.55, 0.57, 0.61, 1}})
 }
 
 @(private = "file")
