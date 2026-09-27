@@ -117,6 +117,7 @@ Box :: struct {
 	id:                    Box_ID,
 	user_data:             rawptr,
 	warned:                bool,
+	pointer_events:        bool,
 
 	// Sizing Intent
 	width:                 Sizing,
@@ -305,8 +306,10 @@ ID :: proc {
 
 // Generate from the caller's location + an optional salt
 id_from_loc :: proc(loc: runtime.Source_Code_Location, salt: string = "") -> Box_ID {
-	if salt == "" do return id_from_string(fmt.tprintf("%s:%d", loc.file_path, loc.line))
-	return id_from_string(fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt))
+	if salt == "" {
+		return id_from_string(fmt.tprintf("%s:%d:%d", loc.file_path, loc.line, loc.column))
+	}
+	return id_from_string(fmt.tprintf("%s:%d:%d:%s", loc.file_path, loc.line, loc.column, salt))
 }
 
 // Generate from an explicit string
@@ -325,7 +328,7 @@ id_from_string :: proc(str: string) -> Box_ID {
 
 // Generate a sub-component ID from a Parent ID
 id_from_child :: proc(parent: Box_ID, suffix: string) -> Box_ID {
-	hash_input := fmt.tprintf("%d_%s", parent, suffix)
+	hash_input := fmt.tprintf("%d:%s", parent, suffix)
 	return id_from_string(hash_input)
 }
 // Add a quick helper to safely fetch the name
@@ -392,18 +395,18 @@ new_box_from_config :: proc(
 
 	box^ = box_config
 
-	// --- UPDATED ID GENERATION ---
+	box.pointer_events = true
+
 	if box.id == 0 {
 		if len(ctx.parent_stack) > 0 {
-			// Cascade from parent: Hash(ParentID + SiblingIndex + Line)
 			parent := ctx.parent_stack[len(ctx.parent_stack) - 1]
 			child_idx := len(parent.children)
-			id_str := fmt.tprintf("%d_%d_%d", parent.id, child_idx, loc.line)
-			box.id = Box_ID(hash.fnv32a(transmute([]byte)id_str))
+			box.id = ID(
+				parent.id,
+				fmt.tprintf("child:%d:%d:%d", child_idx, loc.line, loc.column),
+			)
 		} else {
-			// Root element fallback: Hash(FilePath + Line)
-			loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
-			box.id = Box_ID(hash.fnv32a(transmute([]byte)loc_str))
+			box.id = ID(loc)
 		}
 	}
 

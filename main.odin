@@ -419,7 +419,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 
 						if button(
 							app,
-							id = ID(fmt.tprintf("usr_row_%d", u.id)),
+							id = ID(ID("user_row"), fmt.tprintf("%d", u.id)),
 							user_style = {
 								width = Percent{100},
 								height = Fixed{60},
@@ -434,7 +434,7 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 						}
 
 						if prev, ok :=
-							   app.ui.layout.prev_all_boxes[ID(fmt.tprintf("usr_row_%d", u.id))];
+							   app.ui.layout.prev_all_boxes[ID(ID("user_row"), fmt.tprintf("%d", u.id))];
 						   ok {
 							overlay_offset := list_item_overlay_offset(prev, 12, 12)
 							{
@@ -1012,7 +1012,10 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 
 							if button(
 								app,
-								id = ID(fmt.tprintf("art_%d_%d", state.rss_selected_feed_idx, i)),
+								id = ID(
+									ID("rss_article"),
+									fmt.tprintf("%d:%d", state.rss_selected_feed_idx, i),
+								),
 								user_style = {
 									width = Percent{100},
 									height = Fit(true),
@@ -1030,7 +1033,10 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 
 							// Overlay the title and date cleanly over the structural button
 							if prev, ok :=
-								   app.ui.layout.prev_all_boxes[ID(fmt.tprintf("art_%d_%d", state.rss_selected_feed_idx, i))];
+								   app.ui.layout.prev_all_boxes[ID(
+									   ID("rss_article"),
+									   fmt.tprintf("%d:%d", state.rss_selected_feed_idx, i),
+								   )];
 							   ok {
 								overlay_offset := list_item_overlay_offset(prev, 16, 12)
 								{

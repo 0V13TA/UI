@@ -1,7 +1,5 @@
 package UI
 
-import "core:hash"
-
 Anim_Target :: union {
 	string,
 	Class,
@@ -341,7 +339,7 @@ _resolve_targets :: proc(ctx: ^UI_Context, target: Anim_Target) -> [dynamic]^Box
 
 	switch t in target {
 	case string:
-		id := Box_ID(hash.fnv32(transmute([]byte)t))
+		id := ID(t)
 		if box, ok := ctx.layout.all_boxes[id]; ok {
 			append(&results, box)
 		}

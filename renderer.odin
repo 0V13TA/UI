@@ -85,6 +85,7 @@ Style :: struct {
 	right:           Maybe(f32),
 	bottom:          Maybe(f32),
 	position:        Maybe(Position),
+	pointer_events:  Maybe(bool),
 
 	// Scrolling
 	overflow_x:      Maybe(Overflow),
@@ -810,6 +811,10 @@ apply_style_block :: proc(el: ^Element, s: Style, ctx: ^UI_Context) {
 		el._box.position = v
 	}
 
+	if v, ok := s.pointer_events.?; ok {
+		el._box.pointer_events = v
+	}
+
 	if v, ok := s.top.?; ok {
 		el._box.top = v
 	}
@@ -936,6 +941,7 @@ merge_styles :: proc(base: Style, override: Style) -> Style {
 
 	// Positioning
 	if override.position != nil do result.position = override.position
+	if override.pointer_events != nil do result.pointer_events = override.pointer_events
 	if override.top != nil do result.top = override.top
 	if override.left != nil do result.left = override.left
 	if override.right != nil do result.right = override.right
@@ -1552,19 +1558,12 @@ resolve_id :: proc(app: ^App, id: Box_ID, salt: string = "", loc := #caller_loca
 		if len(layout.parent_stack) > 0 {
 			parent := layout.parent_stack[len(layout.parent_stack) - 1]
 			child_idx := len(parent.children)
-			id_str := fmt.tprintf("%d_%d_%d", parent.id, child_idx, loc.line)
-			return Box_ID(hash.fnv32a(transmute([]byte)id_str))
+			return ID(parent.id, fmt.tprintf("child:%d:%d:%d:%s", child_idx, loc.line, loc.column, salt))
 		}
-		// Fallback if CASCADE_ID is used at the root (no parent)
-		loc_str := fmt.tprintf("%s:%d", loc.file_path, loc.line)
-		return Box_ID(hash.fnv32a(transmute([]byte)loc_str))
+		return ID(loc, salt)
 	}
 
-	// Default auto-generation (id == 0)
-	if salt == "" {
-		return id_from_string(fmt.tprintf("%s:%d", loc.file_path, loc.line))
-	}
-	return id_from_string(fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt))
+	return ID(loc, salt)
 }
 
 element_open :: proc(app: ^App, el_val: Element, loc := #caller_location) -> ^Element {

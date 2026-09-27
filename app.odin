@@ -150,14 +150,9 @@ app_begin_frame :: proc(app: ^App) {
 				app.window_h = event.window.data2
 			}
 
-		case .KEYDOWN:
-			// Let the OS or user toggle debug overlays natively outside of the core event pump
-			if event.key.keysym.sym == .TAB {
-				has_shift := (transmute(u16)event.key.keysym.mod & 0x0003) != 0
-				cycle_focus(app.ev, reverse = has_shift)
-			}
 		}
 	}
+	clear(&app.ev.focus_order)
 
 	// Resolve Cursor State
 	target_cursor := app.cursor_arrow
@@ -182,6 +177,11 @@ app_begin_frame :: proc(app: ^App) {
 
 app_end_frame :: proc(app: ^App) {
 	roots := ui_layout_tree(app.ui)
+	if app.ev.focused_id != 0 {
+		_, box_exists := app.ui.layout.all_boxes[app.ev.focused_id]
+		callbacks, has_callbacks := app.ev.listeners[app.ev.focused_id]
+		if !box_exists || !has_callbacks || !callbacks.focusable do set_focus(app.ev, 0)
+	}
 
 	// Apply structural animations before constraints are resolved
 	for root in roots {
@@ -212,6 +212,28 @@ app_end_frame :: proc(app: ^App) {
 
 	// Draw the generated UI Box Tree
 	render_tree(app.ui, app.renderer, roots)
+	if app.ev.focus_visible && app.ev.focused_id != 0 {
+		if focused, ok := app.ui.layout.all_boxes[app.ev.focused_id]; ok {
+			previous_clip: Maybe(Rect) = nil
+			if clip, has_clip := focused.clip_rect.?; has_clip {
+				previous_clip = clip
+				clip_rect := sdl.Rect{i32(clip.x), i32(clip.y), i32(clip.width), i32(clip.height)}
+				sdl.RenderSetClipRect(app.renderer, &clip_rect)
+			}
+
+			for inset in -2 ..< 1 {
+				rect := sdl.Rect {
+					i32(focused.x) + i32(inset),
+					i32(focused.y) + i32(inset),
+					i32(focused.computed_width) - i32(inset) * 2,
+					i32(focused.computed_height) - i32(inset) * 2,
+				}
+				sdl.SetRenderDrawColor(app.renderer, 30, 115, 235, 255)
+				sdl.RenderDrawRect(app.renderer, &rect)
+			}
+			if previous_clip != nil do sdl.RenderSetClipRect(app.renderer, nil)
+		}
+	}
 
 	// Swap Buffers
 	sdl.RenderPresent(app.renderer)

@@ -38,7 +38,7 @@ text :: proc(
 
 	final_id := resolve_id(app, id, salt, loc)
 
-	register(ev_ctx, final_id, Event_Callbacks{focusable = true})
+	register(ev_ctx, final_id, Event_Callbacks{focusable = true, skip_tab = true})
 
 	is_pressed := ev_ctx.pressed_id == final_id
 	just_pressed := is_pressed && ev_ctx.prev_pressed_id != final_id
@@ -139,7 +139,11 @@ button :: proc(
 	is_pressed := ev_ctx.pressed_id == final_id
 	is_clicked := ev_ctx.clicked_this_frame[final_id] or_else false
 
-	register(ev_ctx, final_id, Event_Callbacks{focusable = true, cursor = .HAND})
+	register(
+		ev_ctx,
+		final_id,
+		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+	)
 
 	final_style := merge_styles(DEFAULT_BUTTON_STYLE, user_style)
 	bg := final_style.bg_color.? or_else Color{0.15, 0.4, 0.8, 1.0}
@@ -197,7 +201,7 @@ tooltip_begin :: proc(
 	if final_style.left == nil do final_style.left = target_x
 	if final_style.top == nil do final_style.top = target_y + target_h + 10.0
 
-	tooltip_id := Box_ID(hash.fnv32(transmute([]byte)fmt.tprintf("tooltip_%d", target_id)))
+	tooltip_id := ID(target_id, "tooltip")
 	element_open(app, Element{_box = {id = tooltip_id}, style = final_style}, loc)
 	return true
 }
@@ -219,8 +223,7 @@ scroll_begin :: proc(
 	ev_ctx := app.ev
 	final_id := id
 	if final_id == 0 {
-		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-		final_id = ID(hash_input)
+		final_id = ID(loc, salt)
 	}
 
 	final_style := user_style
@@ -355,7 +358,11 @@ checkbox :: proc(
 	box_id := ID(root_id, "box")
 	text_id := ID(root_id, "text")
 
-	register(ev_ctx, root_id, Event_Callbacks{focusable = true, cursor = .HAND})
+	register(
+		ev_ctx,
+		root_id,
+		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+	)
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
 
 	is_hovered := is_tree_hovered(app, root_id)
@@ -418,14 +425,15 @@ radio :: proc(
 ) -> bool {
 	ui_ctx := app.ui
 	ev_ctx := app.ev
-	hash_input := id
-	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
+	root_id := ID(id) if id != "" else ID(loc, salt)
+	button_id := ID(root_id, "button")
+	text_id := ID(root_id, "text")
 
-	root_id := ID(hash_input)
-	button_id := ID(fmt.tprintf("%d_btn", root_id))
-	text_id := ID(fmt.tprintf("%d_text", root_id))
-
-	register(ev_ctx, root_id, Event_Callbacks{focusable = true, cursor = .HAND})
+	register(
+		ev_ctx,
+		root_id,
+		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+	)
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = value
 	is_active := state^ == value
 
@@ -501,7 +509,7 @@ slider :: proc(
 	track_id := ID(root_id, "track")
 	thumb_id := ID(root_id, "thumb")
 
-	register(ev_ctx, root_id, Event_Callbacks{focusable = true})
+	register(ev_ctx, root_id, Event_Callbacks{focusable = true, activate_on_key = true})
 
 	changed = false
 	target_val := value^
@@ -998,8 +1006,7 @@ image_texture :: proc(
 	ui_ctx := app.ui
 	final_id := id
 	if final_id == 0 {
-		hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-		final_id = ID(hash_input)
+		final_id = ID(loc, salt)
 	}
 
 	final_style := user_style
@@ -1046,11 +1053,14 @@ image_button :: proc(
 	ui_ctx := app.ui
 	ev_ctx := app.ev
 	sdl_rend := app.renderer
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	id := ID(hash_input)
+	id := ID(loc, salt)
 
 	is_clicked := ev_ctx.clicked_this_frame[id] or_else false
-	register(ev_ctx, id, Event_Callbacks{focusable = true, cursor = .HAND})
+	register(
+		ev_ctx,
+		id,
+		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+	)
 
 	path_hash := hash.fnv32(transmute([]byte)path)
 	tex, exists := ui_ctx.image_cache[path_hash]
@@ -1130,9 +1140,7 @@ video :: proc(
 	anim_ctx := app.anim
 	sdl_rend := app.renderer
 
-	hash_input := id
-	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	root_id := ID(hash_input)
+	root_id := ID(id) if id != "" else ID(loc, salt)
 
 	if path not_in ui_ctx.videos {
 		ui_ctx.videos[path] = video_player_init(sdl_rend, path)
@@ -1163,7 +1171,7 @@ video :: proc(
 		}
 
 		if player != nil {
-			overlay_id := ID(fmt.tprintf("%d_overlay", root_id))
+			overlay_id := ID(root_id, "overlay")
 			should_show := is_tree_hovered(app, root_id) || is_scrubbing^
 
 			if should_show != overlay_active^ {
@@ -1302,11 +1310,10 @@ popover_begin :: proc(
 	anim_ctx := app.anim
 	if !is_open^ do return false
 
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	root_id := ID(hash_input)
+	root_id := ID(loc, salt)
 
-	backdrop_id := ID(fmt.tprintf("%d_backdrop", root_id))
-	content_id := ID(fmt.tprintf("%d_content", root_id))
+	backdrop_id := ID(root_id, "backdrop")
+	content_id := ID(root_id, "content")
 
 	register(ev_ctx, backdrop_id, Event_Callbacks{focusable = true})
 
@@ -1416,9 +1423,7 @@ dropdown :: proc(
 	ev_ctx := app.ev
 	anim_ctx := app.anim
 	changed := false
-	hash_input := id
-	if id == "" do hash_input = fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	root_id := ID(hash_input)
+	root_id := ID(id) if id != "" else ID(loc, salt)
 
 	display_text := label
 	if selected_idx^ >= 0 && selected_idx^ < len(options) {
@@ -1442,7 +1447,7 @@ dropdown :: proc(
 		defer popover_end(app, true)
 
 		for opt, i in options {
-			opt_id := ID(fmt.tprintf("%d_opt_%d", root_id, i))
+			opt_id := ID(root_id, fmt.tprintf("option:%d", i))
 
 			is_selected := selected_idx^ == i
 			opt_bg := is_selected ? Color{0.15, 0.4, 0.8, 1.0} : Color{0, 0, 0, 0}
@@ -1507,10 +1512,9 @@ modal_begin :: proc(
 	anim_ctx := app.anim
 	if !is_open^ do return false
 
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	root_id := ID(hash_input)
-	backdrop_id := ID(fmt.tprintf("%d_backdrop", root_id))
-	content_id := ID(fmt.tprintf("%d_content", root_id))
+	root_id := ID(loc, salt)
+	backdrop_id := ID(root_id, "backdrop")
+	content_id := ID(root_id, "content")
 
 	register(ev_ctx, backdrop_id, Event_Callbacks{focusable = true})
 
@@ -1600,10 +1604,9 @@ context_menu_begin :: proc(
 	anim_ctx := app.anim
 	if !is_open^ do return false, 0
 
-	hash_input := fmt.tprintf("%s:%d:%s", loc.file_path, loc.line, salt)
-	root_id := ID(hash_input)
-	backdrop_id := ID(fmt.tprintf("%d_backdrop", root_id))
-	content_id := ID(fmt.tprintf("%d_content", root_id))
+	root_id := ID(loc, salt)
+	backdrop_id := ID(root_id, "backdrop")
+	content_id := ID(root_id, "content")
 
 	register(ev_ctx, backdrop_id, Event_Callbacks{focusable = true})
 	if ev_ctx.hovered_id == backdrop_id && (ev_ctx.clicked_this_frame[backdrop_id] or_else false) {
@@ -1698,7 +1701,11 @@ switch_toggle :: proc(
 	thumb_id := ID(root_id, "thumb")
 	text_id := ID(root_id, "text")
 
-	register(ev_ctx, root_id, Event_Callbacks{focusable = true, cursor = .HAND})
+	register(
+		ev_ctx,
+		root_id,
+		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+	)
 	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
 
 	is_hovered := is_tree_hovered(app, root_id)
@@ -2222,7 +2229,6 @@ accordion_begin :: proc(
 	anim_ctx := app.anim
 	sdl_rend := app.renderer
 
-	final_id := id == "" ? fmt.tprintf("%s:%d:%d", loc.file_path, loc.line, loc.column) : id
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	header_id := ID(root_id, "header")
 	content_id := ID(root_id, "content")
@@ -2230,7 +2236,11 @@ accordion_begin :: proc(
 	final_wrapper := merge_styles(DEFAULT_ACCORDION_WRAPPER_STYLE, wrapper_style)
 	element_open(app, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
-	register(ev_ctx, header_id, Event_Callbacks{focusable = true, cursor = .HAND})
+	register(
+		ev_ctx,
+		header_id,
+		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+	)
 	if ev_ctx.clicked_this_frame[header_id] or_else false {
 		is_expanded^ = !is_expanded^
 	}
@@ -2940,7 +2950,11 @@ color_picker :: proc(
 	final_swatch := DEFAULT_COLOR_PICKER_SWATCH
 	final_swatch.bg_color = transmute(Color)color^
 
-	register(ev_ctx, swatch_id, Event_Callbacks{focusable = true, cursor = .HAND})
+	register(
+		ev_ctx,
+		swatch_id,
+		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+	)
 	if ev_ctx.clicked_this_frame[swatch_id] or_else false do is_open^ = !is_open^
 	element_open(app, Element{_box = {id = swatch_id}, style = final_swatch})
 	element_close(app)
@@ -3376,6 +3390,7 @@ debug_panel :: proc(app: ^App, is_open: ^bool) {
 						border = space(2),
 						border_color = Color{0.2, 0.6, 1.0, 1.0},
 						z_index = 99998,
+						pointer_events = false,
 					},
 				},
 			)
@@ -3462,8 +3477,12 @@ debug_panel :: proc(app: ^App, is_open: ^bool) {
 		pinned_node_id = 0
 	}
 
-	// Only highlight nodes being hovered directly in the debug tree
-	if tree_hover_target != 0 {
+	hovered_target_id := ev_ctx.hovered_id
+	if hovered_box, ok := ui_ctx.layout.prev_all_boxes[hovered_target_id];
+	   ok && !is_debug_inspector_box(hovered_box, debug_panel_id) &&
+	   hovered_target_id != highlight_id {
+		active_target_id = hovered_target_id
+	} else if tree_hover_target != 0 {
 		active_target_id = tree_hover_target
 	} else {
 		active_target_id = pinned_node_id
@@ -3664,6 +3683,14 @@ debug_panel :: proc(app: ^App, is_open: ^bool) {
 }
 
 @(private = "file")
+is_debug_inspector_box :: proc(box: ^Box, debug_panel_id: Box_ID) -> bool {
+	for current := box; current != nil; current = current.parent {
+		if current.id == debug_panel_id do return true
+	}
+	return false
+}
+
+@(private = "file")
 _render_debug_node :: proc(
 	app: ^App,
 	box: ^Box,
@@ -3689,7 +3716,11 @@ _render_debug_node :: proc(
 	is_hovered := is_tree_hovered(app, row_id)
 	if is_hovered do hovered_target^ = box.id
 
-	register(ev_ctx, row_id, Event_Callbacks{focusable = true, cursor = .HAND})
+	register(
+		ev_ctx,
+		row_id,
+		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+	)
 	if ev_ctx.clicked_this_frame[row_id] or_else false {
 		expanded_nodes[box.id] = !expanded_nodes[box.id]
 		clicked_target^ = box.id
