@@ -3842,6 +3842,7 @@ _textarea_key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 	ev_ctx := (^Event_Context)(data)
 
 	gb := ev_ctx.focused_gap_buffer
+	if gb == nil do return
 
 	has_shift := (transmute(u16)e.key_mod & 0x0003) != 0
 	has_ctrl := (transmute(u16)e.key_mod & 0x00C0) != 0
@@ -4229,20 +4230,25 @@ textarea :: proc(
 	was_pressed := ev_ctx.prev_pressed_id == root_id
 	just_pressed := is_pressed && !was_pressed
 	is_dragging := is_pressed && was_pressed
+	was_clicked := ev_ctx.clicked_this_frame[root_id] or_else false
 
-	if is_pressed {
+	if is_pressed || was_clicked {
 		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
-			mx, my: i32
-			sdl.GetMouseState(&mx, &my)
+			mx, my := ev_ctx.click_x, ev_ctx.click_y
+			if !was_clicked {
+				mouse_x, mouse_y: i32
+				sdl.GetMouseState(&mouse_x, &mouse_y)
+				mx, my = f32(mouse_x), f32(mouse_y)
+			}
 
 			// Convert global mouse coordinates to local scrolled space
 			scroll_x := ev_ctx.scroll_offsets_x[root_id]
 			scroll_y := ev_ctx.scroll_offsets_y[root_id]
 
 			local_x :=
-				f32(mx) - prev_outer.x - prev_outer.border[3] - prev_outer.padding[3] + scroll_x
+				mx - prev_outer.x - prev_outer.border[3] - prev_outer.padding[3] + scroll_x
 			local_y :=
-				f32(my) - prev_outer.y - prev_outer.border[0] - prev_outer.padding[0] + scroll_y
+				my - prev_outer.y - prev_outer.border[0] - prev_outer.padding[0] + scroll_y
 
 			// Determine inner viewport width for text wrapping bounds
 			viewport_width :=
@@ -4264,7 +4270,8 @@ textarea :: proc(
 			gap_buffer_move_cursor(buffer, best_cursor, is_dragging)
 
 			// Reset blink timer so the caret stays solid while clicking/dragging
-			if just_pressed || ev_ctx.cursor_last_position[root_id] != best_cursor {
+			if just_pressed || was_clicked ||
+			   ev_ctx.cursor_last_position[root_id] != best_cursor {
 				ev_ctx.cursor_blink_start[root_id] = u64(sdl.GetTicks())
 				ev_ctx.cursor_last_position[root_id] = best_cursor
 			}
@@ -4352,6 +4359,7 @@ textarea :: proc(
 		element_open(
 			app,
 			Element {
+				_box = {id = ID(root_id, "caret")},
 				style = {
 					position = .ABSOLUTE,
 					left = cursor_x,

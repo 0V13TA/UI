@@ -40,6 +40,7 @@ Event_Context :: struct {
 	focused_id:           Box_ID,
 	prev_focused_id:      Box_ID,
 	prev_pressed_id:      Box_ID,
+	click_x, click_y:     f32,
 	context_menu_target:  Box_ID,
 	clicked_this_frame:   map[Box_ID]bool,
 	scroll_offsets_x:     map[Box_ID]f32,
@@ -250,6 +251,8 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 							mouse_x = f32(mx),
 							mouse_y = f32(my),
 						}
+						ctx.click_x = ui_ev.mouse_x
+						ctx.click_y = ui_ev.mouse_y
 						bubble_event(ctx, target_box, .Click, &ui_ev)
 					}
 				}
