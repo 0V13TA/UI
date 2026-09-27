@@ -436,14 +436,15 @@ page_directory :: proc(app: ^App, app_state: rawptr) {
 						if prev, ok :=
 							   app.ui.layout.prev_all_boxes[ID(fmt.tprintf("usr_row_%d", u.id))];
 						   ok {
+							overlay_offset := list_item_overlay_offset(prev, 12, 12)
 							{
 								element_open(
 									app,
 									{
 										style = {
 											position = .ABSOLUTE,
-											left = prev.x + 12,
-											top = prev.y + 12,
+											left = overlay_offset[0],
+											top = overlay_offset[1],
 											direction = .ROW,
 											gap = 12,
 											align_items = .CENTER,
@@ -974,6 +975,7 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 						app,
 						{
 							style = {
+								width   = Percent{100},
 								padding = space(16),
 								border = space(0, 0, 1, 0),
 								border_color = Color{0.9, 0.9, 0.9, 1},
@@ -1030,14 +1032,15 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 							if prev, ok :=
 								   app.ui.layout.prev_all_boxes[ID(fmt.tprintf("art_%d_%d", state.rss_selected_feed_idx, i))];
 							   ok {
+								overlay_offset := list_item_overlay_offset(prev, 16, 12)
 								{
 									element_open(
 										app,
 										{
 											style = {
 												position = .ABSOLUTE,
-												left = prev.x + 16,
-												top = prev.y + 12,
+												left = overlay_offset[0],
+												top = overlay_offset[1],
 												direction = .COLUMN,
 												gap = 4,
 												width = Fixed{prev.computed_width - 32},
@@ -1191,6 +1194,17 @@ page_rss_reader :: proc(app: ^App, app_state: rawptr) {
 // ==============================================================================
 // HELPERS
 // ==============================================================================
+
+@(private = "file")
+list_item_overlay_offset :: proc(target: ^Box, inset_x, inset_y: f32) -> [2]f32 {
+	assert(target.parent != nil)
+	parent := target.parent
+	content_x := parent.x + parent.padding[Side.LEFT] + parent.border[Side.LEFT] -
+	             parent.offset_x
+	content_y := parent.y + parent.padding[Side.TOP] + parent.border[Side.TOP] -
+	             parent.offset_y
+	return {target.x - content_x + inset_x, target.y - content_y + inset_y}
+}
 
 @(private = "file")
 seed_initial_users :: proc(state: ^Showcase_State) {
