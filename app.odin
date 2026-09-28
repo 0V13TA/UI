@@ -1,5 +1,6 @@
 package UI
 
+import "base:runtime"
 import "core:fmt"
 import sdl "vendor:sdl2"
 import "vendor:sdl2/ttf"
@@ -128,6 +129,13 @@ app_destroy :: proc(app: ^App) {
 	ttf.Quit()
 	sdl.Quit()
 	free(app)
+}
+
+@(export)
+odin_app_start :: proc "c" () -> i32 {
+	context = runtime.default_context()
+	main()
+	return 0
 }
 
 app_begin_frame :: proc(app: ^App) {

@@ -1,23 +1,23 @@
-sdl2:
-  cmake -S SDL -B build/sdl2 -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_TESTS=OFF {{env_var_or_default("SDL_CMAKE_ARGS", "")}}
-  cmake --build build/sdl2 --parallel
-  cmake --install build/sdl2 --prefix "$PWD/build/sdl2-install"
-
 sdl2-sources:
-  mkdir -p build/sources/SDL_image build/sources/SDL_ttf
-  git -C SDL_image archive release-2.8.8 | tar -x -C build/sources/SDL_image
-  git -C SDL_ttf archive release-2.24.0 | tar -x -C build/sources/SDL_ttf
+  test -f third_party/SDL2_image-2.8.8/CMakeLists.txt
+  test -f third_party/SDL2_ttf-2.24.0/CMakeLists.txt
+  test -f third_party/SDL2_ttf-2.24.0/external/freetype/CMakeLists.txt
+
+sdl2:
+  cmake -S SDL -B build/desktop/sdl2 -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_TESTS=OFF {{env_var_or_default("SDL_CMAKE_ARGS", "")}}
+  cmake --build build/desktop/sdl2 --parallel
+  cmake --install build/desktop/sdl2 --prefix "$PWD/build/desktop/sdl2-install"
 
 sdl2-image: sdl2 sdl2-sources
-  cmake -S build/sources/SDL_image -B build/sdl2-image -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$PWD/build/sdl2-install" -DSDL2_DIR="$PWD/build/sdl2-install/lib/cmake/SDL2" -DSDL2IMAGE_SAMPLES=OFF -DSDL2IMAGE_TESTS=OFF -DSDL2IMAGE_INSTALL=OFF {{env_var_or_default("SDL_CMAKE_ARGS", "")}}
-  cmake --build build/sdl2-image --parallel
+  cmake -S third_party/SDL2_image-2.8.8 -B build/desktop/sdl2-image -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$PWD/build/desktop/sdl2-install" -DSDL2_DIR="$PWD/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2IMAGE_SAMPLES=OFF -DSDL2IMAGE_TESTS=OFF -DSDL2IMAGE_INSTALL=OFF {{env_var_or_default("SDL_CMAKE_ARGS", "")}}
+  cmake --build build/desktop/sdl2-image --parallel
 
 sdl2-ttf: sdl2 sdl2-sources
-  cmake -S build/sources/SDL_ttf -B build/sdl2-ttf -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$PWD/build/sdl2-install" -DSDL2_DIR="$PWD/build/sdl2-install/lib/cmake/SDL2" -DSDL2TTF_SAMPLES=OFF -DSDL2TTF_INSTALL=OFF {{env_var_or_default("SDL_CMAKE_ARGS", "")}}
-  cmake --build build/sdl2-ttf --parallel
+  cmake -S third_party/SDL2_ttf-2.24.0 -B build/desktop/sdl2-ttf -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$PWD/build/desktop/sdl2-install" -DSDL2_DIR="$PWD/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2TTF_SAMPLES=OFF -DSDL2TTF_INSTALL=OFF {{env_var_or_default("SDL_CMAKE_ARGS", "")}}
+  cmake --build build/desktop/sdl2-ttf --parallel
 
 build: sdl2-image sdl2-ttf
-  odin build . -collection:ffmpeg=ffmpeg-bindings -out:UI -extra-linker-flags:'-Lbuild/sdl2-install/lib -Lbuild/sdl2-image -Lbuild/sdl2-ttf -Wl,-rpath,$ORIGIN/build/sdl2-install/lib:$ORIGIN/build/sdl2-image:$ORIGIN/build/sdl2-ttf'
+  odin build . -collection:ffmpeg=ffmpeg-bindings -out:UI -extra-linker-flags:'-Lbuild/desktop/sdl2-install/lib -Lbuild/desktop/sdl2-image -Lbuild/desktop/sdl2-ttf -Wl,-rpath,$ORIGIN/build/desktop/sdl2-install/lib:$ORIGIN/build/desktop/sdl2-image:$ORIGIN/build/desktop/sdl2-ttf'
 
 run: debug
   ./UI
@@ -26,4 +26,28 @@ run-normal: build
   ./UI
 
 debug: sdl2-image sdl2-ttf
-  odin build . -collection:ffmpeg=ffmpeg-bindings -debug -out:UI -extra-linker-flags:'-Lbuild/sdl2-install/lib -Lbuild/sdl2-image -Lbuild/sdl2-ttf -Wl,-rpath,$ORIGIN/build/sdl2-install/lib:$ORIGIN/build/sdl2-image:$ORIGIN/build/sdl2-ttf'
+  odin build . -collection:ffmpeg=ffmpeg-bindings -debug -out:UI -extra-linker-flags:'-Lbuild/desktop/sdl2-install/lib -Lbuild/desktop/sdl2-image -Lbuild/desktop/sdl2-ttf -Wl,-rpath,$ORIGIN/build/desktop/sdl2-install/lib:$ORIGIN/build/desktop/sdl2-image:$ORIGIN/build/desktop/sdl2-ttf'
+
+android-sdk := env_var_or_default("ANDROID_SDK_ROOT", env_var_or_default("ANDROID_HOME", ""))
+android-ndk := env_var_or_default("ANDROID_NDK_HOME", env_var_or_default("ANDROID_NDK_ROOT", android-sdk + "/ndk/26.3.11579264"))
+android-ffmpeg := env_var_or_default("ANDROID_FFMPEG_ROOT", "Android-FFmpeg-Prebuilt/ffmpeg-9.0")
+android-jni-libs := "$PWD/build/android/jniLibs/arm64-v8a"
+android-ffmpeg-link := "$PWD/build/android/ffmpeg-link"
+
+android-native: sdl2-sources
+  test -f "{{android-ndk}}/build/cmake/android.toolchain.cmake" || (echo "Set ANDROID_NDK_HOME to the installed Android NDK." >&2; exit 1)
+  test -f "{{android-ffmpeg}}/libffmpeg.so" || (echo "Set ANDROID_FFMPEG_ROOT to the Android arm64 FFmpeg directory." >&2; exit 1)
+  mkdir -p {{android-jni-libs}} {{android-ffmpeg-link}}
+  ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libavcodec.so
+  ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libavformat.so
+  ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libavutil.so
+  ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libswresample.so
+  cmake -S android/native -B build/android/native -DCMAKE_TOOLCHAIN_FILE="{{android-ndk}}/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 -DFFMPEG_ROOT="$PWD/{{android-ffmpeg}}" -DANDROID_JNI_LIBS_DIR={{android-jni-libs}} -DFFMPEG_LINK_DIR={{android-ffmpeg-link}}
+  cmake --build build/android/native --parallel
+
+android-apk: android-native
+  ANDROID_HOME="{{android-sdk}}" ANDROID_SDK_ROOT="{{android-sdk}}" SDL_ANDROID_HOME="$PWD/SDL/android-project" SDL_ANDROID_APP="$PWD/android" SDL_ANDROID_FFMPEG="$PWD/{{android-ffmpeg}}" SDL_ANDROID_NDK="{{android-ndk}}" ./SDL/android-project/gradlew -p android assembleDebug
+
+android-install: android-apk
+  adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+  adb shell am start -n org.odin.ui/org.libsdl.app.SDLActivity
