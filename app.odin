@@ -29,6 +29,10 @@ App :: struct {
 	cursor_ibeam: ^sdl.Cursor,
 }
 
+// SDL2 handles the actual entry point via SDL_main in android_entry.c.
+@(export)
+android_main :: proc "c" (app: rawptr) {}
+
 app_init :: proc(
 	title: cstring,
 	width, height: i32,

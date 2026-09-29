@@ -10,7 +10,7 @@ import "core:fmt"
 import "core:slice"
 import "core:strings"
 import "core:sync"
-import "core:thread"
+import "base:runtime"
 import "core:time"
 import sdl "vendor:sdl2"
 
@@ -47,9 +47,9 @@ Video_Player :: struct {
 	total_audio_bytes_queued: u64,
 
 	// --- Threading ---
-	decoder_thread:           ^thread.Thread,
+	decoder_thread:           ^sdl.Thread,
 	frame_queue:              [dynamic]Video_Frame,
-	queue_mutex:              sync.Mutex,
+	queue_mutex:              ^sdl.Mutex,
 	quit_flag:                bool,
 }
 
@@ -208,7 +208,9 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 		}
 	}
 
-	player.decoder_thread = thread.create_and_start_with_data(player, ffmpeg_worker_thread)
+  player.queue_mutex = sdl.CreateMutex()
+
+  player.decoder_thread = sdl.CreateThread(ffmpeg_worker_thread, "FFmpegWorker", player)
 	return player
 }
 
@@ -218,9 +220,9 @@ video_player_update :: proc(player: ^Video_Player, dt: f64) {
 
 	// --- MASTER AUDIO CLOCK ---
 	if player.audio_dev > 0 && player.audio_sample_rate > 0 {
-		sync.lock(&player.queue_mutex)
+    sdl.LockMutex(player.queue_mutex)
 		total_queued := player.total_audio_bytes_queued
-		sync.unlock(&player.queue_mutex)
+		sdl.UnlockMutex(player.queue_mutex)
 
 		// Current true time = (Lifetime Bytes - Bytes Still Waiting to Play) / Bytes Per Second
 		unplayed_bytes := u64(sdl.GetQueuedAudioSize(player.audio_dev))
@@ -235,7 +237,7 @@ video_player_update :: proc(player: ^Video_Player, dt: f64) {
 
 	valid_frame: Maybe(Video_Frame) = nil
 
-	sync.lock(&player.queue_mutex)
+	sdl.LockMutex(player.queue_mutex)
 	for len(player.frame_queue) > 0 {
 		// If the frame's presentation timestamp is in the past, it's ready to play
 		if player.playback_time >= player.frame_queue[0].pts {
@@ -253,7 +255,7 @@ video_player_update :: proc(player: ^Video_Player, dt: f64) {
 			break
 		}
 	}
-	sync.unlock(&player.queue_mutex)
+	sdl.UnlockMutex(player.queue_mutex)
 
 	if frame, ok := valid_frame.?; ok {
 		sdl.UpdateYUVTexture(
@@ -276,8 +278,8 @@ video_player_update :: proc(player: ^Video_Player, dt: f64) {
 
 video_player_destroy :: proc(player: ^Video_Player) {
 	player.quit_flag = true
-	thread.join(player.decoder_thread)
-	thread.destroy(player.decoder_thread)
+  sdl.WaitThread(player.decoder_thread, nil)
+	sdl.DestroyMutex(player.queue_mutex)
 
 	sdl.DestroyTexture(player.texture)
 
@@ -304,14 +306,16 @@ video_player_destroy :: proc(player: ^Video_Player) {
 }
 
 video_player_seek :: proc(player: ^Video_Player, time_sec: f64) {
-	sync.lock(&player.queue_mutex)
+	sdl.LockMutex(player.queue_mutex)
 	player.seek_target = time_sec
 	player.seek_req = true
-	sync.unlock(&player.queue_mutex)
+	sdl.UnlockMutex(player.queue_mutex)
 }
 
 @(private = "file")
-ffmpeg_worker_thread :: proc(data: rawptr) {
+ffmpeg_worker_thread :: proc "c" (data: rawptr) -> int {
+  context = runtime.default_context()
+
 	player := cast(^Video_Player)data
 
 	pkt: ^types.Packet = avcodec.packet_alloc()
@@ -328,7 +332,7 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 	just_sought := false
 
 	for player.is_playing {
-		sync.lock(&player.queue_mutex)
+		sdl.LockMutex(player.queue_mutex)
 		if player.seek_req {
 			target_ts := i64(player.seek_target * 1000000.0) // AV_TIME_BASE
 			avformat.seek_frame(player.fmt_ctx, -1, target_ts, {.Backward}) // 1 = AVSEEK_FLAG_BACKWARD
@@ -346,16 +350,16 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 			player.seek_req = false
 			just_sought = true
 		}
-		sync.unlock(&player.queue_mutex)
+		sdl.UnlockMutex(player.queue_mutex)
 
 		for !player.quit_flag {
-			sync.lock(&player.queue_mutex)
+			sdl.LockMutex(player.queue_mutex)
 			if player.seek_req {
-				sync.unlock(&player.queue_mutex)
+				sdl.UnlockMutex(player.queue_mutex)
 				break
 			}
 			queue_len := len(player.frame_queue)
-			sync.unlock(&player.queue_mutex)
+			sdl.UnlockMutex(player.queue_mutex)
 
 			if queue_len >= MAX_BUFFERED_FRAMES {
 				time.sleep(time.Millisecond * 5)
@@ -374,18 +378,18 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 						a_tb :=
 							f64(a_stream.time_base.numerator) / f64(a_stream.time_base.denominator)
 
-						sync.lock(&player.queue_mutex)
+						sdl.LockMutex(player.queue_mutex)
 						player.audio_clock_offset = f64(pkt.pts) * a_tb
-						sync.unlock(&player.queue_mutex)
+						sdl.UnlockMutex(player.queue_mutex)
 						just_sought = false
 					}
 				} else if pkt.stream_index == player.video_stream_idx &&
 				   player.audio_stream_idx == -1 {
 					// Fallback clock sync for silent video tracks
 					if pkt.pts != -9223372036854775808 {
-						sync.lock(&player.queue_mutex)
+						sdl.LockMutex(player.queue_mutex)
 						player.playback_time = f64(pkt.pts) * time_base
-						sync.unlock(&player.queue_mutex)
+						sdl.UnlockMutex(player.queue_mutex)
 						just_sought = false
 					}
 				}
@@ -441,9 +445,9 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 							)
 						}
 
-						sync.lock(&player.queue_mutex)
+						sdl.LockMutex(player.queue_mutex)
 						append(&player.frame_queue, new_frame)
-						sync.unlock(&player.queue_mutex)
+						sdl.UnlockMutex(player.queue_mutex)
 
 						avutil.frame_unref(frame)
 					}
@@ -481,9 +485,9 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 							sdl.QueueAudio(player.audio_dev, raw_data(out_buf), byte_size)
 
 							// Accumulate the lifetime byte count for A/V sync
-							sync.lock(&player.queue_mutex)
+							sdl.LockMutex(player.queue_mutex)
 							player.total_audio_bytes_queued += u64(byte_size)
-							sync.unlock(&player.queue_mutex)
+							sdl.UnlockMutex(player.queue_mutex)
 						}
 
 						// Cleanup
@@ -494,4 +498,5 @@ ffmpeg_worker_thread :: proc(data: rawptr) {
 			}
 		}
 	}
+  return 0
 }
