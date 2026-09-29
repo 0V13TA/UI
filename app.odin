@@ -62,6 +62,7 @@ app_init :: proc(
 		height,
 		flags,
 	)
+	sdl.GetWindowSize(app.window, &app.window_w, &app.window_h)
 
 	app.renderer = sdl.CreateRenderer(
 		app.window,

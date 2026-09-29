@@ -856,9 +856,7 @@ text_input :: proc(
 
 	if is_pressed {
 		if prev_inner, ok := ui_ctx.layout.prev_all_boxes[string_id]; ok {
-			mx, my: i32
-			sdl.GetMouseState(&mx, &my)
-			local_x := f32(mx) - prev_inner.x
+			local_x := ev_ctx.pointer_x - prev_inner.x
 
 			best_cursor := 0
 			for i in 0 ..= len(buffer) {

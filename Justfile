@@ -35,7 +35,7 @@ android-ffmpeg := env_var_or_default("ANDROID_FFMPEG_ROOT", "Android-FFmpeg-Preb
 android-jni-libs := "$PWD/build/android/jniLibs/arm64-v8a"
 android-ffmpeg-link := "$PWD/build/android/ffmpeg-link"
 
-android-native: sdl2-sources
+android-native force="false": sdl2-sources
   test -f "{{android-ndk}}/build/cmake/android.toolchain.cmake" || (echo "Set ANDROID_NDK_HOME to the installed Android NDK." >&2; exit 1)
   test -f "{{android-ffmpeg}}/libffmpeg.so" || (echo "Set ANDROID_FFMPEG_ROOT to the Android arm64 FFmpeg directory." >&2; exit 1)
   mkdir -p {{android-jni-libs}} {{android-ffmpeg-link}} build/android/tmp
@@ -47,23 +47,27 @@ android-native: sdl2-sources
   ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libswresample.so
 
   # 2. Create dummy shared libraries to satisfy Odin's Linux linker requirements for Android
-  echo "void dummy(){}" > build/android/tmp/dummy.c
+  if [ ! -f build/android/tmp/dummy.c ] || [ Justfile -nt build/android/tmp/dummy.c ]; then echo "void dummy(){}" > build/android/tmp/dummy.c; fi
   echo "INPUT(-lc)" > {{android-ffmpeg-link}}/libpthread.so
   echo "INPUT(-lc)" > {{android-ffmpeg-link}}/librt.so
-  "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2.so
-  "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2_image.so
-  "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2_ttf.so
+  if [ ! -f {{android-ffmpeg-link}}/libSDL2.so ] || [ build/android/tmp/dummy.c -nt {{android-ffmpeg-link}}/libSDL2.so ] || [ "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -nt {{android-ffmpeg-link}}/libSDL2.so ] || [ Justfile -nt {{android-ffmpeg-link}}/libSDL2.so ]; then "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2.so; fi
+  if [ ! -f {{android-ffmpeg-link}}/libSDL2_image.so ] || [ build/android/tmp/dummy.c -nt {{android-ffmpeg-link}}/libSDL2_image.so ] || [ "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -nt {{android-ffmpeg-link}}/libSDL2_image.so ] || [ Justfile -nt {{android-ffmpeg-link}}/libSDL2_image.so ]; then "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2_image.so; fi
+  if [ ! -f {{android-ffmpeg-link}}/libSDL2_ttf.so ] || [ build/android/tmp/dummy.c -nt {{android-ffmpeg-link}}/libSDL2_ttf.so ] || [ "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -nt {{android-ffmpeg-link}}/libSDL2_ttf.so ] || [ Justfile -nt {{android-ffmpeg-link}}/libSDL2_ttf.so ]; then "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2_ttf.so; fi
 
   # 3. Create a Clang wrapper to force Odin to use the NDK compiler and override the target triplet
-  echo '#!/bin/sh' > build/android/tmp/clang
-  echo 'exec "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" "$@" --target=aarch64-linux-android21 --sysroot="{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"' >> build/android/tmp/clang
-  chmod +x build/android/tmp/clang
+  if [ ! -f build/android/tmp/clang ] || [ Justfile -nt build/android/tmp/clang ] || [ "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" -nt build/android/tmp/clang ]; then \
+    echo '#!/bin/sh' > build/android/tmp/clang; \
+    echo 'exec "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" "$@" --target=aarch64-linux-android21 --sysroot="{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"' >> build/android/tmp/clang; \
+    chmod +x build/android/tmp/clang; \
+  fi
 
-  # 4. Compile the Odin code using our wrapped Clang
-  PATH="$PWD/build/android/tmp:$PATH" \
-  odin build . -target:linux_arm64 -subtarget=android -build-mode:shared -collection:ffmpeg=ffmpeg-bindings \
-  -out:{{android-jni-libs}}/libodin_app.so \
-  -extra-linker-flags:"-L{{android-ffmpeg-link}} -Wl,-soname,libodin_app.so -Wl,--allow-shlib-undefined"
+  # 4. Rebuild Odin only when an input changed (or explicitly forced)
+  if [ "{{force}}" = "true" ] || [ ! -f {{android-jni-libs}}/libodin_app.so ] || [ Justfile -nt {{android-jni-libs}}/libodin_app.so ] || [ "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" -nt {{android-jni-libs}}/libodin_app.so ] || [ "{{android-ffmpeg}}/libffmpeg.so" -nt {{android-jni-libs}}/libodin_app.so ] || find . -path ./build -prune -o -type f -name '*.odin' -newer {{android-jni-libs}}/libodin_app.so -print -quit | grep -q . || find . -path ./build -prune -o -type d -newer {{android-jni-libs}}/libodin_app.so -print -quit | grep -q . || find "{{android-ffmpeg}}" -type f -newer {{android-jni-libs}}/libodin_app.so -print -quit | grep -q .; then \
+    PATH="$PWD/build/android/tmp:$PATH" \
+    odin build . -target:linux_arm64 -subtarget=android -build-mode:shared -collection:ffmpeg=ffmpeg-bindings \
+    -out:{{android-jni-libs}}/libodin_app.so \
+    -extra-linker-flags:"-L{{android-ffmpeg-link}} -Wl,-soname,libodin_app.so -Wl,--allow-shlib-undefined"; \
+  fi
 
   # 5. Build the native Android SDL wrapper
   cmake -S android/native -B build/android/native -DCMAKE_TOOLCHAIN_FILE="{{android-ndk}}/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 -DFFMPEG_ROOT="$PWD/{{android-ffmpeg}}" -DANDROID_JNI_LIBS_DIR={{android-jni-libs}} -DFFMPEG_LINK_DIR={{android-ffmpeg-link}}
