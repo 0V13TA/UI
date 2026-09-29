@@ -8,6 +8,7 @@ endif()
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 set(FFMPEG_ROOT "${REPO_ROOT}/Android-FFmpeg-Prebuilt/ffmpeg-9.0" CACHE PATH "Android FFmpeg prebuilt root")
 set(FFMPEG_LINK_DIR "${CMAKE_BINARY_DIR}/ffmpeg-link" CACHE PATH "FFmpeg link aliases")
+set(ANDROID_LINK_DIR "${CMAKE_BINARY_DIR}/android-link" CACHE PATH "Android linker compatibility aliases")
 set(ANDROID_JNI_LIBS_DIR "${CMAKE_BINARY_DIR}/jniLibs/${ANDROID_ABI}" CACHE PATH "Packaged Android native libraries")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${ANDROID_JNI_LIBS_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -48,9 +49,21 @@ configure_file(
     COPYONLY
 )
 
+string(REGEX REPLACE "^android-" "" ANDROID_API_LEVEL "${ANDROID_PLATFORM}")
+if(NOT ANDROID_API_LEVEL MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "Could not determine Android API level from ANDROID_PLATFORM=${ANDROID_PLATFORM}")
+endif()
+set(ANDROID_LIBC "${CMAKE_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}/libc.so")
+if(NOT EXISTS "${ANDROID_LIBC}")
+    message(FATAL_ERROR "Missing Android libc stub: ${ANDROID_LIBC}")
+endif()
+file(MAKE_DIRECTORY "${ANDROID_LINK_DIR}")
+file(REMOVE "${ANDROID_LINK_DIR}/libpthread.so")
+file(CREATE_LINK "${ANDROID_LIBC}" "${ANDROID_LINK_DIR}/libpthread.so" SYMBOLIC)
+
 find_program(ODIN_EXECUTABLE odin REQUIRED)
 set(ODIN_APP_LIBRARY "${ANDROID_JNI_LIBS_DIR}/libodin_app.so")
-set(ODIN_LINK_FLAGS "-L${ANDROID_JNI_LIBS_DIR} -L${FFMPEG_LINK_DIR}")
+set(ODIN_LINK_FLAGS "-L${ANDROID_JNI_LIBS_DIR} -L${FFMPEG_LINK_DIR} -L${ANDROID_LINK_DIR}")
 
 add_custom_command(
     OUTPUT "${ODIN_APP_LIBRARY}"
@@ -58,6 +71,7 @@ add_custom_command(
         "${ODIN_EXECUTABLE}" build "${REPO_ROOT}"
             -target:linux_arm64
             -subtarget:android
+            -minimum-os-version:${ANDROID_API_LEVEL}
             -build-mode:shared
             -collection:ffmpeg=${REPO_ROOT}/ffmpeg-bindings
             -out:${ODIN_APP_LIBRARY}
@@ -70,6 +84,7 @@ add_custom_command(
     VERBATIM
 )
 add_custom_target(odin_app_build DEPENDS "${ODIN_APP_LIBRARY}")
+add_dependencies(odin_app_build SDL2 SDL2_image SDL2_ttf)
 
 add_library(odin_app SHARED IMPORTED GLOBAL)
 set_target_properties(odin_app PROPERTIES IMPORTED_LOCATION "${ODIN_APP_LIBRARY}")

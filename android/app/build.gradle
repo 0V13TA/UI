@@ -2,6 +2,15 @@ plugins {
     id "com.android.application"
 }
 
+def syncProjectAssets = tasks.register("syncProjectAssets", Sync) {
+    from(rootProject.file("../assets"))
+    into(layout.buildDirectory.dir("generated/projectAssets/assets"))
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(syncProjectAssets)
+}
+
 android {
     namespace "org.libsdl.app"
     compileSdk 34
@@ -23,8 +32,7 @@ android {
             manifest.srcFile "../../SDL/android-project/app/src/main/AndroidManifest.xml"
             java.srcDirs = ["../../SDL/android-project/app/src/main/java"]
             res.srcDirs = ["../../SDL/android-project/app/src/main/res"]
-            assets.srcDirs = ["../.."]
-            assets.include "assets/**"
+            assets.srcDirs = [layout.buildDirectory.dir("generated/projectAssets")]
             jniLibs.srcDirs = [rootProject.file("../build/android/jniLibs")]
         }
     }

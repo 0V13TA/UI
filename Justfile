@@ -30,6 +30,7 @@ debug: sdl2-image sdl2-ttf
 
 android-sdk := env_var_or_default("ANDROID_SDK_ROOT", env_var_or_default("ANDROID_HOME", ""))
 android-ndk := env_var_or_default("ANDROID_NDK_HOME", env_var_or_default("ANDROID_NDK_ROOT", android-sdk + "/ndk/26.3.11579264"))
+android-java-home := env_var_or_default("ANDROID_JAVA_HOME", "/usr/lib/jvm/java-17-openjdk")
 android-ffmpeg := env_var_or_default("ANDROID_FFMPEG_ROOT", "Android-FFmpeg-Prebuilt/ffmpeg-9.0")
 android-jni-libs := "$PWD/build/android/jniLibs/arm64-v8a"
 android-ffmpeg-link := "$PWD/build/android/ffmpeg-link"
@@ -37,17 +38,45 @@ android-ffmpeg-link := "$PWD/build/android/ffmpeg-link"
 android-native: sdl2-sources
   test -f "{{android-ndk}}/build/cmake/android.toolchain.cmake" || (echo "Set ANDROID_NDK_HOME to the installed Android NDK." >&2; exit 1)
   test -f "{{android-ffmpeg}}/libffmpeg.so" || (echo "Set ANDROID_FFMPEG_ROOT to the Android arm64 FFmpeg directory." >&2; exit 1)
-  mkdir -p {{android-jni-libs}} {{android-ffmpeg-link}}
+  mkdir -p {{android-jni-libs}} {{android-ffmpeg-link}} build/android/tmp
+
+  # 1. Setup FFmpeg symlinks so the Odin linker can locate them
   ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libavcodec.so
   ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libavformat.so
   ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libavutil.so
   ln -sf "$PWD/{{android-ffmpeg}}/libffmpeg.so" {{android-ffmpeg-link}}/libswresample.so
+
+  # 2. Create dummy shared libraries to satisfy Odin's Linux linker requirements for Android
+  echo "void dummy(){}" > build/android/tmp/dummy.c
+  echo "INPUT(-lc)" > {{android-ffmpeg-link}}/libpthread.so
+  echo "INPUT(-lc)" > {{android-ffmpeg-link}}/librt.so
+  "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2.so
+  "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2_image.so
+  "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" -shared build/android/tmp/dummy.c -o {{android-ffmpeg-link}}/libSDL2_ttf.so
+
+  # 3. Create a Clang wrapper to force Odin to use the NDK compiler and override the target triplet
+  echo '#!/bin/sh' > build/android/tmp/clang
+  echo 'exec "{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" "$@" --target=aarch64-linux-android21 --sysroot="{{android-ndk}}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"' >> build/android/tmp/clang
+  chmod +x build/android/tmp/clang
+
+  # 4. Compile the Odin code using our wrapped Clang
+  PATH="$PWD/build/android/tmp:$PATH" \
+  odin build . -target:linux_arm64 -subtarget=android -build-mode:shared -collection:ffmpeg=ffmpeg-bindings \
+  -out:{{android-jni-libs}}/libodin_app.so \
+  -extra-linker-flags:"-L{{android-ffmpeg-link}} -Wl,-soname,libodin_app.so -Wl,--allow-shlib-undefined"
+
+  # 5. Build the native Android SDL wrapper
   cmake -S android/native -B build/android/native -DCMAKE_TOOLCHAIN_FILE="{{android-ndk}}/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 -DFFMPEG_ROOT="$PWD/{{android-ffmpeg}}" -DANDROID_JNI_LIBS_DIR={{android-jni-libs}} -DFFMPEG_LINK_DIR={{android-ffmpeg-link}}
   cmake --build build/android/native --parallel
 
 android-apk: android-native
-  ANDROID_HOME="{{android-sdk}}" ANDROID_SDK_ROOT="{{android-sdk}}" SDL_ANDROID_HOME="$PWD/SDL/android-project" SDL_ANDROID_APP="$PWD/android" SDL_ANDROID_FFMPEG="$PWD/{{android-ffmpeg}}" SDL_ANDROID_NDK="{{android-ndk}}" ./SDL/android-project/gradlew -p android assembleDebug
+  test -x "{{android-java-home}}/bin/java" || (echo "Set ANDROID_JAVA_HOME to an installed JDK 17 or 21; Gradle 8.7 cannot run with Java 27." >&2; exit 1)
+  "{{android-java-home}}/bin/java" -version 2>&1 | grep -Eq 'version "(17|21)([."]|$)' || (echo "ANDROID_JAVA_HOME must point to JDK 17 or 21; Gradle 8.7 cannot run with Java 27." >&2; exit 1)
+  JAVA_HOME="{{android-java-home}}" PATH="{{android-java-home}}/bin:$PATH" ANDROID_HOME="{{android-sdk}}" ANDROID_SDK_ROOT="{{android-sdk}}" SDL_ANDROID_HOME="$PWD/SDL/android-project" SDL_ANDROID_APP="$PWD/android" SDL_ANDROID_FFMPEG="$PWD/{{android-ffmpeg}}" SDL_ANDROID_NDK="{{android-ndk}}" ./SDL/android-project/gradlew -p android assembleDebug
 
 android-install: android-apk
   adb install -r android/app/build/outputs/apk/debug/app-debug.apk
   adb shell am start -n org.odin.ui/org.libsdl.app.SDLActivity
+
+clean:
+  rm -rf build/ UI android/app/build/ android/.gradle/

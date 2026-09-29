@@ -8,7 +8,9 @@ packaged by Gradle. The checked-in FFmpeg prebuilt contains only
 
 Set `ANDROID_SDK_ROOT` and `ANDROID_NDK_HOME`, and ensure the Android SDK has
 platform 34 and build-tools 34.0.0 installed. The NDK used for validation is
-26.3.11579264. A JDK supported by Gradle 8.7 is also required.
+26.3.11579264. Gradle 8.7 requires a supported JDK; the build recipe defaults
+to JDK 17 and accepts JDK 17 or 21. If your JDK 17 installation is elsewhere,
+set `ANDROID_JAVA_HOME` to its installation directory.
 
 Build the APK:
 
@@ -27,3 +29,7 @@ The project assets are packaged with their existing `assets/` path intact.
 SDL_image uses its bundled stb decoder on Android; optional AVIF, JPEG XL,
 TIFF, and WebP backends are disabled to avoid host-library dependencies.
 SDL_ttf builds its local FreeType dependency from source.
+The native build targets the same Android API level as `ANDROID_PLATFORM`.
+Odin's Android linker requests `-lpthread`, while Android exposes pthread APIs
+through libc; CMake creates a build-local linker alias to the NDK libc stub.
+This alias is only used during linking and is not packaged in the APK.

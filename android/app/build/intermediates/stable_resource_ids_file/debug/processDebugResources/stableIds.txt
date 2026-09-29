@@ -1,0 +1,6 @@
+org.odin.ui:style/AppTheme = 0x7f040000
+org.odin.ui:string/app_name = 0x7f030000
+org.odin.ui:mipmap/ic_launcher = 0x7f020000
+org.odin.ui:color/colorPrimary = 0x7f010001
+org.odin.ui:color/colorPrimaryDark = 0x7f010002
+org.odin.ui:color/colorAccent = 0x7f010000
