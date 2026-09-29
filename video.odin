@@ -9,7 +9,6 @@ import "core:c"
 import "core:fmt"
 import "core:slice"
 import "core:strings"
-import "core:sync"
 import "base:runtime"
 import "core:time"
 import sdl "vendor:sdl2"
@@ -49,7 +48,7 @@ Video_Player :: struct {
 	// --- Threading ---
 	decoder_thread:           ^sdl.Thread,
 	frame_queue:              [dynamic]Video_Frame,
-	queue_mutex:              ^sdl.Mutex,
+	queue_mutex:              ^sdl.mutex,
 	quit_flag:                bool,
 }
 
@@ -313,7 +312,7 @@ video_player_seek :: proc(player: ^Video_Player, time_sec: f64) {
 }
 
 @(private = "file")
-ffmpeg_worker_thread :: proc "c" (data: rawptr) -> int {
+ffmpeg_worker_thread :: proc "c" (data: rawptr) -> i32 {
   context = runtime.default_context()
 
 	player := cast(^Video_Player)data
