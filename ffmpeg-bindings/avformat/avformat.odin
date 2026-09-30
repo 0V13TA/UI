@@ -8,7 +8,7 @@
 */
 package ffmpeg_avformat
 
-import "ffmpeg:types"
+import "../types"
 
 when ODIN_OS == .Windows { foreign import avformat "avformat.lib"       }
 when ODIN_OS == .Linux  { foreign import avformat "system:avformat" }

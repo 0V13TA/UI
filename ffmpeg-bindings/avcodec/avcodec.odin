@@ -8,7 +8,7 @@
 */
 package ffmpeg_avcodec
 
-import "ffmpeg:types"
+import "../types"
 import "core:c"
 
 when ODIN_OS == .Windows { foreign import avcodec "avcodec.lib"       }

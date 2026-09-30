@@ -1,9 +1,8 @@
 package UI
 
-import "base:runtime"
 import "core:fmt"
-import sdl "vendor:sdl2"
-import "vendor:sdl2/ttf"
+import sdl "./vendor/sdl2"
+import "./vendor/sdl2/ttf"
 
 Time_State :: struct {
 	delta:       f32,
@@ -29,14 +28,11 @@ App :: struct {
 	cursor_ibeam: ^sdl.Cursor,
 }
 
-// SDL2 handles the actual entry point via SDL_main in android_entry.c.
-@(export)
-android_main :: proc "c" (app: rawptr) {}
-
 app_init :: proc(
 	title: cstring,
 	width, height: i32,
 	flags: sdl.WindowFlags = sdl.WINDOW_SHOWN | sdl.WINDOW_RESIZABLE | sdl.WINDOW_ALLOW_HIGHDPI,
+	asset_dir: string = "assets",
 ) -> ^App {
 	if sdl.Init(sdl.INIT_VIDEO | sdl.INIT_TIMER | sdl.INIT_EVENTS) != 0 {
 		fmt.printfln("SDL Init Error: %s", sdl.GetError())
@@ -45,6 +41,7 @@ app_init :: proc(
 
 	if ttf.Init() != 0 {
 		fmt.printfln("TTF Init Error: %s", sdl.GetError())
+		sdl.Quit()
 		return nil
 	}
 
@@ -62,6 +59,13 @@ app_init :: proc(
 		height,
 		flags,
 	)
+	if app.window == nil {
+		fmt.printfln("SDL Window Error: %s", sdl.GetError())
+		ttf.Quit()
+		sdl.Quit()
+		free(app)
+		return nil
+	}
 	sdl.GetWindowSize(app.window, &app.window_w, &app.window_h)
 
 	app.renderer = sdl.CreateRenderer(
@@ -69,10 +73,18 @@ app_init :: proc(
 		-1,
 		sdl.RENDERER_ACCELERATED | sdl.RENDERER_PRESENTVSYNC,
 	)
+	if app.renderer == nil {
+		fmt.printfln("SDL Renderer Error: %s", sdl.GetError())
+		sdl.DestroyWindow(app.window)
+		ttf.Quit()
+		sdl.Quit()
+		free(app)
+		return nil
+	}
 	sdl.SetRenderDrawBlendMode(app.renderer, .BLEND)
 
 	// Initialize Subsystems
-	app.ui = ui_context_create(f32(app.window_w), f32(app.window_h))
+	app.ui = ui_context_create(f32(app.window_w), f32(app.window_h), asset_dir)
 
 	app.anim = new(Context)
 	app.anim.states = make(map[Box_ID]^Retained_State)
@@ -98,6 +110,16 @@ app_init :: proc(
 	sdl.StartTextInput()
 
 	return app
+}
+
+ui_begin_app :: proc(
+	title: cstring = "Odin UI",
+	width: i32 = 800,
+	height: i32 = 600,
+	flags: sdl.WindowFlags = sdl.WINDOW_SHOWN | sdl.WINDOW_RESIZABLE | sdl.WINDOW_ALLOW_HIGHDPI,
+	asset_dir: string = "assets",
+) -> ^App {
+	return app_init(title, width, height, flags, asset_dir)
 }
 
 app_destroy :: proc(app: ^App) {
@@ -134,13 +156,6 @@ app_destroy :: proc(app: ^App) {
 	ttf.Quit()
 	sdl.Quit()
 	free(app)
-}
-
-@(export)
-odin_app_start :: proc "c" () -> i32 {
-	context = runtime.default_context()
-	main()
-	return 0
 }
 
 app_begin_frame :: proc(app: ^App) {

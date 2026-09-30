@@ -6,6 +6,7 @@ if(NOT ANDROID OR NOT ANDROID_ABI STREQUAL "arm64-v8a")
 endif()
 
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+set(APP_ROOT "${REPO_ROOT}/tests/android" CACHE PATH "Odin consumer application root")
 set(FFMPEG_ROOT "${REPO_ROOT}/Android-FFmpeg-Prebuilt/ffmpeg-9.0" CACHE PATH "Android FFmpeg prebuilt root")
 set(FFMPEG_LINK_DIR "${CMAKE_BINARY_DIR}/ffmpeg-link" CACHE PATH "FFmpeg link aliases")
 set(ANDROID_LINK_DIR "${CMAKE_BINARY_DIR}/android-link" CACHE PATH "Android linker compatibility aliases")
@@ -64,23 +65,24 @@ file(CREATE_LINK "${ANDROID_LIBC}" "${ANDROID_LINK_DIR}/libpthread.so" SYMBOLIC)
 find_program(ODIN_EXECUTABLE odin REQUIRED)
 set(ODIN_APP_LIBRARY "${ANDROID_JNI_LIBS_DIR}/libodin_app.so")
 set(ODIN_LINK_FLAGS "-L${ANDROID_JNI_LIBS_DIR} -L${FFMPEG_LINK_DIR} -L${ANDROID_LINK_DIR}")
+file(GLOB_RECURSE ODIN_APP_SOURCES CONFIGURE_DEPENDS
+    "${REPO_ROOT}/*.odin"
+    "${APP_ROOT}/*.odin"
+)
+file(GLOB_RECURSE UI_RESOURCE_FILES CONFIGURE_DEPENDS "${REPO_ROOT}/resources/*")
 
 add_custom_command(
     OUTPUT "${ODIN_APP_LIBRARY}"
     COMMAND "${CMAKE_COMMAND}" -E env "ODIN_ANDROID_NDK=${CMAKE_ANDROID_NDK}"
-        "${ODIN_EXECUTABLE}" build "${REPO_ROOT}"
+        "${ODIN_EXECUTABLE}" build "${APP_ROOT}"
             -target:linux_arm64
             -subtarget:android
             -minimum-os-version:${ANDROID_API_LEVEL}
             -build-mode:shared
-            -collection:ffmpeg=${REPO_ROOT}/ffmpeg-bindings
             -out:${ODIN_APP_LIBRARY}
             -extra-linker-flags:${ODIN_LINK_FLAGS}
     WORKING_DIRECTORY "${REPO_ROOT}"
-    DEPENDS
-        "${REPO_ROOT}/app.odin"
-        "${REPO_ROOT}/main.odin"
-        "${REPO_ROOT}/video.odin"
+    DEPENDS ${ODIN_APP_SOURCES} ${UI_RESOURCE_FILES}
     VERBATIM
 )
 add_custom_target(odin_app_build DEPENDS "${ODIN_APP_LIBRARY}")

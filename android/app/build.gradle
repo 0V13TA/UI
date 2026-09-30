@@ -2,9 +2,16 @@ plugins {
     id "com.android.application"
 }
 
+def appAssetsDir = providers.gradleProperty("uiAssetsDir")
+    .orElse(rootProject.file("../../assets").absolutePath)
+def appAssetDir = providers.gradleProperty("uiAssetDir").orElse("assets")
+
 def syncProjectAssets = tasks.register("syncProjectAssets", Sync) {
-    from(rootProject.file("../assets"))
-    into(layout.buildDirectory.dir("generated/projectAssets/assets"))
+    def sourceAssets = file(appAssetsDir.get())
+    if (sourceAssets.exists()) {
+        from(sourceAssets)
+    }
+    into(layout.buildDirectory.dir("generated/projectAssets/${appAssetDir.get()}"))
 }
 
 tasks.named("preBuild").configure {

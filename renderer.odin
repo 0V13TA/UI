@@ -5,8 +5,8 @@ import "core:hash"
 import "core:math"
 import "core:strings"
 import "core:unicode/utf8"
-import sdl "vendor:sdl2"
-import "vendor:sdl2/ttf"
+import sdl "./vendor/sdl2"
+import "./vendor/sdl2/ttf"
 
 when ODIN_DEBUG {
 	g_debug_class_registry: map[Class]string
@@ -167,6 +167,7 @@ Text_Key :: struct {
 
 UI_Context :: struct {
 	layout:         ^Layout_Context,
+	asset_dir:      string,
 	fonts:          map[u32]^ttf.Font, // Hash Font name + Cache name
 	videos:         map[string]^Video_Player,
 	stylesheet:     map[Class]Style,
@@ -204,9 +205,9 @@ get_class_name :: proc(c: Class) -> string {
 }
 
 get_font :: proc(ctx: ^UI_Context, path: string, size: f32) -> ^ttf.Font {
-	// Fallback to a default font if none is specified
-	actual_path := path != "" ? path : "assets/font/CaacupeOne-Regular.ttf"
 	actual_size := size > 0 ? i32(size) : 16
+	is_builtin := path == ""
+	actual_path := is_builtin ? "ui://font/default" : path
 
 	key := Font_Key {
 		path_hash = hash.fnv32(transmute([]byte)actual_path),
@@ -218,9 +219,10 @@ get_font :: proc(ctx: ^UI_Context, path: string, size: f32) -> ^ttf.Font {
 		return font
 	}
 
-	// Cache Miss: Load from disk
-	c_path := strings.clone_to_cstring(actual_path, context.temp_allocator)
-	font := ttf.OpenFont(c_path, actual_size)
+	// Application font paths are resolved from the configured application asset root.
+	rw := resource_open(ctx.asset_dir, actual_path)
+	font: ^ttf.Font
+	if rw != nil do font = ttf.OpenFontRW(rw, true, actual_size)
 
 	if font == nil {
 		fmt.printfln(
@@ -1510,11 +1512,12 @@ clear_text_cache :: proc(ctx: ^UI_Context) {
 	clear(&ctx.text_cache)
 }
 
-ui_context_create :: proc(screen_width, screen_height: f32) -> ^UI_Context {
+ui_context_create :: proc(screen_width, screen_height: f32, asset_dir: string = "assets") -> ^UI_Context {
 	ctx := new(UI_Context)
 
 	// Pass the SDL text measurement functions to the layout core
 	ctx.layout = layout_context_create(ui_text_width, ui_text_height, screen_width, screen_height)
+	ctx.asset_dir = strings.clone(asset_dir)
 
 	ctx.stylesheet = make(map[Class]Style)
 	ctx.fonts = make(map[u32]^ttf.Font)
@@ -1544,6 +1547,7 @@ ui_context_destroy :: proc(ctx: ^UI_Context) {
 	delete(ctx.stylesheet)
 	delete(ctx.fonts)
 	delete(ctx.videos)
+	delete(ctx.asset_dir)
 	free(ctx)
 
 	when ODIN_DEBUG {

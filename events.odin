@@ -1,7 +1,7 @@
 package UI
 
 import "core:strings"
-import sdl "vendor:sdl2"
+import sdl "./vendor/sdl2"
 
 Event_Type :: enum {
 	Click,

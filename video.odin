@@ -11,7 +11,7 @@ import "core:slice"
 import "core:strings"
 import "base:runtime"
 import "core:time"
-import sdl "vendor:sdl2"
+import sdl "./vendor/sdl2"
 
 when ODIN_OS == .Windows {
 	foreign import ffmpeg_avformat_native "avformat.lib"
@@ -80,7 +80,11 @@ Video_Player :: struct {
 	quit_flag:                bool,
 }
 
-video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Player {
+video_player_init :: proc(
+	renderer: ^sdl.Renderer,
+	path: string,
+	asset_dir: string = "assets",
+) -> ^Video_Player {
 	// Ensure the SDL Audio subsystem is awake
 	sdl.InitSubSystem({.AUDIO})
 
@@ -89,9 +93,7 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 	player.is_playing = true
 	player.frame_queue = make([dynamic]Video_Frame)
 
-	c_path := strings.clone_to_cstring(path)
-	defer delete(c_path)
-	player.rw_ops = sdl.RWFromFile(c_path, "rb")
+	player.rw_ops = resource_open(asset_dir, path)
 	if player.rw_ops == nil {
 		fmt.printfln("FFMPEG ERROR: Could not open file: %s", path)
 		video_player_init_abort(player)

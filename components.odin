@@ -5,9 +5,8 @@ import "core:hash"
 import "core:math"
 import "core:strings"
 import "core:unicode/utf8"
-import sdl "vendor:sdl2"
-import img "vendor:sdl2/image"
-import "vendor:sdl2/ttf"
+import sdl "./vendor/sdl2"
+import "./vendor/sdl2/ttf"
 
 switch_toggle_prev_state: map[Box_ID]bool
 accordion_prev_expanded: map[Box_ID]bool
@@ -1180,15 +1179,7 @@ image_path :: proc(
 	loc := #caller_location,
 ) {
 	ui_ctx := app.ui
-	sdl_rend := app.renderer
-	path_hash := hash.fnv32(transmute([]byte)path)
-	tex, exists := ui_ctx.image_cache[path_hash]
-	if !exists {
-		c_path := fmt.ctprintf("%s", path)
-		tex = img.LoadTexture(sdl_rend, c_path)
-		if tex == nil do fmt.printfln("ERROR: Failed to load image '%s': %s", path, sdl.GetError())
-		ui_ctx.image_cache[path_hash] = tex
-	}
+	tex := get_image_texture(ui_ctx, app.renderer, path)
 	image_texture(app, tex, user_style, salt, id, loc)
 }
 
@@ -1201,7 +1192,6 @@ image_button :: proc(
 ) -> bool {
 	ui_ctx := app.ui
 	ev_ctx := app.ev
-	sdl_rend := app.renderer
 	id := ID(loc, salt)
 
 	is_clicked := ev_ctx.clicked_this_frame[id] or_else false
@@ -1218,14 +1208,7 @@ image_button :: proc(
 	)
 	is_clicked = is_clicked && !is_disabled
 
-	path_hash := hash.fnv32(transmute([]byte)path)
-	tex, exists := ui_ctx.image_cache[path_hash]
-	if !exists {
-		c_path := fmt.ctprintf("%s", path)
-		tex = img.LoadTexture(sdl_rend, c_path)
-		if tex == nil do fmt.printfln("ERROR: Failed to load image '%s': %s", path, sdl.GetError())
-		ui_ctx.image_cache[path_hash] = tex
-	}
+	tex := get_image_texture(ui_ctx, app.renderer, path)
 
 	final_style := user_style
 	final_style.bg_image = tex
@@ -1261,7 +1244,6 @@ DEFAULT_VIDEO_OVERLAY_STYLE :: Style {
 	bg_color    = Color{0, 0, 0, 0.7},
 }
 DEFAULT_VIDEO_TIME_STYLE :: Style {
-	font_name  = "assets/font/CaacupeOne-Regular.ttf",
 	text_color = Color{1, 1, 1, 1},
 	text_wrap  = .NONE,
 	text_align = .RIGHT,
@@ -1276,8 +1258,8 @@ video :: proc(
 	slider_val: ^f32,
 	overlay_active: ^bool,
 	overlay_anim: ^f32,
-	play_icon: string = "assets/pictures/icons/play-button.png",
-	pause_icon: string = "assets/pictures/icons/pause.png",
+	play_icon: string = "ui://icons/play-button",
+	pause_icon: string = "ui://icons/pause",
 	wrapper_style: Style = {},
 	frame_style: Style = {},
 	overlay_style: Style = {},
@@ -1299,7 +1281,7 @@ video :: proc(
 	root_id := ID(id) if id != "" else ID(loc, salt)
 
 	if path not_in ui_ctx.videos {
-		ui_ctx.videos[path] = video_player_init(sdl_rend, path)
+		ui_ctx.videos[path] = video_player_init(sdl_rend, path, ui_ctx.asset_dir)
 	}
 	player := ui_ctx.videos[path]
 
@@ -2417,8 +2399,8 @@ accordion_begin :: proc(
 	app: ^App,
 	title: string,
 	is_expanded: ^bool,
-	expanded_icon: string = "assets/pictures/icons/down.png",
-	collapsed_icon: string = "assets/pictures/icons/play.png",
+	expanded_icon: string = "ui://icons/down",
+	collapsed_icon: string = "ui://icons/play",
 	wrapper_style: Style = {},
 	header_style: Style = {},
 	content_style: Style = {},
@@ -2863,8 +2845,8 @@ carousel_textures :: proc(
 	wrapper_style: Style = {},
 	viewport_style: Style = {},
 	arrow_style: Style = {},
-	left_arrow: string = "assets/pictures/icons/left_button.png",
-	right_arrow: string = "assets/pictures/icons/right_button.png",
+	left_arrow: string = "ui://icons/left",
+	right_arrow: string = "ui://icons/right",
 	auto_play: bool = false,
 	auto_play_interval: u32 = 3000,
 	salt := "",
@@ -3114,8 +3096,8 @@ carousel_paths :: proc(
 	wrapper_style: Style = {},
 	viewport_style: Style = {},
 	arrow_style: Style = {},
-	left_arrow: string = "assets/pictures/icons/left_button.png",
-	right_arrow: string = "assets/pictures/icons/right_button.png",
+	left_arrow: string = "ui://icons/left",
+	right_arrow: string = "ui://icons/right",
 	auto_play: bool = false,
 	auto_play_interval: u32 = 3000,
 	salt := "",
@@ -3128,14 +3110,7 @@ carousel_paths :: proc(
 
 	textures := make([dynamic]^sdl.Texture, context.temp_allocator)
 	for path in images {
-		path_hash := hash.fnv32(transmute([]byte)path)
-		tex, exists := ui_ctx.image_cache[path_hash]
-		if !exists {
-			c_path := fmt.ctprintf("%s", path)
-			tex = img.LoadTexture(sdl_rend, c_path)
-			if tex == nil do fmt.printfln("ERROR: Failed to load image '%s': %s", path, sdl.GetError())
-			ui_ctx.image_cache[path_hash] = tex
-		}
+		tex := get_image_texture(ui_ctx, sdl_rend, path)
 		append(&textures, tex)
 	}
 

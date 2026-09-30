@@ -1,45 +1,65 @@
 # Android build
 
-The Android project reuses the SDL 2.32 source in `SDL/`, the pinned SDL2
-add-on sources in `third_party/`, and the SDL Android Java activity from
-`SDL/android-project`. Native libraries are built with the Android NDK and
-packaged by Gradle. The checked-in FFmpeg prebuilt contains only
-`arm64-v8a`, so this build intentionally targets that ABI.
+This Gradle/NDK project packages a consumer Odin application's source with the
+UI library. The SDL 2.32 source, the pinned SDL2 add-ons, and Android SDL
+activity are kept in the library folder. The bundled FFmpeg prebuilt targets
+`arm64-v8a`, so Android support currently targets that ABI.
 
-Set `ANDROID_SDK_ROOT` and `ANDROID_NDK_HOME`, and ensure the Android SDK has
-platform 34 and build-tools 34.0.0 installed. The NDK used for validation is
-26.3.11579264. Gradle 8.7 requires a supported JDK; the build recipe defaults
-to JDK 17 and accepts JDK 17 or 21. If your JDK 17 installation is elsewhere,
-set `ANDROID_JAVA_HOME` to its installation directory.
+## Requirements
 
-Build the APK:
+- Android SDK platform 34 and build-tools 34.0.0
+- Android NDK 26.3.11579264
+- JDK 17 or 21 (the Makefile defaults to JDK 17)
+- Odin, CMake, and GNU Make
+
+Set `ANDROID_SDK_ROOT` and `ANDROID_NDK_HOME` if the SDK/NDK are not at the
+default locations. `ANDROID_JAVA_HOME` can select a non-default supported JDK.
+These are build-machine prerequisites; no Odin global collection or project
+configuration is needed.
+
+## Build the included smoke-test app
 
 ```sh
 make android-apk
 ```
 
-Android builds skip relinking `libodin_app.so` when the Odin sources and
-FFmpeg inputs are unchanged. To force that native relink:
+## Build a consuming project
+
+For a consumer with `MyProject/main.odin`, `MyProject/assets/`, and
+`MyProject/UI/`, run:
 
 ```sh
-make android-native FORCE=1
+make -C UI android-apk APP_ROOT=.. APP_ASSETS_DIR=../assets
 ```
 
-Install and launch on a connected device with USB debugging enabled:
+`APP_ROOT` points to the Odin package containing the application's `main`.
+The application source must export `odin_app_start` as the SDL Android entry
+point. `APP_ASSETS_DIR` selects the on-disk application assets to package, and
+`APP_ASSET_DIR` selects the virtual path used by `ui_begin_app` and resource
+loading; both default to `assets`. If using a different resource path, pass the
+same value to the application and build:
+
+```sh
+make -C UI android-apk APP_ROOT=.. APP_ASSETS_DIR=../resources APP_ASSET_DIR=resources
+```
+
+Application assets are staged under the selected packaged path. Images, fonts,
+and videos load through SDL `RWops`, so Android's asset manager is used
+internally rather than expecting files in the library or application working
+directory. Odin UI's default font and component icons are embedded in the
+library and need no Android asset staging.
+
+The FFmpeg prebuilt is under `Android-FFmpeg-Prebuilt/ffmpeg-9.0`. The generated
+APK is `android/app/build/outputs/apk/debug/app-debug.apk`. Install and launch
+it on a connected device with USB debugging enabled:
 
 ```sh
 make android-install
 ```
 
-The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
-Gradle stages project files under the APK's `assets/assets/` directory so
-runtime paths such as `assets/pictures/...` resolve through SDL's Android
-asset manager. Video files use SDL-backed FFmpeg I/O as well, so FFmpeg can
-read and seek media packaged in the APK instead of expecting a filesystem path.
-SDL_image uses its bundled stb decoder on Android; optional AVIF, JPEG XL,
-TIFF, and WebP backends are disabled to avoid host-library dependencies.
-SDL_ttf builds its local FreeType dependency from source.
-The native build targets the same Android API level as `ANDROID_PLATFORM`.
-Odin's Android linker requests `-lpthread`, while Android exposes pthread APIs
-through libc; CMake creates a build-local linker alias to the NDK libc stub.
-This alias is only used during linking and is not packaged in the APK.
+Android builds skip relinking the Odin shared library when application/library
+sources and embedded resources are unchanged. Force that relink with:
+
+```sh
+make android-native FORCE=1
+```
