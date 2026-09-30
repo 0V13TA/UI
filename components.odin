@@ -9,7 +9,7 @@ import img "vendor:sdl2/image"
 import "vendor:sdl2/ttf"
 
 switch_toggle_prev_state: map[Box_ID]bool
-accordion_prev_expanded:  map[Box_ID]bool
+accordion_prev_expanded: map[Box_ID]bool
 
 component_state_destroy :: proc() {
 	delete(switch_toggle_prev_state)
@@ -53,8 +53,8 @@ text :: proc(
 		final_id,
 		Event_Callbacks {
 			focusable = user_style.focusable.? or_else true,
-			disabled  = user_style.disabled.? or_else false,
-			skip_tab  = true,
+			disabled = user_style.disabled.? or_else false,
+			skip_tab = true,
 		},
 	)
 
@@ -1080,11 +1080,7 @@ image_button :: proc(
 	id := ID(loc, salt)
 
 	is_clicked := ev_ctx.clicked_this_frame[id] or_else false
-	register(
-		ev_ctx,
-		id,
-		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
-	)
+	register(ev_ctx, id, Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND})
 
 	path_hash := hash.fnv32(transmute([]byte)path)
 	tex, exists := ui_ctx.image_cache[path_hash]
@@ -1129,7 +1125,7 @@ DEFAULT_VIDEO_OVERLAY_STYLE :: Style {
 	bg_color    = Color{0, 0, 0, 0.7},
 }
 DEFAULT_VIDEO_TIME_STYLE :: Style {
-	font_name  = "time_font",
+	font_name  = "assets/font/CaacupeOne-Regular.ttf",
 	text_color = Color{1, 1, 1, 1},
 	text_wrap  = .NONE,
 	text_align = .RIGHT,
@@ -3518,7 +3514,8 @@ debug_panel :: proc(app: ^App, is_open: ^bool) {
 
 	hovered_target_id := ev_ctx.hovered_id
 	if hovered_box, ok := ui_ctx.layout.prev_all_boxes[hovered_target_id];
-	   ok && !is_debug_inspector_box(hovered_box, debug_panel_id) &&
+	   ok &&
+	   !is_debug_inspector_box(hovered_box, debug_panel_id) &&
 	   hovered_target_id != highlight_id {
 		active_target_id = hovered_target_id
 	} else if tree_hover_target != 0 {
@@ -4315,10 +4312,8 @@ textarea :: proc(
 			scroll_x := ev_ctx.scroll_offsets_x[root_id]
 			scroll_y := ev_ctx.scroll_offsets_y[root_id]
 
-			local_x :=
-				mx - prev_outer.x - prev_outer.border[3] - prev_outer.padding[3] + scroll_x
-			local_y :=
-				my - prev_outer.y - prev_outer.border[0] - prev_outer.padding[0] + scroll_y
+			local_x := mx - prev_outer.x - prev_outer.border[3] - prev_outer.padding[3] + scroll_x
+			local_y := my - prev_outer.y - prev_outer.border[0] - prev_outer.padding[0] + scroll_y
 
 			// Determine inner viewport width for text wrapping bounds
 			viewport_width :=
@@ -4340,8 +4335,7 @@ textarea :: proc(
 			gap_buffer_move_cursor(buffer, best_cursor, is_dragging)
 
 			// Reset blink timer so the caret stays solid while clicking/dragging
-			if just_pressed || was_clicked ||
-			   ev_ctx.cursor_last_position[root_id] != best_cursor {
+			if just_pressed || was_clicked || ev_ctx.cursor_last_position[root_id] != best_cursor {
 				ev_ctx.cursor_blink_start[root_id] = u64(sdl.GetTicks())
 				ev_ctx.cursor_last_position[root_id] = best_cursor
 			}

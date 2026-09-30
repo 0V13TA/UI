@@ -28,7 +28,6 @@ main :: proc() {
 		for _, player in app.ui.videos {
 			if player != nil do video_player_destroy(player)
 		}
-		delete(app.ui.videos)
 	}
 
 	for !app.quit {

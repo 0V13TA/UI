@@ -13,6 +13,32 @@ import "base:runtime"
 import "core:time"
 import sdl "vendor:sdl2"
 
+when ODIN_OS == .Windows {
+	foreign import ffmpeg_avformat_native "avformat.lib"
+} else {
+	foreign import ffmpeg_avformat_native "system:avformat"
+}
+
+@(default_calling_convention = "c", link_prefix = "avio_")
+foreign ffmpeg_avformat_native {
+	alloc_context :: proc(
+		buffer: [^]u8,
+		buffer_size: i32,
+		write_flag: i32,
+		opaque: rawptr,
+		read_packet: proc "c" (opaque: rawptr, buffer: [^]u8, buffer_size: i32) -> i32,
+		write_packet: proc "c" (opaque: rawptr, buffer: [^]u8, buffer_size: i32) -> i32,
+		seek: proc "c" (opaque: rawptr, offset: i64, whence: i32) -> i64,
+	) -> ^types.IO_Context ---
+	context_free :: proc(ctx: ^^types.IO_Context) ---
+}
+
+@(private = "file")
+AVIO_BUFFER_SIZE :: 32768
+
+@(private = "file")
+AVERROR_EOF :: -541478725
+
 Video_Frame :: struct {
 	y_plane, u_plane, v_plane: []u8,
 	y_pitch, u_pitch, v_pitch: i32,
@@ -33,6 +59,8 @@ Video_Player :: struct {
 	// --- Video State ---
 	file_path:                string,
 	fmt_ctx:                  ^types.Format_Context,
+	avio_ctx:                 ^types.IO_Context,
+	rw_ops:                   ^sdl.RWops,
 	codec_ctx:                ^types.Codec_Context,
 	video_stream_idx:         i32,
 
@@ -63,14 +91,54 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 
 	c_path := strings.clone_to_cstring(path)
 	defer delete(c_path)
-
-	if avformat.open_input(&player.fmt_ctx, c_path, nil, nil) < 0 {
+	player.rw_ops = sdl.RWFromFile(c_path, "rb")
+	if player.rw_ops == nil {
 		fmt.printfln("FFMPEG ERROR: Could not open file: %s", path)
+		video_player_init_abort(player)
+		return nil
+	}
+
+	avio_buffer := cast([^]u8)avutil.malloc(AVIO_BUFFER_SIZE)
+	if avio_buffer == nil {
+		fmt.println("FFMPEG ERROR: Could not allocate video input buffer")
+		video_player_init_abort(player)
+		return nil
+	}
+	player.avio_ctx = alloc_context(
+		avio_buffer,
+		AVIO_BUFFER_SIZE,
+		0,
+		player.rw_ops,
+		video_asset_read,
+		nil,
+		video_asset_seek,
+	)
+	if player.avio_ctx == nil {
+		avutil.free(avio_buffer)
+		fmt.println("FFMPEG ERROR: Could not initialize video input")
+		video_player_init_abort(player)
+		return nil
+	}
+	player.avio_ctx.seekable = 1
+
+	player.fmt_ctx = avformat.alloc_context()
+	if player.fmt_ctx == nil {
+		fmt.println("FFMPEG ERROR: Could not allocate video format context")
+		video_player_init_abort(player)
+		return nil
+	}
+	player.fmt_ctx.pb = player.avio_ctx
+	player.fmt_ctx.flags = {.Custom_IO}
+
+	if avformat.open_input(&player.fmt_ctx, nil, nil, nil) < 0 {
+		fmt.printfln("FFMPEG ERROR: Could not open file: %s", path)
+		video_player_init_abort(player)
 		return nil
 	}
 
 	if avformat.find_stream_info(player.fmt_ctx, nil) < 0 {
 		fmt.println("FFMPEG ERROR: Could not find stream info")
+		video_player_init_abort(player)
 		return nil
 	}
 
@@ -94,6 +162,7 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 
 	if player.video_stream_idx == -1 || video_codec == nil {
 		fmt.println("FFMPEG ERROR: No video stream or unsupported codec found")
+		video_player_init_abort(player)
 		return nil
 	}
 
@@ -118,6 +187,7 @@ video_player_init :: proc(renderer: ^sdl.Renderer, path: string) -> ^Video_Playe
 
 	if avcodec.open2(player.codec_ctx, video_codec, nil) < 0 {
 		fmt.println("FFMPEG ERROR: Could not open video codec")
+		video_player_init_abort(player)
 		return nil
 	}
 
@@ -280,28 +350,51 @@ video_player_destroy :: proc(player: ^Video_Player) {
   sdl.WaitThread(player.decoder_thread, nil)
 	sdl.DestroyMutex(player.queue_mutex)
 
-	sdl.DestroyTexture(player.texture)
+	video_player_release_resources(player)
+	free(player)
+}
 
-	if player.audio_dev > 0 {
-		sdl.CloseAudioDevice(player.audio_dev)
-	}
+@(private = "file")
+video_player_init_abort :: proc(player: ^Video_Player) {
+	video_player_release_resources(player)
+	free(player)
+}
 
-	if player.swr_ctx != nil {
-		swresample.free(&player.swr_ctx)
-	}
+@(private = "file")
+video_player_release_resources :: proc(player: ^Video_Player) {
+	if player.audio_dev > 0 do sdl.CloseAudioDevice(player.audio_dev)
+	if player.swr_ctx != nil do swresample.free(&player.swr_ctx)
+	if player.audio_codec_ctx != nil do avcodec.free_context(&player.audio_codec_ctx)
+	if player.codec_ctx != nil do avcodec.free_context(&player.codec_ctx)
+	if player.fmt_ctx != nil do avformat.close_input(&player.fmt_ctx)
+	if player.avio_ctx != nil do context_free(&player.avio_ctx)
+	if player.rw_ops != nil do sdl.RWclose(player.rw_ops)
+	if player.texture != nil do sdl.DestroyTexture(player.texture)
 
-	if player.audio_codec_ctx != nil {
-		avcodec.free_context(&player.audio_codec_ctx)
-	}
-
-	// Clean up any remaining unplayed frames
 	for f in player.frame_queue {
 		delete(f.y_plane)
 		delete(f.u_plane)
 		delete(f.v_plane)
 	}
 	delete(player.frame_queue)
-	free(player)
+}
+
+@(private = "file")
+video_asset_read :: proc "c" (opaque: rawptr, buffer: [^]u8, buffer_size: i32) -> i32 {
+	if buffer_size <= 0 do return 0
+	rw_ops := cast(^sdl.RWops)opaque
+	read_count := sdl.RWread(rw_ops, cast(rawptr)buffer, 1, c.size_t(buffer_size))
+	if read_count == 0 do return AVERROR_EOF
+	return i32(read_count)
+}
+
+@(private = "file")
+video_asset_seek :: proc "c" (opaque: rawptr, offset: i64, whence: i32) -> i64 {
+	rw_ops := cast(^sdl.RWops)opaque
+	if (whence & 0x10000) != 0 {
+		return sdl.RWsize(rw_ops)
+	}
+	return sdl.RWseek(rw_ops, offset, c.int(whence & 0xFFFF))
 }
 
 video_player_seek :: proc(player: ^Video_Player, time_sec: f64) {

@@ -34,7 +34,8 @@ make android-install
 The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 Gradle stages project files under the APK's `assets/assets/` directory so
 runtime paths such as `assets/pictures/...` resolve through SDL's Android
-asset manager.
+asset manager. Video files use SDL-backed FFmpeg I/O as well, so FFmpeg can
+read and seek media packaged in the APK instead of expecting a filesystem path.
 SDL_image uses its bundled stb decoder on Android; optional AVIF, JPEG XL,
 TIFF, and WebP backends are disabled to avoid host-library dependencies.
 SDL_ttf builds its local FreeType dependency from source.
