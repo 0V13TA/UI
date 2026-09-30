@@ -79,6 +79,8 @@ Event_Context :: struct {
 	pointer_x, pointer_y: f32,
 	pointer_prev_x, pointer_prev_y: f32,
 	viewport_w, viewport_h: f32,
+	input_origin_x, input_origin_y: f32,
+	input_screen_w, input_screen_h: f32,
 	pointer_is_touch:     bool,
 	active_touch_id:      sdl.FingerID,
 	touch_active:         bool,
@@ -97,6 +99,44 @@ Event_Context :: struct {
 	focused_buffer:       ^[dynamic]u8,
 	focus_order:          [dynamic]Box_ID,
 	focused_gap_buffer:   ^Gap_Buffer,
+}
+
+event_context_create :: proc(
+	layout: ^Layout_Context,
+	viewport_w, viewport_h: f32,
+	input_screen_w, input_screen_h: f32,
+) -> ^Event_Context {
+	ctx := new(Event_Context)
+	ctx.layout = layout
+	ctx.viewport_w = viewport_w
+	ctx.viewport_h = viewport_h
+	ctx.input_screen_w = input_screen_w
+	ctx.input_screen_h = input_screen_h
+	ctx.listeners = make(map[Box_ID]Event_Callbacks)
+	ctx.previous_listeners = make(map[Box_ID]Event_Callbacks)
+	ctx.clicked_this_frame = make(map[Box_ID]bool)
+	ctx.scroll_offsets_x = make(map[Box_ID]f32)
+	ctx.scroll_offsets_y = make(map[Box_ID]f32)
+	ctx.text_cursors = make(map[Box_ID]int)
+	ctx.text_selection = make(map[Box_ID]int)
+	ctx.cursor_blink_start = make(map[Box_ID]u64)
+	ctx.cursor_last_position = make(map[Box_ID]int)
+	return ctx
+}
+
+event_context_destroy :: proc(ctx: ^Event_Context) {
+	if ctx == nil do return
+	delete(ctx.listeners)
+	delete(ctx.previous_listeners)
+	delete(ctx.focus_order)
+	delete(ctx.text_cursors)
+	delete(ctx.text_selection)
+	delete(ctx.scroll_offsets_x)
+	delete(ctx.scroll_offsets_y)
+	delete(ctx.cursor_blink_start)
+	delete(ctx.clicked_this_frame)
+	delete(ctx.cursor_last_position)
+	free(ctx)
 }
 
 event_callbacks :: proc(ctx: ^Event_Context, id: Box_ID) -> (Event_Callbacks, bool) {
@@ -485,8 +525,10 @@ pointer_up :: proc(ctx: ^Event_Context, x, y: f32, is_touch: bool, touch_id: sdl
 pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 	mx, my: i32
 	sdl.GetMouseState(&mx, &my)
+	local_mx := f32(mx) - ctx.input_origin_x
+	local_my := f32(my) - ctx.input_origin_y
 
-	hovered_box := get_hovered_box_at(ctx, f32(mx), f32(my))
+	hovered_box := get_hovered_box_at(ctx, local_mx, local_my)
 
 	current_hovered_id := hovered_box != nil ? hovered_box.id : 0
 
@@ -497,7 +539,13 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 	case .MOUSEBUTTONDOWN:
 		if e.button.button == sdl.BUTTON_LEFT {
 			ctx.focus_visible = false
-			pointer_down(ctx, f32(e.button.x), f32(e.button.y), false, 0)
+			pointer_down(
+				ctx,
+				f32(e.button.x) - ctx.input_origin_x,
+				f32(e.button.y) - ctx.input_origin_y,
+				false,
+				0,
+			)
 		}
 		if e.button.button == sdl.BUTTON_RIGHT {
 			// Snap the right click to the nearest interactive parent
@@ -517,14 +565,16 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 
 	case .MOUSEBUTTONUP:
 		if e.button.button == sdl.BUTTON_LEFT {
-			pointer_up(ctx, f32(e.button.x), f32(e.button.y), false, 0)
+			local_x := f32(e.button.x) - ctx.input_origin_x
+			local_y := f32(e.button.y) - ctx.input_origin_y
+			pointer_up(ctx, local_x, local_y, false, 0)
 			if e.button.clicks >= 2 {
-				double_click_target := get_hovered_box_at(ctx, f32(e.button.x), f32(e.button.y))
+				double_click_target := get_hovered_box_at(ctx, local_x, local_y)
 				if double_click_target != nil {
 					click := UI_Event {
 						target  = double_click_target.id,
-						mouse_x = f32(e.button.x),
-						mouse_y = f32(e.button.y),
+						mouse_x = local_x,
+						mouse_y = local_y,
 					}
 					bubble_event(ctx, double_click_target, .Double_Click, &click)
 				}
@@ -532,23 +582,41 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 		}
 
 	case .MOUSEMOTION:
-		pointer_move(ctx, f32(e.motion.x), f32(e.motion.y), f32(e.motion.xrel), f32(e.motion.yrel), false, 0)
+		pointer_move(
+			ctx,
+			f32(e.motion.x) - ctx.input_origin_x,
+			f32(e.motion.y) - ctx.input_origin_y,
+			f32(e.motion.xrel),
+			f32(e.motion.yrel),
+			false,
+			0,
+		)
 
 	case .FINGERDOWN:
 		if ctx.viewport_w > 0 && ctx.viewport_h > 0 {
 			ctx.touch_active = true
 			ctx.active_touch_id = sdl.FingerID(e.tfinger.fingerId)
-			pointer_down(ctx, e.tfinger.x * ctx.viewport_w, e.tfinger.y * ctx.viewport_h, true, ctx.active_touch_id)
+			screen_w := ctx.input_screen_w > 0 ? ctx.input_screen_w : ctx.viewport_w
+			screen_h := ctx.input_screen_h > 0 ? ctx.input_screen_h : ctx.viewport_h
+			pointer_down(
+				ctx,
+				e.tfinger.x * screen_w - ctx.input_origin_x,
+				e.tfinger.y * screen_h - ctx.input_origin_y,
+				true,
+				ctx.active_touch_id,
+			)
 		}
 
 	case .FINGERMOTION:
 		if ctx.touch_active && sdl.FingerID(e.tfinger.fingerId) == ctx.active_touch_id {
+			screen_w := ctx.input_screen_w > 0 ? ctx.input_screen_w : ctx.viewport_w
+			screen_h := ctx.input_screen_h > 0 ? ctx.input_screen_h : ctx.viewport_h
 			pointer_move(
 				ctx,
-				e.tfinger.x * ctx.viewport_w,
-				e.tfinger.y * ctx.viewport_h,
-				e.tfinger.dx * ctx.viewport_w,
-				e.tfinger.dy * ctx.viewport_h,
+				e.tfinger.x * screen_w - ctx.input_origin_x,
+				e.tfinger.y * screen_h - ctx.input_origin_y,
+				e.tfinger.dx * screen_w,
+				e.tfinger.dy * screen_h,
 				true,
 				ctx.active_touch_id,
 			)
@@ -556,7 +624,15 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 
 	case .FINGERUP:
 		if ctx.touch_active && sdl.FingerID(e.tfinger.fingerId) == ctx.active_touch_id {
-			pointer_up(ctx, e.tfinger.x * ctx.viewport_w, e.tfinger.y * ctx.viewport_h, true, ctx.active_touch_id)
+			screen_w := ctx.input_screen_w > 0 ? ctx.input_screen_w : ctx.viewport_w
+			screen_h := ctx.input_screen_h > 0 ? ctx.input_screen_h : ctx.viewport_h
+			pointer_up(
+				ctx,
+				e.tfinger.x * screen_w - ctx.input_origin_x,
+				e.tfinger.y * screen_h - ctx.input_origin_y,
+				true,
+				ctx.active_touch_id,
+			)
 			ctx.touch_active = false
 		}
 
@@ -573,8 +649,8 @@ pump_events :: proc(ctx: ^Event_Context, e: ^sdl.Event) {
 
 			ui_ev := UI_Event {
 				target    = current_hovered_id,
-				mouse_x   = f32(mx),
-				mouse_y   = f32(my),
+				mouse_x   = local_mx,
+				mouse_y   = local_my,
 				scroll_dx = dx,
 				scroll_dy = dy,
 			}

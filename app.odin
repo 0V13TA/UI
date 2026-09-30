@@ -22,6 +22,8 @@ App :: struct {
 	ui_scale:     f32,
 	quit:         bool,
 	bg_color:     Color,
+	event_router: proc(app: ^App, event: ^sdl.Event, data: rawptr) -> bool,
+	event_router_data: rawptr,
 
 	// Cached System Cursors
 	cursor_arrow: ^sdl.Cursor,
@@ -114,19 +116,13 @@ app_init :: proc(
 	app.anim = new(Context)
 	app.anim.states = make(map[Box_ID]^Retained_State)
 
-	app.ev = new(Event_Context)
-	app.ev.layout = app.ui.layout
-	app.ev.viewport_w = f32(app.window_w)
-	app.ev.viewport_h = f32(app.window_h)
-	app.ev.listeners = make(map[Box_ID]Event_Callbacks)
-	app.ev.previous_listeners = make(map[Box_ID]Event_Callbacks)
-	app.ev.clicked_this_frame = make(map[Box_ID]bool)
-	app.ev.scroll_offsets_x = make(map[Box_ID]f32)
-	app.ev.scroll_offsets_y = make(map[Box_ID]f32)
-	app.ev.text_cursors = make(map[Box_ID]int)
-	app.ev.text_selection = make(map[Box_ID]int)
-	app.ev.cursor_blink_start = make(map[Box_ID]u64)
-	app.ev.cursor_last_position = make(map[Box_ID]int)
+	app.ev = event_context_create(
+		app.ui.layout,
+		f32(app.window_w),
+		f32(app.window_h),
+		f32(app.window_w),
+		f32(app.window_h),
+	)
 
 	app.cursor_arrow = sdl.CreateSystemCursor(.ARROW)
 	app.cursor_hand = sdl.CreateSystemCursor(.HAND)
@@ -158,6 +154,15 @@ ui_begin_app :: proc(
 	return app_init(title, width, height, flags, asset_dir)
 }
 
+app_set_event_router :: proc(
+	app: ^App,
+	router: proc(app: ^App, event: ^sdl.Event, data: rawptr) -> bool,
+	data: rawptr = nil,
+) {
+	app.event_router = router
+	app.event_router_data = data
+}
+
 app_destroy :: proc(app: ^App) {
 	sdl.StopTextInput()
 	component_state_destroy()
@@ -167,18 +172,7 @@ app_destroy :: proc(app: ^App) {
 	sdl.FreeCursor(app.cursor_hand)
 	sdl.FreeCursor(app.cursor_ibeam)
 
-	// Clean up event context maps
-	delete(app.ev.listeners)
-	delete(app.ev.previous_listeners)
-	delete(app.ev.focus_order)
-	delete(app.ev.text_cursors)
-	delete(app.ev.text_selection)
-	delete(app.ev.scroll_offsets_x)
-	delete(app.ev.scroll_offsets_y)
-	delete(app.ev.cursor_blink_start)
-	delete(app.ev.clicked_this_frame)
-	delete(app.ev.cursor_last_position)
-	free(app.ev)
+	event_context_destroy(app.ev)
 
 	// Clean up animation context maps
 	for _, state in app.anim.states do free(state)
@@ -207,7 +201,9 @@ app_begin_frame :: proc(app: ^App) {
 	// Pump SDL Events directly into the UI Engine
 	event: sdl.Event
 	for sdl.PollEvent(&event) != false {
-		pump_events(app.ev, &event)
+		consumed := app.event_router != nil &&
+		            app.event_router(app, &event, app.event_router_data)
+		if !consumed do pump_events(app.ev, &event)
 
 		#partial switch event.type {
 		case .QUIT:
@@ -226,6 +222,8 @@ app_begin_frame :: proc(app: ^App) {
 				}
 				app.ev.viewport_w = f32(app.window_w)
 				app.ev.viewport_h = f32(app.window_h)
+				app.ev.input_screen_w = f32(app.window_w)
+				app.ev.input_screen_h = f32(app.window_h)
 			}
 
 		}
@@ -243,25 +241,191 @@ app_begin_frame :: proc(app: ^App) {
 	ui_begin_frame(app.ui, app.renderer, app.window_w, app.window_h)
 }
 
-app_end_frame :: proc(app: ^App) {
+app_create_nested_context :: proc(host: ^App) -> ^App {
+	nested := new(App)
+	nested.renderer = host.renderer
+	nested.window_w = host.window_w
+	nested.window_h = host.window_h
+	nested.ui_scale = host.ui_scale
+	nested.ui = ui_context_create(
+		f32(host.window_w),
+		f32(host.window_h),
+		host.ui.asset_dir,
+	)
+	nested.anim = new(Context)
+	nested.anim.states = make(map[Box_ID]^Retained_State)
+	nested.ev = event_context_create(
+		nested.ui.layout,
+		f32(host.window_w),
+		f32(host.window_h),
+		f32(host.window_w),
+		f32(host.window_h),
+	)
+	return nested
+}
+
+app_destroy_nested_context :: proc(nested: ^App) {
+	if nested == nil do return
+
+	event_context_destroy(nested.ev)
+	for _, state in nested.anim.states do free(state)
+	delete(nested.anim.states)
+	delete(nested.anim.engine.tweens)
+	free(nested.anim)
+	ui_context_destroy(nested.ui)
+	free(nested)
+}
+
+app_begin_nested_frame :: proc(
+	nested: ^App,
+	width, height: i32,
+	origin_x, origin_y: f32,
+	input_screen_w, input_screen_h: f32,
+	delta: f32,
+	events: []sdl.Event,
+) -> bool {
+	if nested == nil || width <= 0 || height <= 0 do return false
+
+	nested.window_w = width
+	nested.window_h = height
+	nested.time.delta = delta
+	nested.ev.viewport_w = f32(width)
+	nested.ev.viewport_h = f32(height)
+	nested.ev.input_origin_x = origin_x
+	nested.ev.input_origin_y = origin_y
+	nested.ev.input_screen_w = input_screen_w
+	nested.ev.input_screen_h = input_screen_h
+
+	begin_frame(nested.ev)
+	for &event in events {
+		pump_events(nested.ev, &event)
+	}
+	nested.ev.listeners, nested.ev.previous_listeners =
+		nested.ev.previous_listeners, nested.ev.listeners
+	clear(&nested.ev.listeners)
+	clear(&nested.ev.focus_order)
+
+	ui_begin_frame(nested.ui, nested.renderer, width, height)
+	return true
+}
+
+@(private)
+app_resolve_ui_frame :: proc(app: ^App) -> []^Box {
 	roots := ui_layout_tree(app.ui)
 	if app.ev.focused_id != 0 {
 		_, box_exists := app.ui.layout.all_boxes[app.ev.focused_id]
 		callbacks, has_callbacks := app.ev.listeners[app.ev.focused_id]
-		if !box_exists || !has_callbacks || !callbacks.focusable || callbacks.disabled do set_focus(app.ev, 0)
+		if !box_exists || !has_callbacks || !callbacks.focusable || callbacks.disabled {
+			set_focus(app.ev, 0)
+		}
 	}
 	if app.ev.pressed_id != 0 && app.ev.pressed_id not_in app.ui.layout.all_boxes {
 		app.ev.pressed_id = 0
 	}
 
-	// Apply structural animations before constraints are resolved
 	for root in roots {
 		apply_structural(app.anim, root)
 	}
-
-	// Resolve Layout Engine Boundaries
 	ui_compute(app.ui)
 	refresh_hover(app.ev)
+	return roots
+}
+
+@(private)
+app_finalize_ui_frame :: proc(app: ^App, roots: []^Box) {
+	process_lifecycles(app.anim, app.ui.layout)
+	update(&app.anim.engine, app.time.delta)
+
+	visual_cb :: proc(user_data: rawptr, state: ^Retained_State) {
+		el := (^Element)(user_data)
+		if el == nil do return
+		el.resolved_opacity = state.opacity
+		if state.has_bg_color do el.style.bg_color = transmute(Color)state.bg_color
+		if state.has_text_color do el.style.text_color = transmute(Color)state.text_color
+		if state.has_border_color do el.style.border_color = transmute(Color)state.border_color
+	}
+	for root in roots {
+		apply_visual(app.anim, root, visual_cb)
+	}
+}
+
+app_end_nested_frame :: proc(nested: ^App, bounds: sdl.Rect) -> bool {
+	if nested == nil || bounds.w <= 0 || bounds.h <= 0 do return false
+
+	roots := app_resolve_ui_frame(nested)
+	app_finalize_ui_frame(nested, roots)
+
+	old_viewport: sdl.Rect
+	old_clip: sdl.Rect
+	sdl.RenderGetViewport(nested.renderer, &old_viewport)
+	sdl.RenderGetClipRect(nested.renderer, &old_clip)
+	old_clip_enabled := sdl.RenderIsClipEnabled(nested.renderer)
+
+	viewport := bounds
+	if sdl.RenderSetViewport(nested.renderer, &viewport) != 0 {
+		fmt.printfln("SDL nested canvas viewport error: %s", sdl.GetError())
+		return false
+	}
+
+	nested_clip := sdl.Rect{0, 0, bounds.w, bounds.h}
+	if old_clip_enabled {
+		left := max(old_clip.x, bounds.x)
+		top := max(old_clip.y, bounds.y)
+		right := min(old_clip.x + old_clip.w, bounds.x + bounds.w)
+		bottom := min(old_clip.y + old_clip.h, bounds.y + bounds.h)
+		nested_clip = sdl.Rect{
+			max(left - bounds.x, 0),
+			max(top - bounds.y, 0),
+			max(right - left, 0),
+			max(bottom - top, 0),
+		}
+	}
+	if sdl.RenderSetClipRect(nested.renderer, &nested_clip) != 0 {
+		fmt.printfln("SDL nested canvas clip error: %s", sdl.GetError())
+		sdl.RenderSetViewport(nested.renderer, &old_viewport)
+		if old_clip_enabled do sdl.RenderSetClipRect(nested.renderer, &old_clip)
+		else do sdl.RenderSetClipRect(nested.renderer, nil)
+		return false
+	}
+
+	initial_clip := Rect {
+		f32(nested_clip.x),
+		f32(nested_clip.y),
+		f32(nested_clip.w),
+		f32(nested_clip.h),
+	}
+	render_tree(nested.ui, nested.renderer, roots, initial_clip)
+	if nested.ev.focus_visible && nested.ev.focused_id != 0 {
+		if focused, ok := nested.ui.layout.all_boxes[nested.ev.focused_id]; ok {
+			if clip, has_clip := focused.clip_rect.?; has_clip {
+				focus_clip := sdl.Rect{i32(clip.x), i32(clip.y), i32(clip.width), i32(clip.height)}
+				clipped_focus: sdl.Rect
+				sdl.IntersectRect(&nested_clip, &focus_clip, &clipped_focus)
+				sdl.RenderSetClipRect(nested.renderer, &clipped_focus)
+			}
+			ring_width := i32(max(focused.focus_width, 0.0))
+			r, g, b, a := to_sdl_color(focused.focus_color)
+			for inset in -ring_width ..< 0 {
+				rect := sdl.Rect {
+					i32(focused.x) + i32(inset),
+					i32(focused.y) + i32(inset),
+					i32(focused.computed_width) - i32(inset) * 2,
+					i32(focused.computed_height) - i32(inset) * 2,
+				}
+				sdl.SetRenderDrawColor(nested.renderer, r, g, b, a)
+				sdl.RenderDrawRect(nested.renderer, &rect)
+			}
+		}
+	}
+
+	sdl.RenderSetViewport(nested.renderer, &old_viewport)
+	if old_clip_enabled do sdl.RenderSetClipRect(nested.renderer, &old_clip)
+	else do sdl.RenderSetClipRect(nested.renderer, nil)
+	return true
+}
+
+app_end_frame :: proc(app: ^App) {
+	roots := app_resolve_ui_frame(app)
 
 	target_cursor := app.cursor_arrow
 	if hovered, ok := app.ui.layout.all_boxes[app.ev.hovered_id]; ok {
@@ -280,24 +444,7 @@ app_end_frame :: proc(app: ^App) {
 	}
 	if sdl.GetCursor() != target_cursor do sdl.SetCursor(target_cursor)
 
-	// Process Animation Lifecycles & Delta Ticks
-	process_lifecycles(app.anim, app.ui.layout)
-	update(&app.anim.engine, app.time.delta)
-
-	// Apply Visual Transitions
-	visual_cb :: proc(user_data: rawptr, state: ^Retained_State) {
-		el := (^Element)(user_data)
-		if el == nil do return
-
-		el.resolved_opacity = state.opacity
-
-		if state.has_bg_color do el.style.bg_color = transmute(Color)state.bg_color
-		if state.has_text_color do el.style.text_color = transmute(Color)state.text_color
-		if state.has_border_color do el.style.border_color = transmute(Color)state.border_color
-	}
-	for root in roots {
-		apply_visual(app.anim, root, visual_cb)
-	}
+	app_finalize_ui_frame(app, roots)
 
 	// Draw the generated UI Box Tree
 	render_tree(app.ui, app.renderer, roots)

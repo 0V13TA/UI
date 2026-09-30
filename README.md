@@ -82,7 +82,7 @@ or global library configuration is needed. Video playback uses FFmpeg; the
 Android build uses the bundled Android arm64 prebuilt. Desktop applications
 that use video must provide compatible FFmpeg libraries at link/runtime.
 
-Run the library's tests from its directory with:
+Run the library tests from the library directory with:
 
 ```sh
 odin test .

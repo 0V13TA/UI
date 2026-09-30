@@ -35,6 +35,13 @@ ODIN_SOURCES := $(shell find "$(UI_DIR)" -path "$(UI_DIR)/build" -prune -o -type
 APP_SOURCES := $(shell find "$(APP_ROOT)" -type f -name '*.odin' -print)
 UI_RESOURCES := $(shell find "$(UI_DIR)/resources" -type f -print)
 
+cmake-fresh-flag = $(shell \
+	if test -f "$(1)/CMakeCache.txt" && \
+	   { ! grep -Fqx 'CMAKE_CACHEFILE_DIR:INTERNAL=$(1)' "$(1)/CMakeCache.txt" || \
+	     ! grep -Fqx 'CMAKE_HOME_DIRECTORY:INTERNAL=$(2)' "$(1)/CMakeCache.txt"; }; then \
+		printf '%s' '--fresh'; \
+	fi)
+
 .PHONY: all sdl2-sources sdl2 sdl2-image sdl2-ttf sdl2-net desktop-libs build
 .PHONY: desktop-build desktop-run
 .PHONY: android-native android-apk android-install clean
@@ -48,21 +55,21 @@ sdl2-sources:
 	test -f "$(UI_DIR)/third_party/SDL2_net-2.2.0/CMakeLists.txt"
 
 sdl2: sdl2-sources
-	cmake -S "$(UI_DIR)/SDL" -B "$(UI_DIR)/build/desktop/sdl2" -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_TESTS=OFF $(SDL_CMAKE_ARGS)
+	cmake $(call cmake-fresh-flag,$(UI_DIR)/build/desktop/sdl2,$(UI_DIR)/SDL) -S "$(UI_DIR)/SDL" -B "$(UI_DIR)/build/desktop/sdl2" -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_TESTS=OFF $(SDL_CMAKE_ARGS)
 	find "$(UI_DIR)/build/desktop/sdl2" -type f -name '*.o' -size 0 -delete
 	cmake --build "$(UI_DIR)/build/desktop/sdl2" --parallel
 	cmake --install "$(UI_DIR)/build/desktop/sdl2" --prefix "$(UI_DIR)/build/desktop/sdl2-install"
 
 sdl2-image: sdl2 sdl2-sources
-	cmake -S "$(UI_DIR)/third_party/SDL2_image-2.8.8" -B "$(UI_DIR)/build/desktop/sdl2-image" -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$(UI_DIR)/build/desktop/sdl2-install" -DSDL2_DIR="$(UI_DIR)/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2IMAGE_SAMPLES=OFF -DSDL2IMAGE_TESTS=OFF -DSDL2IMAGE_INSTALL=OFF $(SDL_CMAKE_ARGS)
+	cmake $(call cmake-fresh-flag,$(UI_DIR)/build/desktop/sdl2-image,$(UI_DIR)/third_party/SDL2_image-2.8.8) -S "$(UI_DIR)/third_party/SDL2_image-2.8.8" -B "$(UI_DIR)/build/desktop/sdl2-image" -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$(UI_DIR)/build/desktop/sdl2-install" -DSDL2_DIR="$(UI_DIR)/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2IMAGE_SAMPLES=OFF -DSDL2IMAGE_TESTS=OFF -DSDL2IMAGE_INSTALL=OFF $(SDL_CMAKE_ARGS)
 	cmake --build "$(UI_DIR)/build/desktop/sdl2-image" --parallel
 
 sdl2-ttf: sdl2 sdl2-sources
-	cmake -S "$(UI_DIR)/third_party/SDL2_ttf-2.24.0" -B "$(UI_DIR)/build/desktop/sdl2-ttf" -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$(UI_DIR)/build/desktop/sdl2-install" -DSDL2_DIR="$(UI_DIR)/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2TTF_SAMPLES=OFF -DSDL2TTF_INSTALL=OFF $(SDL_CMAKE_ARGS)
+	cmake $(call cmake-fresh-flag,$(UI_DIR)/build/desktop/sdl2-ttf,$(UI_DIR)/third_party/SDL2_ttf-2.24.0) -S "$(UI_DIR)/third_party/SDL2_ttf-2.24.0" -B "$(UI_DIR)/build/desktop/sdl2-ttf" -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$(UI_DIR)/build/desktop/sdl2-install" -DSDL2_DIR="$(UI_DIR)/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2TTF_SAMPLES=OFF -DSDL2TTF_INSTALL=OFF $(SDL_CMAKE_ARGS)
 	cmake --build "$(UI_DIR)/build/desktop/sdl2-ttf" --parallel
 
 sdl2-net: sdl2 sdl2-sources
-	cmake -S "$(UI_DIR)/third_party/SDL2_net-2.2.0" -B "$(UI_DIR)/build/desktop/sdl2-net" -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$(UI_DIR)/build/desktop/sdl2-install" -DSDL2_DIR="$(UI_DIR)/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2NET_SAMPLES=OFF -DSDL2NET_INSTALL=OFF $(SDL_CMAKE_ARGS)
+	cmake $(call cmake-fresh-flag,$(UI_DIR)/build/desktop/sdl2-net,$(UI_DIR)/third_party/SDL2_net-2.2.0) -S "$(UI_DIR)/third_party/SDL2_net-2.2.0" -B "$(UI_DIR)/build/desktop/sdl2-net" -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$(UI_DIR)/build/desktop/sdl2-install" -DSDL2_DIR="$(UI_DIR)/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2NET_SAMPLES=OFF -DSDL2NET_INSTALL=OFF $(SDL_CMAKE_ARGS)
 	cmake --build "$(UI_DIR)/build/desktop/sdl2-net" --parallel
 
 desktop-libs: sdl2-image sdl2-ttf sdl2-net

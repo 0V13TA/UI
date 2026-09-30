@@ -1,12 +1,12 @@
 package UI
 
+import sdl "./vendor/sdl2"
+import "./vendor/sdl2/ttf"
 import "core:fmt"
 import "core:hash"
 import "core:math"
 import "core:strings"
 import "core:unicode/utf8"
-import sdl "./vendor/sdl2"
-import "./vendor/sdl2/ttf"
 
 switch_toggle_prev_state: map[Box_ID]bool
 accordion_prev_expanded: map[Box_ID]bool
@@ -21,6 +21,96 @@ component_carousel_prev_dot_active: map[Box_ID]bool
 component_color_hsv: map[Box_ID][3]f32
 component_date_views: map[Box_ID][2]int
 component_debug_expanded: map[Box_ID]bool
+
+Component_Kind :: enum {
+	Block,
+	Text,
+	Button,
+	Checkbox,
+	Radio,
+	Slider,
+	Text_Input,
+	Image,
+	Image_Button,
+	Video,
+	Tooltip,
+	Popover,
+	Dropdown,
+	Modal,
+	Context_Menu,
+	Switch,
+	Multi_Select,
+	Combobox,
+	Progress,
+	Spinner,
+	Toast,
+	Tabs,
+	Accordion,
+	Table,
+	List_View,
+	Router_View,
+	Carousel,
+	Color_Picker,
+	Date_Picker,
+	Canvas,
+	Scroll_Area,
+	Spacer,
+	Debug_Panel,
+	Textarea,
+}
+
+Component_Definition :: struct {
+	kind:                Component_Kind,
+	key:                 string,
+	name:                string,
+	can_have_children:   bool,
+	has_text_content:    bool,
+	supports_typography: bool,
+}
+
+COMPONENT_DEFINITIONS :: [34]Component_Definition {
+	{.Block, "block", "Block", true, false, true},
+	{.Text, "text", "Text", false, true, true},
+	{.Button, "button", "Button", false, true, true},
+	{.Checkbox, "checkbox", "Checkbox", false, true, true},
+	{.Radio, "radio", "Radio", false, true, true},
+	{.Slider, "slider", "Slider", false, false, false},
+	{.Text_Input, "text-input", "Text Input", false, true, true},
+	{.Image, "image", "Image", false, false, false},
+	{.Image_Button, "image-button", "Image Button", false, false, false},
+	{.Video, "video", "Video", false, false, false},
+	{.Tooltip, "tooltip", "Tooltip", true, true, true},
+	{.Popover, "popover", "Popover", true, true, true},
+	{.Dropdown, "dropdown", "Dropdown", false, true, true},
+	{.Modal, "modal", "Modal", true, true, true},
+	{.Context_Menu, "context-menu", "Context Menu", true, true, true},
+	{.Switch, "switch", "Switch", false, true, true},
+	{.Multi_Select, "multi-select", "Multi Select", false, true, true},
+	{.Combobox, "combobox", "Combobox", false, true, true},
+	{.Progress, "progress", "Progress Bar", false, false, false},
+	{.Spinner, "spinner", "Spinner", false, false, false},
+	{.Toast, "toast", "Toast", false, true, true},
+	{.Tabs, "tabs", "Tabs", true, true, true},
+	{.Accordion, "accordion", "Accordion", true, true, true},
+	{.Table, "table", "Table", true, false, false},
+	{.List_View, "list-view", "List View", true, false, false},
+	{.Router_View, "router-view", "Router View", true, false, false},
+	{.Carousel, "carousel", "Carousel", true, false, false},
+	{.Color_Picker, "color-picker", "Color Picker", false, false, false},
+	{.Date_Picker, "date-picker", "Date Picker", false, false, false},
+	{.Canvas, "canvas", "Canvas", true, false, false},
+	{.Scroll_Area, "scroll-area", "Scroll Area", true, false, false},
+	{.Spacer, "spacer", "Spacer", false, false, false},
+	{.Debug_Panel, "debug-panel", "Debug Panel", true, false, false},
+	{.Textarea, "textarea", "Text Area", false, true, true},
+}
+
+component_definition :: proc(kind: Component_Kind) -> (Component_Definition, bool) {
+	for definition in COMPONENT_DEFINITIONS {
+		if definition.kind == kind do return definition, true
+	}
+	return {}, false
+}
 
 component_state_destroy :: proc() {
 	delete(switch_toggle_prev_state)
@@ -190,10 +280,10 @@ button :: proc(
 		ev_ctx,
 		final_id,
 		Event_Callbacks {
-			focusable       = true,
-			disabled        = user_style.disabled.? or_else false,
+			focusable = true,
+			disabled = user_style.disabled.? or_else false,
 			activate_on_key = true,
-			cursor          = .HAND,
+			cursor = .HAND,
 		},
 	)
 
@@ -317,7 +407,11 @@ scroll_end :: proc(app: ^App, id: Box_ID) {
 
 		if content_h > prev.computed_height {
 			ratio := prev.computed_height / content_h
-			thumb_h := clamp(prev.computed_height * ratio, min(24.0, prev.computed_height), prev.computed_height)
+			thumb_h := clamp(
+				prev.computed_height * ratio,
+				min(24.0, prev.computed_height),
+				prev.computed_height,
+			)
 
 			max_scroll := content_h - prev.computed_height
 			scroll_y := ev_ctx.scroll_offsets_y[id]
@@ -422,10 +516,10 @@ checkbox :: proc(
 		ev_ctx,
 		root_id,
 		Event_Callbacks {
-			focusable       = true,
-			disabled        = is_disabled,
+			focusable = true,
+			disabled = is_disabled,
 			activate_on_key = true,
-			cursor          = .HAND,
+			cursor = .HAND,
 		},
 	)
 	if !is_disabled && (ev_ctx.clicked_this_frame[root_id] or_else false) {
@@ -501,10 +595,10 @@ radio :: proc(
 		ev_ctx,
 		root_id,
 		Event_Callbacks {
-			focusable       = true,
-			disabled        = is_disabled,
+			focusable = true,
+			disabled = is_disabled,
 			activate_on_key = true,
-			cursor          = .HAND,
+			cursor = .HAND,
 		},
 	)
 	if !is_disabled && (ev_ctx.clicked_this_frame[root_id] or_else false) {
@@ -588,8 +682,8 @@ slider :: proc(
 		ev_ctx,
 		root_id,
 		Event_Callbacks {
-			focusable       = true,
-			disabled        = wrapper_style.disabled.? or_else false,
+			focusable = true,
+			disabled = wrapper_style.disabled.? or_else false,
 			activate_on_key = true,
 		},
 	)
@@ -605,7 +699,8 @@ slider :: proc(
 	if is_pressed && !ev_ctx.listeners[root_id].disabled && max_val != min_val {
 		if prev_box, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
 			local_x := ev_ctx.pointer_x - prev_box.x
-			percent := prev_box.computed_width > 0 ? clamp(local_x / prev_box.computed_width, 0.0, 1.0) : 0.0
+			percent :=
+				prev_box.computed_width > 0 ? clamp(local_x / prev_box.computed_width, 0.0, 1.0) : 0.0
 			new_val := min_val + (max_val - min_val) * percent
 
 			if new_val != value^ {
@@ -634,7 +729,8 @@ slider :: proc(
 		}
 	}
 
-	fill_percent := max_val != min_val ? clamp((value^ - min_val) / (max_val - min_val), 0.0, 1.0) : 0.0
+	fill_percent :=
+		max_val != min_val ? clamp((value^ - min_val) / (max_val - min_val), 0.0, 1.0) : 0.0
 
 	element_open(app, Element{_box = {id = root_id}, style = wrapper_style}, loc)
 	element_open(app, Element{_box = {id = track_id}, style = track_style})
@@ -1200,10 +1296,10 @@ image_button :: proc(
 		ev_ctx,
 		id,
 		Event_Callbacks {
-			focusable       = true,
-			disabled        = is_disabled,
+			focusable = true,
+			disabled = is_disabled,
 			activate_on_key = true,
-			cursor          = .HAND,
+			cursor = .HAND,
 		},
 	)
 	is_clicked = is_clicked && !is_disabled
@@ -1510,10 +1606,10 @@ popover_begin :: proc(
 	}
 	if final_style.top == nil {
 		top := target_y + target_h + 8.0
-		if popover_height > 0 && top + popover_height > viewport_height-8.0 {
+		if popover_height > 0 && top + popover_height > viewport_height - 8.0 {
 			top = target_y - popover_height - 8.0
 		}
-		final_style.top = max(8.0, min(top, max(8.0, viewport_height-popover_height-8.0)))
+		final_style.top = max(8.0, min(top, max(8.0, viewport_height - popover_height - 8.0)))
 	}
 
 	register(ev_ctx, content_id, Event_Callbacks{focusable = true})
@@ -1874,10 +1970,10 @@ switch_toggle :: proc(
 		ev_ctx,
 		root_id,
 		Event_Callbacks {
-			focusable       = true,
-			disabled        = is_disabled,
+			focusable = true,
+			disabled = is_disabled,
 			activate_on_key = true,
-			cursor          = .HAND,
+			cursor = .HAND,
 		},
 	)
 	if !is_disabled && (ev_ctx.clicked_this_frame[root_id] or_else false) do state^ = !state^
@@ -2894,8 +2990,8 @@ carousel_textures :: proc(
 	element_open(app, Element{_box = {id = viewport_id}, style = final_viewport})
 
 	// Use the prior layout measurement for responsive viewports after the first frame.
-	vp_width: f32 = max(f32(app.window_w)-48.0, 1.0)
-	vp_height: f32 = max(f32(app.window_h)*0.45, 180.0)
+	vp_width: f32 = max(f32(app.window_w) - 48.0, 1.0)
+	vp_height: f32 = max(f32(app.window_h) * 0.45, 180.0)
 	if w_union, ok := final_viewport.width.?; ok {
 		switch w in w_union {
 		case Fixed:

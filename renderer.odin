@@ -997,15 +997,36 @@ set_clip :: proc(renderer: ^sdl.Renderer, current: ^Maybe(Rect), target: Maybe(R
 }
 
 @(private)
+intersect_clip :: proc(base_clip, box_clip: Maybe(Rect)) -> Maybe(Rect) {
+	base, has_base := base_clip.?
+	box, has_box := box_clip.?
+	if has_base && has_box {
+		left := max(base.x, box.x)
+		top := max(base.y, box.y)
+		right := min(base.x + base.width, box.x + box.width)
+		bottom := min(base.y + base.height, box.y + box.height)
+		return Rect {
+			x = left,
+			y = top,
+			width = max(right - left, 0),
+			height = max(bottom - top, 0),
+		}
+	}
+	if has_base do return base_clip
+	return box_clip
+}
+
+@(private)
 render_box :: proc(
 	ui_ctx: ^UI_Context,
 	renderer: ^sdl.Renderer,
 	box: ^Box,
 	current_clip: ^Maybe(Rect),
+	base_clip: Maybe(Rect),
 ) {
 	previous_clip := current_clip^
 
-	set_clip(renderer, current_clip, box.clip_rect)
+	set_clip(renderer, current_clip, intersect_clip(base_clip, box.clip_rect))
 
 	if box.user_data == nil do return
 	el := (^Element)(box.user_data)
@@ -1440,7 +1461,7 @@ render_box :: proc(
 	}
 
 	for child in box.children {
-		render_box(ui_ctx, renderer, child, current_clip)
+		render_box(ui_ctx, renderer, child, current_clip, base_clip)
 	}
 
 	// RESTORE the caller's clip state before returning
@@ -1448,15 +1469,18 @@ render_box :: proc(
 }
 
 @(private)
-render_tree :: proc(ctx: ^UI_Context, renderer: ^sdl.Renderer, root_boxes: []^Box) {
-	current_clip: Maybe(Rect) = nil
+render_tree :: proc(
+	ctx: ^UI_Context,
+	renderer: ^sdl.Renderer,
+	root_boxes: []^Box,
+	initial_clip: Maybe(Rect) = nil,
+) {
+	current_clip := initial_clip
 	for root_box in root_boxes {
-		render_box(ctx, renderer, root_box, &current_clip)
+		render_box(ctx, renderer, root_box, &current_clip, initial_clip)
 	}
 
-	if current_clip != nil {
-		sdl.RenderSetClipRect(renderer, nil)
-	}
+	set_clip(renderer, &current_clip, initial_clip)
 }
 
 @(private)
