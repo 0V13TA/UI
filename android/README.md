@@ -15,20 +15,20 @@ set `ANDROID_JAVA_HOME` to its installation directory.
 Build the APK:
 
 ```sh
-just android-apk
+make android-apk
 ```
 
 Android builds skip relinking `libodin_app.so` when the Odin sources and
 FFmpeg inputs are unchanged. To force that native relink:
 
 ```sh
-just android-native true
+make android-native FORCE=1
 ```
 
 Install and launch on a connected device with USB debugging enabled:
 
 ```sh
-just android-install
+make android-install
 ```
 
 The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
