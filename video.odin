@@ -330,7 +330,7 @@ ffmpeg_worker_thread :: proc "c" (data: rawptr) -> i32 {
 
 	just_sought := false
 
-	for player.is_playing {
+	for !player.quit_flag {
 		sdl.LockMutex(player.queue_mutex)
 		if player.seek_req {
 			target_ts := i64(player.seek_target * 1000000.0) // AV_TIME_BASE

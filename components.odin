@@ -2655,6 +2655,7 @@ carousel_textures :: proc(
 		}
 	}
 	track_id := ID(root_id, "track")
+	viewport_id := ID(root_id, "viewport")
 	arrows_id := ID(root_id, "arrows")
 	dots_id := ID(root_id, "dots")
 
@@ -2663,16 +2664,32 @@ carousel_textures :: proc(
 	element_open(app, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
 	final_viewport := merge_styles(DEFAULT_CAROUSEL_VIEWPORT, viewport_style)
-	element_open(app, Element{style = final_viewport})
+	element_open(app, Element{_box = {id = viewport_id}, style = final_viewport})
 
-	// Safely extract fixed dimensions to enforce constraint boundaries
+	// Use the prior layout measurement for responsive viewports after the first frame.
 	vp_width: f32 = 600.0
 	vp_height: f32 = 400.0
 	if w_union, ok := final_viewport.width.?; ok {
-		if w_fixed, is_fixed := w_union.(Fixed); is_fixed do vp_width = w_fixed.value
+		switch w in w_union {
+		case Fixed:
+			vp_width = w.value
+		case Percent, ViewPercent, Grow, Shrink, Fit:
+			if previous, exists := ui_ctx.layout.prev_all_boxes[viewport_id]; exists {
+				vp_width = previous.computed_width
+			} else {
+				vp_width = max(f32(app.window_w) - 48.0, 1.0)
+			}
+		}
 	}
 	if h_union, ok := final_viewport.height.?; ok {
-		if h_fixed, is_fixed := h_union.(Fixed); is_fixed do vp_height = h_fixed.value
+		switch h in h_union {
+		case Fixed:
+			vp_height = h.value
+		case Percent, ViewPercent, Grow, Shrink, Fit:
+			if previous, exists := ui_ctx.layout.prev_all_boxes[viewport_id]; exists {
+				vp_height = previous.computed_height
+			}
+		}
 	}
 
 	target_x := -f32(current_idx^) * vp_width
