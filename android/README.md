@@ -1,8 +1,9 @@
 # Android build
 
 This Gradle/NDK project packages a consumer Odin application's source with the
-UI library. The SDL 2.32 source, the pinned SDL2 add-ons, and Android SDL
-activity are kept in the library folder. The bundled FFmpeg prebuilt targets
+UI library. The SDL 2.32 source, the pinned SDL2 add-ons including SDL2_net,
+and Android SDL activity are kept in the library folder. The bundled FFmpeg
+prebuilt targets
 `arm64-v8a`, so Android support currently targets that ABI.
 
 ## Requirements
@@ -48,6 +49,10 @@ and videos load through SDL `RWops`, so Android's asset manager is used
 internally rather than expecting files in the library or application working
 directory. Odin UI's default font and component icons are embedded in the
 library and need no Android asset staging.
+
+On Android, the UI automatically uses density-independent coordinates based on
+the device's display density. This scales typography and other UI geometry
+together while desktop coordinates remain unchanged.
 
 The FFmpeg prebuilt is under `Android-FFmpeg-Prebuilt/ffmpeg-9.0`. The generated
 APK is `android/app/build/outputs/apk/debug/app-debug.apk`. Install and launch

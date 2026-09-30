@@ -19,6 +19,7 @@ App :: struct {
 	time:         Time_State,
 	window_w:     i32,
 	window_h:     i32,
+	ui_scale:     f32,
 	quit:         bool,
 	bg_color:     Color,
 
@@ -48,6 +49,7 @@ app_init :: proc(
 	app := new(App)
 	app.window_w = width
 	app.window_h = height
+	app.ui_scale = 1.0
 	app.bg_color = hex_rgb(0x18181b)
 	app.time._last_ticks = sdl.GetPerformanceCounter()
 
@@ -83,6 +85,29 @@ app_init :: proc(
 	}
 	sdl.SetRenderDrawBlendMode(app.renderer, .BLEND)
 
+	when ODIN_PLATFORM_SUBTARGET == .Android {
+		ddpi, hdpi, vdpi: f32
+		if sdl.GetDisplayDPI(0, &ddpi, &hdpi, &vdpi) == 0 && ddpi > 0 {
+			app.ui_scale = min(max(ddpi / 160.0, 0.75), 4.0)
+		} else {
+			fmt.printfln("SDL display DPI unavailable; using default UI scale")
+		}
+
+		output_w, output_h: i32
+		if sdl.GetRendererOutputSize(app.renderer, &output_w, &output_h) == 0 &&
+		   app_set_android_display_size(app, output_w, output_h) {
+			// Android UI coordinates use density-independent pixels.
+		} else {
+			fmt.printfln("SDL logical display sizing failed: %s", sdl.GetError())
+			sdl.DestroyRenderer(app.renderer)
+			sdl.DestroyWindow(app.window)
+			ttf.Quit()
+			sdl.Quit()
+			free(app)
+			return nil
+		}
+	}
+
 	// Initialize Subsystems
 	app.ui = ui_context_create(f32(app.window_w), f32(app.window_h), asset_dir)
 
@@ -110,6 +135,19 @@ app_init :: proc(
 	sdl.StartTextInput()
 
 	return app
+}
+
+@(private)
+app_set_android_display_size :: proc(app: ^App, pixel_w, pixel_h: i32) -> bool {
+	if pixel_w <= 0 || pixel_h <= 0 do return false
+
+	logical_w := max(i32(f32(pixel_w) / app.ui_scale), 1)
+	logical_h := max(i32(f32(pixel_h) / app.ui_scale), 1)
+	if sdl.RenderSetLogicalSize(app.renderer, logical_w, logical_h) != 0 do return false
+
+	app.window_w = logical_w
+	app.window_h = logical_h
+	return true
 }
 
 ui_begin_app :: proc(
@@ -179,8 +217,15 @@ app_begin_frame :: proc(app: ^App) {
 
 		case .WINDOWEVENT:
 			if event.window.event == .RESIZED || event.window.event == .SIZE_CHANGED {
-				app.window_w = event.window.data1
-				app.window_h = event.window.data2
+				when ODIN_PLATFORM_SUBTARGET == .Android {
+					if !app_set_android_display_size(app, event.window.data1, event.window.data2) {
+						fmt.printfln("SDL logical display resize failed: %s", sdl.GetError())
+						app.quit = true
+					}
+				} else {
+					app.window_w = event.window.data1
+					app.window_h = event.window.data2
+				}
 				app.ev.viewport_w = f32(app.window_w)
 				app.ev.viewport_h = f32(app.window_h)
 			}

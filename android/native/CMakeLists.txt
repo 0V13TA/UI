@@ -37,10 +37,13 @@ set(SDL2TTF_SAMPLES OFF CACHE BOOL "Do not build SDL2_ttf samples" FORCE)
 set(SDL2TTF_INSTALL OFF CACHE BOOL "Do not install SDL2_ttf" FORCE)
 set(SDL2TTF_VENDORED ON CACHE BOOL "Build FreeType from the local source tree" FORCE)
 set(SDL2TTF_HARFBUZZ OFF CACHE BOOL "Disable optional HarfBuzz dependency" FORCE)
+set(SDL2NET_SAMPLES OFF CACHE BOOL "Do not build SDL2_net samples" FORCE)
+set(SDL2NET_INSTALL OFF CACHE BOOL "Do not install SDL2_net" FORCE)
 
 add_subdirectory("${REPO_ROOT}/SDL" SDL2)
 add_subdirectory("${REPO_ROOT}/third_party/SDL2_image-2.8.8" SDL2_image)
 add_subdirectory("${REPO_ROOT}/third_party/SDL2_ttf-2.24.0" SDL2_ttf)
+add_subdirectory("${REPO_ROOT}/third_party/SDL2_net-2.2.0" SDL2_net)
 
 file(MAKE_DIRECTORY "${ANDROID_JNI_LIBS_DIR}")
 configure_file("${FFMPEG_ROOT}/libffmpeg.so" "${ANDROID_JNI_LIBS_DIR}/libffmpeg.so" COPYONLY)
@@ -86,11 +89,9 @@ add_custom_command(
     VERBATIM
 )
 add_custom_target(odin_app_build DEPENDS "${ODIN_APP_LIBRARY}")
-add_dependencies(odin_app_build SDL2 SDL2_image SDL2_ttf)
-
-add_library(odin_app SHARED IMPORTED GLOBAL)
-set_target_properties(odin_app PROPERTIES IMPORTED_LOCATION "${ODIN_APP_LIBRARY}")
+add_dependencies(odin_app_build SDL2 SDL2_image SDL2_ttf SDL2_net)
 
 add_library(main SHARED android_entry.c)
-target_link_libraries(main PRIVATE SDL2 SDL2_image SDL2_ttf odin_app)
+target_link_directories(main PRIVATE "${ANDROID_JNI_LIBS_DIR}")
+target_link_libraries(main PRIVATE SDL2 SDL2_image SDL2_ttf SDL2_net "-lodin_app")
 add_dependencies(main odin_app_build)

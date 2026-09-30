@@ -10,6 +10,10 @@ override APP_ROOT := $(abspath $(APP_ROOT))
 APP_ASSETS_DIR ?= $(APP_ROOT)/assets
 override APP_ASSETS_DIR := $(abspath $(APP_ASSETS_DIR))
 APP_ASSET_DIR ?= assets
+DESKTOP_APP_ROOT ?= $(UI_DIR)/tests/desktop
+override DESKTOP_APP_ROOT := $(abspath $(DESKTOP_APP_ROOT))
+DESKTOP_BINARY ?= $(UI_DIR)/build/desktop/OdinUI
+override DESKTOP_BINARY := $(abspath $(DESKTOP_BINARY))
 
 ANDROID_SDK_ROOT ?= $(ANDROID_HOME)
 ANDROID_NDK_HOME ?= $(if $(ANDROID_NDK_ROOT),$(ANDROID_NDK_ROOT),$(if $(ANDROID_SDK_ROOT),$(ANDROID_SDK_ROOT)/ndk/26.3.11579264))
@@ -31,7 +35,8 @@ ODIN_SOURCES := $(shell find "$(UI_DIR)" -path "$(UI_DIR)/build" -prune -o -type
 APP_SOURCES := $(shell find "$(APP_ROOT)" -type f -name '*.odin' -print)
 UI_RESOURCES := $(shell find "$(UI_DIR)/resources" -type f -print)
 
-.PHONY: all sdl2-sources sdl2 sdl2-image sdl2-ttf desktop-libs build
+.PHONY: all sdl2-sources sdl2 sdl2-image sdl2-ttf sdl2-net desktop-libs build
+.PHONY: desktop-build desktop-run
 .PHONY: android-native android-apk android-install clean
 
 all: build
@@ -40,6 +45,7 @@ sdl2-sources:
 	test -f "$(UI_DIR)/third_party/SDL2_image-2.8.8/CMakeLists.txt"
 	test -f "$(UI_DIR)/third_party/SDL2_ttf-2.24.0/CMakeLists.txt"
 	test -f "$(UI_DIR)/third_party/SDL2_ttf-2.24.0/external/freetype/CMakeLists.txt"
+	test -f "$(UI_DIR)/third_party/SDL2_net-2.2.0/CMakeLists.txt"
 
 sdl2: sdl2-sources
 	cmake -S "$(UI_DIR)/SDL" -B "$(UI_DIR)/build/desktop/sdl2" -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_TESTS=OFF $(SDL_CMAKE_ARGS)
@@ -55,10 +61,22 @@ sdl2-ttf: sdl2 sdl2-sources
 	cmake -S "$(UI_DIR)/third_party/SDL2_ttf-2.24.0" -B "$(UI_DIR)/build/desktop/sdl2-ttf" -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$(UI_DIR)/build/desktop/sdl2-install" -DSDL2_DIR="$(UI_DIR)/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2TTF_SAMPLES=OFF -DSDL2TTF_INSTALL=OFF $(SDL_CMAKE_ARGS)
 	cmake --build "$(UI_DIR)/build/desktop/sdl2-ttf" --parallel
 
-desktop-libs: sdl2-image sdl2-ttf
+sdl2-net: sdl2 sdl2-sources
+	cmake -S "$(UI_DIR)/third_party/SDL2_net-2.2.0" -B "$(UI_DIR)/build/desktop/sdl2-net" -DCMAKE_BUILD_TYPE=Release -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$$ORIGIN/../sdl2-install/lib' -DCMAKE_PREFIX_PATH="$(UI_DIR)/build/desktop/sdl2-install" -DSDL2_DIR="$(UI_DIR)/build/desktop/sdl2-install/lib/cmake/SDL2" -DSDL2NET_SAMPLES=OFF -DSDL2NET_INSTALL=OFF $(SDL_CMAKE_ARGS)
+	cmake --build "$(UI_DIR)/build/desktop/sdl2-net" --parallel
+
+desktop-libs: sdl2-image sdl2-ttf sdl2-net
 
 build: desktop-libs
 	odin test "$(UI_DIR)"
+
+desktop-build: desktop-libs
+	test -f "$(DESKTOP_APP_ROOT)/main.odin" || { echo "Set DESKTOP_APP_ROOT to an Odin desktop app directory containing main.odin." >&2; exit 1; }
+	mkdir -p "$(dir $(DESKTOP_BINARY))"
+	odin build "$(DESKTOP_APP_ROOT)" -out:"$(DESKTOP_BINARY)" -extra-linker-flags:"-L$(UI_DIR)/build/desktop/sdl2-net -Wl,-rpath,\$$ORIGIN/sdl2-install/lib:\$$ORIGIN/sdl2-image:\$$ORIGIN/sdl2-ttf:\$$ORIGIN/sdl2-net"
+
+desktop-run: desktop-build
+	"$(DESKTOP_BINARY)"
 
 $(ANDROID_DUMMY_C): $(UI_DIR)/Makefile
 	mkdir -p "$(@D)"
@@ -69,7 +87,7 @@ $(ANDROID_CLANG_WRAPPER): $(UI_DIR)/Makefile $(ANDROID_NDK_BIN)/clang
 	printf '%s\n' '#!/bin/sh' 'exec "$(ANDROID_NDK_BIN)/clang" "$$@" --target=aarch64-linux-android21 --sysroot="$(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/sysroot"' > "$@"
 	chmod +x "$@"
 
-$(ANDROID_FFMPEG_LINK)/libSDL2.so $(ANDROID_FFMPEG_LINK)/libSDL2_image.so $(ANDROID_FFMPEG_LINK)/libSDL2_ttf.so: $(ANDROID_DUMMY_C) $(ANDROID_NDK_BIN)/aarch64-linux-android21-clang $(UI_DIR)/Makefile
+$(ANDROID_FFMPEG_LINK)/libSDL2.so $(ANDROID_FFMPEG_LINK)/libSDL2_image.so $(ANDROID_FFMPEG_LINK)/libSDL2_ttf.so $(ANDROID_FFMPEG_LINK)/libSDL2_net.so: $(ANDROID_DUMMY_C) $(ANDROID_NDK_BIN)/aarch64-linux-android21-clang $(UI_DIR)/Makefile
 	mkdir -p "$(@D)"
 	"$(ANDROID_NDK_BIN)/aarch64-linux-android21-clang" -shared "$<" -o "$@"
 
@@ -81,10 +99,10 @@ $(ANDROID_FFMPEG_LINK)/libpthread.so $(ANDROID_FFMPEG_LINK)/librt.so: $(UI_DIR)/
 	mkdir -p "$(@D)"
 	printf '%s\n' 'INPUT(-lc)' > "$@"
 
-$(ANDROID_ODIN_APP): $(ODIN_SOURCES) $(APP_SOURCES) $(UI_RESOURCES) $(ANDROID_CLANG_WRAPPER) $(ANDROID_FFMPEG_LINK)/libSDL2.so $(ANDROID_FFMPEG_LINK)/libSDL2_image.so $(ANDROID_FFMPEG_LINK)/libSDL2_ttf.so $(ANDROID_FFMPEG_LINK)/libavcodec.so $(ANDROID_FFMPEG_LINK)/libavformat.so $(ANDROID_FFMPEG_LINK)/libavutil.so $(ANDROID_FFMPEG_LINK)/libswresample.so $(ANDROID_FFMPEG_LINK)/libpthread.so $(ANDROID_FFMPEG_LINK)/librt.so $(ANDROID_FFMPEG_SO) $(UI_DIR)/Makefile
+$(ANDROID_ODIN_APP): $(ODIN_SOURCES) $(APP_SOURCES) $(UI_RESOURCES) $(ANDROID_CLANG_WRAPPER) $(ANDROID_FFMPEG_LINK)/libSDL2.so $(ANDROID_FFMPEG_LINK)/libSDL2_image.so $(ANDROID_FFMPEG_LINK)/libSDL2_ttf.so $(ANDROID_FFMPEG_LINK)/libSDL2_net.so $(ANDROID_FFMPEG_LINK)/libavcodec.so $(ANDROID_FFMPEG_LINK)/libavformat.so $(ANDROID_FFMPEG_LINK)/libavutil.so $(ANDROID_FFMPEG_LINK)/libswresample.so $(ANDROID_FFMPEG_LINK)/libpthread.so $(ANDROID_FFMPEG_LINK)/librt.so $(ANDROID_FFMPEG_SO) $(UI_DIR)/Makefile
 	test -f "$(APP_ROOT)/main.odin" || { echo "Set APP_ROOT to an Odin app directory containing main.odin." >&2; exit 1; }
 	mkdir -p "$(@D)"
-	PATH="$(UI_DIR)/build/android/tmp:$$PATH" odin build "$(APP_ROOT)" -target:linux_arm64 -subtarget:android -build-mode:shared -out:"$@" -extra-linker-flags:"-L$(ANDROID_FFMPEG_LINK) -Wl,-soname,libodin_app.so -Wl,--allow-shlib-undefined"
+	PATH="$(UI_DIR)/build/android/tmp:$$PATH" ODIN_ANDROID_NDK="$(ANDROID_NDK)" odin build "$(APP_ROOT)" -target:linux_arm64 -subtarget:android -build-mode:shared -out:"$@" -extra-linker-flags:"-L$(ANDROID_FFMPEG_LINK) -Wl,-soname,libodin_app.so -Wl,--allow-shlib-undefined"
 
 ifeq ($(FORCE),1)
 .PHONY: force-android-odin

@@ -50,19 +50,31 @@ asset directory.
 
 ## Desktop build
 
-The package includes its Odin SDL2 bindings and SDL2, SDL2_image, SDL2_ttf, and
-FreeType source dependencies. Build those native dependencies locally inside
-the copied library folder:
+The package includes its Odin SDL2/SDL2_net bindings and SDL2, SDL2_image,
+SDL2_ttf, SDL2_net, and FreeType source dependencies. Build those native
+dependencies locally inside the copied library folder:
 
 ```sh
 make -C UI desktop-libs
 ```
 
-Then build the consumer from the application directory and link to those
-library-local outputs:
+Build and launch the included desktop smoke app with:
 
 ```sh
-odin build . -extra-linker-flags:'-LUI/build/desktop/sdl2-install/lib -LUI/build/desktop/sdl2-image -LUI/build/desktop/sdl2-ttf -Wl,-rpath,$ORIGIN/UI/build/desktop/sdl2-install/lib:$ORIGIN/UI/build/desktop/sdl2-image:$ORIGIN/UI/build/desktop/sdl2-ttf'
+make -C UI desktop-run
+```
+
+For consumer applications, locally built shared libraries are under
+`UI/build/desktop/`. The Odin SDL2_net binding imports `system:SDL2_net`, so
+consumers that use networking should add the SDL2_net build output to their
+linker search path and runtime library path, and import the bundled binding:
+
+```sh
+odin build . -extra-linker-flags:'-LUI/build/desktop/sdl2-install/lib -LUI/build/desktop/sdl2-image -LUI/build/desktop/sdl2-ttf -LUI/build/desktop/sdl2-net -Wl,-rpath,$ORIGIN/UI/build/desktop/sdl2-install/lib:$ORIGIN/UI/build/desktop/sdl2-image:$ORIGIN/UI/build/desktop/sdl2-ttf:$ORIGIN/UI/build/desktop/sdl2-net'
+```
+
+```odin
+import net "./UI/vendor/sdl2/net"
 ```
 
 The compiler's Odin standard library is still required, but no Odin collection
@@ -104,6 +116,7 @@ Android builds require the Android SDK/NDK and a supported JDK; see
 
 ## Licensing
 
-Third-party license notices are retained beside the bundled dependencies.
+Third-party license notices are retained beside the bundled dependencies,
+including SDL2_net 2.2.0 under `third_party/SDL2_net-2.2.0/LICENSE.txt`.
 The repository does not currently specify a license for Odin UI's original
 code; choose and add one before redistributing the library.
