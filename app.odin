@@ -72,15 +72,15 @@ app_init :: proc(
 	sdl.SetRenderDrawBlendMode(app.renderer, .BLEND)
 
 	// Initialize Subsystems
-	app.ui = ui_context_create(f32(width), f32(height))
+	app.ui = ui_context_create(f32(app.window_w), f32(app.window_h))
 
 	app.anim = new(Context)
 	app.anim.states = make(map[Box_ID]^Retained_State)
 
 	app.ev = new(Event_Context)
 	app.ev.layout = app.ui.layout
-	app.ev.viewport_w = f32(width)
-	app.ev.viewport_h = f32(height)
+	app.ev.viewport_w = f32(app.window_w)
+	app.ev.viewport_h = f32(app.window_h)
 	app.ev.listeners = make(map[Box_ID]Event_Callbacks)
 	app.ev.previous_listeners = make(map[Box_ID]Event_Callbacks)
 	app.ev.clicked_this_frame = make(map[Box_ID]bool)

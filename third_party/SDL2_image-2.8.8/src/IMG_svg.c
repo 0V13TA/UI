@@ -54,6 +54,7 @@ static float SDLCALL SDL_roundf(float x)
 #undef strncpy
 #define strncpy SDL_strlcpy
 #define strlen  SDL_strlen
+#undef strstr
 #define strstr  SDL_strstr
 #define strtol  SDL_strtol
 #define strtoll SDL_strtoll
@@ -189,4 +190,3 @@ SDL_Surface *IMG_LoadSVG_RW(SDL_RWops *src)
 {
     return IMG_LoadSizedSVG_RW(src, 0, 0);
 }
-

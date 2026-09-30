@@ -33,6 +33,7 @@ sdl2-sources:
 
 sdl2: sdl2-sources
 	cmake -S SDL -B build/desktop/sdl2 -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_TESTS=OFF $(SDL_CMAKE_ARGS)
+	find build/desktop/sdl2 -type f -name '*.o' -size 0 -delete
 	cmake --build build/desktop/sdl2 --parallel
 	cmake --install build/desktop/sdl2 --prefix "$(CURDIR)/build/desktop/sdl2-install"
 
