@@ -132,8 +132,6 @@ app_init :: proc(
 	app.cursor_hand = sdl.CreateSystemCursor(.HAND)
 	app.cursor_ibeam = sdl.CreateSystemCursor(.IBEAM)
 
-	sdl.StartTextInput()
-
 	return app
 }
 
