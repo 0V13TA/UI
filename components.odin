@@ -4,18 +4,52 @@ import "core:fmt"
 import "core:hash"
 import "core:math"
 import "core:strings"
+import "core:unicode/utf8"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 import "vendor:sdl2/ttf"
 
 switch_toggle_prev_state: map[Box_ID]bool
 accordion_prev_expanded: map[Box_ID]bool
+component_scrollbar_hover: map[Box_ID]bool
+component_popover_open: map[Box_ID]bool
+component_modal_open: map[Box_ID]bool
+component_context_menu_open: map[Box_ID]bool
+component_carousel_last_tick: map[Box_ID]u32
+component_carousel_prev_idx: map[Box_ID]int
+component_carousel_prev_hover: map[Box_ID]bool
+component_carousel_prev_dot_active: map[Box_ID]bool
+component_color_hsv: map[Box_ID][3]f32
+component_date_views: map[Box_ID][2]int
+component_debug_expanded: map[Box_ID]bool
 
 component_state_destroy :: proc() {
 	delete(switch_toggle_prev_state)
 	switch_toggle_prev_state = nil
 	delete(accordion_prev_expanded)
 	accordion_prev_expanded = nil
+	delete(component_scrollbar_hover)
+	component_scrollbar_hover = nil
+	delete(component_popover_open)
+	component_popover_open = nil
+	delete(component_modal_open)
+	component_modal_open = nil
+	delete(component_context_menu_open)
+	component_context_menu_open = nil
+	delete(component_carousel_last_tick)
+	component_carousel_last_tick = nil
+	delete(component_carousel_prev_idx)
+	component_carousel_prev_idx = nil
+	delete(component_carousel_prev_hover)
+	component_carousel_prev_hover = nil
+	delete(component_carousel_prev_dot_active)
+	component_carousel_prev_dot_active = nil
+	delete(component_color_hsv)
+	component_color_hsv = nil
+	delete(component_date_views)
+	component_date_views = nil
+	delete(component_debug_expanded)
+	component_debug_expanded = nil
 }
 
 is_tree_hovered :: proc(app: ^App, target_id: Box_ID) -> bool {
@@ -64,6 +98,9 @@ text :: proc(
 
 	if final_id not_in ev_ctx.text_cursors do ev_ctx.text_cursors[final_id] = 0
 	if final_id not_in ev_ctx.text_selection do ev_ctx.text_selection[final_id] = 0
+	rune_count := utf8_rune_count(text)
+	ev_ctx.text_cursors[final_id] = clamp(ev_ctx.text_cursors[final_id], 0, rune_count)
+	ev_ctx.text_selection[final_id] = clamp(ev_ctx.text_selection[final_id], 0, rune_count)
 
 	if !is_focused {
 		ev_ctx.text_selection[final_id] = 0
@@ -108,19 +145,7 @@ text :: proc(
 				user_data = &dummy_el,
 			}
 
-			best_cursor := 0
-			for i in 0 ..= len(text) {
-				x := ui_text_width(&dummy_box, text[:i])
-				if i == len(text) {
-					best_cursor = i
-					break
-				}
-				next_x := ui_text_width(&dummy_box, text[:i + 1])
-				if local_x < (x + next_x) * 0.5 {
-					best_cursor = i
-					break
-				}
-			}
+			best_cursor := text_cursor_at_x(&dummy_box, text, local_x)
 
 			if prev_box.selectable {
 				ev_ctx.text_cursors[final_id] = best_cursor
@@ -165,7 +190,12 @@ button :: proc(
 	register(
 		ev_ctx,
 		final_id,
-		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+		Event_Callbacks {
+			focusable       = true,
+			disabled        = user_style.disabled.? or_else false,
+			activate_on_key = true,
+			cursor          = .HAND,
+		},
 	)
 
 	final_style := merge_styles(DEFAULT_BUTTON_STYLE, user_style)
@@ -188,7 +218,7 @@ button :: proc(
 	element_open(app, Element{_box = {id = final_id}, text = text, style = final_style}, loc)
 	element_close(app)
 
-	return is_clicked
+	return is_clicked && !is_disabled
 }
 
 DEFAULT_TOOLTIP_STYLE :: Style {
@@ -288,12 +318,12 @@ scroll_end :: proc(app: ^App, id: Box_ID) {
 
 		if content_h > prev.computed_height {
 			ratio := prev.computed_height / content_h
-			thumb_h := max(prev.computed_height * ratio, 24.0)
+			thumb_h := clamp(prev.computed_height * ratio, min(24.0, prev.computed_height), prev.computed_height)
 
 			max_scroll := content_h - prev.computed_height
 			scroll_y := ev_ctx.scroll_offsets_y[id]
 			scroll_progress := max_scroll > 0 ? clamp(scroll_y / max_scroll, 0.0, 1.0) : 0.0
-			thumb_y := (scroll_progress * (prev.computed_height - thumb_h)) + scroll_y
+			thumb_y := scroll_progress * (prev.computed_height - thumb_h)
 
 			sb_id := ID(id, "scrollbar")
 			is_hovered := is_tree_hovered(app, id)
@@ -302,11 +332,15 @@ scroll_end :: proc(app: ^App, id: Box_ID) {
 
 			// Safely handle animations only if anim_ctx is provided
 			if anim_ctx != nil {
-				@(static) prev_hover: map[Box_ID]bool
-				if sb_id not_in prev_hover do prev_hover[sb_id] = false
+				if component_scrollbar_hover == nil {
+					component_scrollbar_hover = make(map[Box_ID]bool)
+				}
+				if sb_id not_in component_scrollbar_hover {
+					component_scrollbar_hover[sb_id] = false
+				}
 
-				if prev_hover[sb_id] != is_hovered {
-					prev_hover[sb_id] = is_hovered
+				if component_scrollbar_hover[sb_id] != is_hovered {
+					component_scrollbar_hover[sb_id] = is_hovered
 					to(
 						ui_ctx,
 						anim_ctx,
@@ -383,13 +417,21 @@ checkbox :: proc(
 	root_id := id != "" ? ID(id) : ID(loc, salt)
 	box_id := ID(root_id, "box")
 	text_id := ID(root_id, "text")
+	is_disabled := wrapper_style.disabled.? or_else false
 
 	register(
 		ev_ctx,
 		root_id,
-		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+		Event_Callbacks {
+			focusable       = true,
+			disabled        = is_disabled,
+			activate_on_key = true,
+			cursor          = .HAND,
+		},
 	)
-	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
+	if !is_disabled && (ev_ctx.clicked_this_frame[root_id] or_else false) {
+		state^ = !state^
+	}
 
 	is_hovered := is_tree_hovered(app, root_id)
 
@@ -409,7 +451,7 @@ checkbox :: proc(
 	element_close(app)
 
 	element_close(app)
-	return ev_ctx.clicked_this_frame[root_id] or_else false
+	return (ev_ctx.clicked_this_frame[root_id] or_else false) && !is_disabled
 }
 
 DEFAULT_RADIO_WRAPPER_STYLE :: Style {
@@ -454,13 +496,21 @@ radio :: proc(
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	button_id := ID(root_id, "button")
 	text_id := ID(root_id, "text")
+	is_disabled := wrapper_style.disabled.? or_else false
 
 	register(
 		ev_ctx,
 		root_id,
-		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+		Event_Callbacks {
+			focusable       = true,
+			disabled        = is_disabled,
+			activate_on_key = true,
+			cursor          = .HAND,
+		},
 	)
-	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = value
+	if !is_disabled && (ev_ctx.clicked_this_frame[root_id] or_else false) {
+		state^ = value
+	}
 	is_active := state^ == value
 
 	is_hovered := is_tree_hovered(app, root_id)
@@ -482,7 +532,7 @@ radio :: proc(
 	element_close(app)
 
 	element_close(app)
-	return ev_ctx.clicked_this_frame[root_id] or_else false
+	return (ev_ctx.clicked_this_frame[root_id] or_else false) && !is_disabled
 }
 
 DEFAULT_SLIDER_WRAPPER_STYLE :: Style {
@@ -535,7 +585,15 @@ slider :: proc(
 	track_id := ID(root_id, "track")
 	thumb_id := ID(root_id, "thumb")
 
-	register(ev_ctx, root_id, Event_Callbacks{focusable = true, activate_on_key = true})
+	register(
+		ev_ctx,
+		root_id,
+		Event_Callbacks {
+			focusable       = true,
+			disabled        = wrapper_style.disabled.? or_else false,
+			activate_on_key = true,
+		},
+	)
 
 	changed = false
 	target_val := value^
@@ -545,12 +603,10 @@ slider :: proc(
 	just_pressed := is_pressed && !was_pressed
 	is_dragging := is_pressed && was_pressed
 
-	if is_pressed {
+	if is_pressed && !ev_ctx.listeners[root_id].disabled && max_val != min_val {
 		if prev_box, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
-			mx, my: i32
-			sdl.GetMouseState(&mx, &my)
-			local_x := f32(mx) - prev_box.x
-			percent := clamp(local_x / prev_box.computed_width, 0.0, 1.0)
+			local_x := ev_ctx.pointer_x - prev_box.x
+			percent := prev_box.computed_width > 0 ? clamp(local_x / prev_box.computed_width, 0.0, 1.0) : 0.0
 			new_val := min_val + (max_val - min_val) * percent
 
 			if new_val != value^ {
@@ -579,7 +635,7 @@ slider :: proc(
 		}
 	}
 
-	fill_percent := clamp((value^ - min_val) / (max_val - min_val), 0.0, 1.0)
+	fill_percent := max_val != min_val ? clamp((value^ - min_val) / (max_val - min_val), 0.0, 1.0) : 0.0
 
 	element_open(app, Element{_box = {id = root_id}, style = wrapper_style}, loc)
 	element_open(app, Element{_box = {id = track_id}, style = track_style})
@@ -593,7 +649,11 @@ slider :: proc(
 
 	thumb_x: f32 = 0.0
 	if prev, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
-		thumb_x = (fill_percent * prev.computed_width) - 10.0
+		thumb_width := f32(14)
+		if thumb_size, ok := thumb_style.width.?; ok {
+			if fixed, ok := thumb_size.(Fixed); ok do thumb_width = fixed.value
+		}
+		thumb_x = (fill_percent * prev.computed_width) - thumb_width * 0.5
 	}
 
 	dynamic_thumb := thumb_style
@@ -624,21 +684,62 @@ DEFAULT_TEXT_INPUT_TEXT_STYLE :: Style {
 	text_color = Color{0.1, 0.1, 0.1, 1},
 }
 
+utf8_rune_count :: proc(text: string) -> int {
+	rune_count := 0
+	for byte_idx := 0; byte_idx < len(text); {
+		_, width := utf8.decode_rune(text[byte_idx:])
+		if width <= 0 do break
+		byte_idx += width
+		rune_count += 1
+	}
+	return rune_count
+}
+
+utf8_byte_offset :: proc(text: string, rune_idx: int) -> int {
+	byte_idx := 0
+	for _ in 0 ..< max(rune_idx, 0) {
+		if byte_idx >= len(text) do break
+		_, width := utf8.decode_rune(text[byte_idx:])
+		if width <= 0 do break
+		byte_idx += width
+	}
+	return min(byte_idx, len(text))
+}
+
+@(private = "file")
+text_cursor_at_x :: proc(box: ^Box, text: string, local_x: f32) -> int {
+	byte_idx := 0
+	rune_idx := 0
+	for byte_idx < len(text) {
+		_, width := utf8.decode_rune(text[byte_idx:])
+		if width <= 0 do break
+		next_byte_idx := byte_idx + width
+		left_x := ui_text_width(box, text[:byte_idx])
+		right_x := ui_text_width(box, text[:next_byte_idx])
+		if local_x < (left_x + right_x) * 0.5 do return rune_idx
+		byte_idx = next_byte_idx
+		rune_idx += 1
+	}
+	return rune_idx
+}
+
 @(private = "file")
 _delete_selection :: proc(buf: ^[dynamic]u8, ev_ctx: ^Event_Context, id: Box_ID) -> bool {
-	cursor := clamp(ev_ctx.text_cursors[id], 0, len(buf^))
-	anchor := clamp(ev_ctx.text_selection[id], 0, len(buf^))
+	text := string(buf^[:])
+	rune_count := utf8_rune_count(text)
+	cursor := clamp(ev_ctx.text_cursors[id], 0, rune_count)
+	anchor := clamp(ev_ctx.text_selection[id], 0, rune_count)
 	if cursor == anchor do return false
 
-	start_idx := min(cursor, anchor)
-	end_idx := max(cursor, anchor)
+	start_idx := utf8_byte_offset(text, min(cursor, anchor))
+	end_idx := utf8_byte_offset(text, max(cursor, anchor))
 
 	for _ in 0 ..< (end_idx - start_idx) {
 		ordered_remove(buf, start_idx)
 	}
 
-	ev_ctx.text_cursors[id] = start_idx
-	ev_ctx.text_selection[id] = start_idx
+	ev_ctx.text_cursors[id] = min(cursor, anchor)
+	ev_ctx.text_selection[id] = min(cursor, anchor)
 	return true
 }
 
@@ -650,24 +751,27 @@ _text_input_cb :: proc(e: ^UI_Event, data: rawptr) {
 	_delete_selection(ev_ctx.focused_buffer, ev_ctx, e.current_target)
 
 	buf := ev_ctx.focused_buffer
-	cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, len(buf^))
+	text := string(buf^[:])
+	cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, utf8_rune_count(text))
+	byte_cursor := utf8_byte_offset(text, cursor)
 
 	for i in 0 ..< len(e.text) {
-		inject_at(buf, cursor + i, e.text[i])
+		inject_at(buf, byte_cursor + i, e.text[i])
 	}
-	ev_ctx.text_cursors[e.current_target] = cursor + len(e.text)
+	ev_ctx.text_cursors[e.current_target] = cursor + utf8_rune_count(e.text)
 	ev_ctx.text_selection[e.current_target] = ev_ctx.text_cursors[e.current_target]
 }
 
-@(private = "file")
 _key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 	ev_ctx := (^Event_Context)(data)
 	if ev_ctx.focused_buffer == nil do return
 
 	buf := ev_ctx.focused_buffer
-	cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, len(buf^))
+	text := string(buf^[:])
+	rune_count := utf8_rune_count(text)
+	cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, rune_count)
 
-	anchor := clamp(ev_ctx.text_selection[e.current_target], 0, len(buf^))
+	anchor := clamp(ev_ctx.text_selection[e.current_target], 0, rune_count)
 	ev_ctx.text_selection[e.current_target] = anchor
 	has_selection := cursor != anchor
 
@@ -678,12 +782,12 @@ _key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 	case .a:
 		if has_ctrl {
 			ev_ctx.text_selection[e.current_target] = 0
-			ev_ctx.text_cursors[e.current_target] = len(buf^)
+			ev_ctx.text_cursors[e.current_target] = rune_count
 		}
 	case .c:
 		if has_ctrl && has_selection {
-			start_idx := min(cursor, anchor)
-			end_idx := max(cursor, anchor)
+			start_idx := utf8_byte_offset(text, min(cursor, anchor))
+			end_idx := utf8_byte_offset(text, max(cursor, anchor))
 
 			clipboard_cstr := fmt.ctprintf("%s", string(buf[start_idx:end_idx]))
 			sdl.SetClipboardText(clipboard_cstr)
@@ -696,15 +800,15 @@ _key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 		}
 
 	case .END:
-		ev_ctx.text_cursors[e.current_target] = len(buf^)
+		ev_ctx.text_cursors[e.current_target] = rune_count
 		if !has_shift {
-			ev_ctx.text_selection[e.current_target] = len(buf^)
+			ev_ctx.text_selection[e.current_target] = rune_count
 		}
 
 	case .x:
 		if has_ctrl && has_selection {
-			start_idx := min(cursor, anchor)
-			end_idx := max(cursor, anchor)
+			start_idx := utf8_byte_offset(text, min(cursor, anchor))
+			end_idx := utf8_byte_offset(text, max(cursor, anchor))
 
 			clipboard_cstr := fmt.ctprintf("%s", string(buf[start_idx:end_idx]))
 			sdl.SetClipboardText(clipboard_cstr)
@@ -720,15 +824,26 @@ _key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 
 				_delete_selection(buf, ev_ctx, e.current_target)
 
-				active_cursor := clamp(ev_ctx.text_cursors[e.current_target], 0, len(buf^))
+				current_text := string(buf^[:])
+				active_cursor := clamp(
+					ev_ctx.text_cursors[e.current_target],
+					0,
+					utf8_rune_count(current_text),
+				)
+				byte_cursor := utf8_byte_offset(current_text, active_cursor)
 				pasted_str := string(clipboard_cstr)
 
-				for i in 0 ..< len(pasted_str) {
-					b := pasted_str[i]
-					if b != '\n' && b != '\r' {
-						inject_at(buf, active_cursor, b)
+				for paste_byte_idx := 0; paste_byte_idx < len(pasted_str); {
+					r, width := utf8.decode_rune(pasted_str[paste_byte_idx:])
+					if width <= 0 do break
+					if r != '\n' && r != '\r' {
+						for i in 0 ..< width {
+							inject_at(buf, byte_cursor, pasted_str[paste_byte_idx + i])
+							byte_cursor += 1
+						}
 						active_cursor += 1
 					}
+					paste_byte_idx += width
 				}
 
 				ev_ctx.text_cursors[e.current_target] = active_cursor
@@ -742,15 +857,19 @@ _key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 	case .BACKSPACE:
 		if !_delete_selection(buf, ev_ctx, e.current_target) {
 			if cursor > 0 {
-				ordered_remove(buf, cursor - 1)
-				ev_ctx.text_cursors[e.current_target] -= 1
-				ev_ctx.text_selection[e.current_target] -= 1
+				byte_end := utf8_byte_offset(text, cursor)
+				byte_start := utf8_byte_offset(text, cursor - 1)
+				for _ in 0 ..< (byte_end - byte_start) do ordered_remove(buf, byte_start)
+				ev_ctx.text_cursors[e.current_target] = cursor - 1
+				ev_ctx.text_selection[e.current_target] = cursor - 1
 			}
 		}
 	case .DELETE:
 		if !_delete_selection(buf, ev_ctx, e.current_target) {
-			if cursor < len(buf^) {
-				ordered_remove(buf, cursor)
+			if cursor < rune_count {
+				byte_start := utf8_byte_offset(text, cursor)
+				byte_end := utf8_byte_offset(text, cursor + 1)
+				for _ in 0 ..< (byte_end - byte_start) do ordered_remove(buf, byte_start)
 			}
 		}
 	case .LEFT:
@@ -766,11 +885,11 @@ _key_down_cb :: proc(e: ^UI_Event, data: rawptr) {
 		}
 	case .RIGHT:
 		if has_shift {
-			if cursor < len(buf^) do ev_ctx.text_cursors[e.current_target] += 1
+			if cursor < rune_count do ev_ctx.text_cursors[e.current_target] += 1
 		} else {
 			if has_selection {
 				ev_ctx.text_cursors[e.current_target] = max(cursor, anchor)
-			} else if cursor < len(buf^) {
+			} else if cursor < rune_count {
 				ev_ctx.text_cursors[e.current_target] += 1
 			}
 			ev_ctx.text_selection[e.current_target] = ev_ctx.text_cursors[e.current_target]
@@ -794,13 +913,16 @@ text_input :: proc(
 	ev_ctx := app.ev
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	string_id := ID(root_id, "text")
+	is_disabled := wrapper_style.disabled.? or_else false
+	if text_style.disabled.? or_else false do is_disabled = true
 
 	register(
 		ev_ctx,
 		root_id,
 		Event_Callbacks {
 			cursor = .IBEAM,
-			focusable = true,
+			focusable = !is_disabled,
+			disabled = is_disabled,
 			user_data = ev_ctx,
 			on_text_input = _text_input_cb,
 			on_key_down = _key_down_cb,
@@ -808,13 +930,18 @@ text_input :: proc(
 	)
 
 	is_focused := ev_ctx.focused_id == root_id
+	if is_disabled && is_focused {
+		set_focus(ev_ctx, 0)
+		sdl.StopTextInput()
+		ev_ctx.focused_buffer = nil
+	}
 
-	if is_focused {
+	if is_focused && !is_disabled {
 		sdl.StartTextInput()
 		ev_ctx.focused_buffer = buffer
 
 		if root_id not_in ev_ctx.text_cursors {
-			ev_ctx.text_cursors[root_id] = len(buffer)
+			ev_ctx.text_cursors[root_id] = utf8_rune_count(string(buffer^[:]))
 		}
 
 		if root_id not_in ev_ctx.cursor_blink_start {
@@ -825,7 +952,9 @@ text_input :: proc(
 		ev_ctx.focused_buffer = nil
 	}
 
-	cursor := clamp(ev_ctx.text_cursors[root_id], 0, len(buffer))
+	buffer_text := string(buffer^[:])
+	buffer_rune_count := utf8_rune_count(buffer_text)
+	cursor := clamp(ev_ctx.text_cursors[root_id], 0, buffer_rune_count)
 
 	final_text := merge_styles(DEFAULT_TEXT_INPUT_TEXT_STYLE, text_style)
 	parent_font_name := ""
@@ -858,14 +987,7 @@ text_input :: proc(
 		if prev_inner, ok := ui_ctx.layout.prev_all_boxes[string_id]; ok {
 			local_x := ev_ctx.pointer_x - prev_inner.x
 
-			best_cursor := 0
-			for i in 0 ..= len(buffer) {
-				x := ui_text_width(&dummy_box, string(buffer^[:i]))
-				if i == len(buffer) {best_cursor = i; break}
-
-				next_x := ui_text_width(&dummy_box, string(buffer^[:i + 1]))
-				if local_x < (x + next_x) * 0.5 {best_cursor = i; break}
-			}
+			best_cursor := text_cursor_at_x(&dummy_box, buffer_text, local_x)
 
 			ev_ctx.text_cursors[root_id] = best_cursor
 			cursor = best_cursor
@@ -875,7 +997,7 @@ text_input :: proc(
 				ev_ctx.cursor_blink_start[root_id] = u64(sdl.GetTicks())
 			}
 
-			anchor := clamp(ev_ctx.text_selection[root_id], 0, len(buffer))
+			anchor := clamp(ev_ctx.text_selection[root_id], 0, buffer_rune_count)
 			ev_ctx.text_selection[root_id] = anchor
 		}
 	}
@@ -891,10 +1013,11 @@ text_input :: proc(
 		}
 	}
 
-	current_len := len(buffer^)
+	current_len := buffer_rune_count
 	cursor = clamp(ev_ctx.text_cursors[root_id], 0, current_len)
 	anchor := clamp(ev_ctx.text_selection[root_id], 0, current_len)
-	cursor_px := ui_text_width(&dummy_box, string(buffer^[:cursor]))
+	cursor_byte_idx := utf8_byte_offset(buffer_text, cursor)
+	cursor_px := ui_text_width(&dummy_box, buffer_text[:cursor_byte_idx])
 
 	if is_focused {
 		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
@@ -908,7 +1031,7 @@ text_input :: proc(
 				prev_outer.computed_width - prev_outer.padding[1] - prev_outer.border[1]
 			viewport_width := max(viewport_right - viewport_left, 1.0)
 
-			cursor_px := ui_text_width(&dummy_box, string(buffer^[:cursor]))
+			cursor_px := ui_text_width(&dummy_box, buffer_text[:cursor_byte_idx])
 			margin: f32 = 5.0
 			cursor_left := cursor_px
 			cursor_right := cursor_px + 2.0
@@ -919,7 +1042,7 @@ text_input :: proc(
 				ev_ctx.scroll_offsets_x[root_id] = cursor_right - viewport_width + margin
 			}
 
-			total_text_width := ui_text_width(&dummy_box, string(buffer^[:]))
+			total_text_width := ui_text_width(&dummy_box, buffer_text)
 			max_scroll := max(total_text_width + 15.0 - viewport_width, 0.0)
 
 			ev_ctx.scroll_offsets_x[root_id] = clamp(
@@ -957,8 +1080,10 @@ text_input :: proc(
 	end_idx := max(cursor, anchor)
 
 	if start_idx != end_idx {
-		start_px := ui_text_width(&dummy_box, string(buffer^[:start_idx]))
-		end_px := ui_text_width(&dummy_box, string(buffer^[:end_idx]))
+		start_byte_idx := utf8_byte_offset(buffer_text, start_idx)
+		end_byte_idx := utf8_byte_offset(buffer_text, end_idx)
+		start_px := ui_text_width(&dummy_box, buffer_text[:start_byte_idx])
+		end_px := ui_text_width(&dummy_box, buffer_text[:end_byte_idx])
 
 		element_open(
 			app,
@@ -1011,7 +1136,7 @@ text_input :: proc(
 	}
 
 	scroll_end(app, root_id)
-	return is_focused
+	return is_focused && !is_disabled
 }
 
 image :: proc {
@@ -1080,7 +1205,18 @@ image_button :: proc(
 	id := ID(loc, salt)
 
 	is_clicked := ev_ctx.clicked_this_frame[id] or_else false
-	register(ev_ctx, id, Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND})
+	is_disabled := user_style.disabled.? or_else false
+	register(
+		ev_ctx,
+		id,
+		Event_Callbacks {
+			focusable       = true,
+			disabled        = is_disabled,
+			activate_on_key = true,
+			cursor          = .HAND,
+		},
+	)
+	is_clicked = is_clicked && !is_disabled
 
 	path_hash := hash.fnv32(transmute([]byte)path)
 	tex, exists := ui_ctx.image_cache[path_hash]
@@ -1253,8 +1389,7 @@ video :: proc(
 						salt = fmt.tprintf("%s_time", salt),
 					)
 
-					mouse_state := sdl.GetMouseState(nil, nil)
-					is_mouse_down := (mouse_state & sdl.BUTTON_LMASK) != 0
+					is_pointer_down := ev_ctx.pressed_id != 0
 
 					slider_val^ = is_scrubbing^ ? scrub_time^ : f32(player.playback_time)
 
@@ -1288,14 +1423,14 @@ video :: proc(
 
 					if slider_changed {
 						scrub_time^ = scrub_target
-						if is_mouse_down {
+						if is_pointer_down {
 							is_scrubbing^ = true
 						} else {
 							video_player_seek(player, f64(scrub_time^))
 							is_scrubbing^ = false
 						}
 					} else if is_scrubbing^ {
-						if !is_mouse_down {
+						if !is_pointer_down {
 							video_player_seek(player, f64(scrub_time^))
 							is_scrubbing^ = false
 						}
@@ -1313,6 +1448,9 @@ DEFAULT_POPOVER_STYLE :: Style {
 	border_color  = Color{0.8, 0.8, 0.8, 1},
 	border_radius = [4]f32{6, 6, 6, 6},
 	padding       = [4]f32{8, 12, 8, 12},
+	max_width     = ViewPercent{90},
+	max_height    = ViewPercent{80},
+	overflow_y    = .SCROLL,
 	width         = Fit(true),
 	height        = Fit(true),
 }
@@ -1330,7 +1468,7 @@ popover_begin :: proc(
 	anim_ctx := app.anim
 	if !is_open^ do return false
 
-	root_id := ID(loc, salt)
+	root_id := ID(target_id, "popover")
 
 	backdrop_id := ID(root_id, "backdrop")
 	content_id := ID(root_id, "content")
@@ -1372,17 +1510,40 @@ popover_begin :: proc(
 	final_style.position = .FIXED
 	final_style.z_index = 1000
 
-	if final_style.left == nil do final_style.left = target_x
-	if final_style.top == nil do final_style.top = target_y + target_h + 8.0
+	viewport_width := max(0.0, f32(app.window_w))
+	viewport_height := max(0.0, f32(app.window_h))
+	if final_style.max_width == nil do final_style.max_width = ViewPercent{90}
+	if final_style.max_height == nil do final_style.max_height = ViewPercent{80}
+
+	popover_width := min(240.0, max(0.0, viewport_width - 16.0))
+	popover_height := max(0.0, viewport_height * 0.8)
+	if prev, ok := ui_ctx.layout.prev_all_boxes[content_id]; ok {
+		popover_width = prev.computed_width
+		popover_height = prev.computed_height
+	}
+
+	if final_style.left == nil {
+		left := min(target_x, max(8.0, viewport_width - popover_width - 8.0))
+		final_style.left = max(8.0, left)
+	}
+	if final_style.top == nil {
+		top := target_y + target_h + 8.0
+		if popover_height > 0 && top + popover_height > viewport_height-8.0 {
+			top = target_y - popover_height - 8.0
+		}
+		final_style.top = max(8.0, min(top, max(8.0, viewport_height-popover_height-8.0)))
+	}
 
 	register(ev_ctx, content_id, Event_Callbacks{focusable = true})
 	element_open(app, Element{_box = {id = content_id}, style = final_style}, loc)
 
 	// --- NEW: ANIMATE IN ON FIRST RENDER ---
-	@(static) prev_open: map[Box_ID]bool
-	if root_id not_in prev_open do prev_open[root_id] = false
-	just_opened := is_open^ && !prev_open[root_id]
-	prev_open[root_id] = is_open^
+	if component_popover_open == nil {
+		component_popover_open = make(map[Box_ID]bool)
+	}
+	if root_id not_in component_popover_open do component_popover_open[root_id] = false
+	just_opened := is_open^ && !component_popover_open[root_id]
+	component_popover_open[root_id] = is_open^
 
 	if just_opened {
 		from(
@@ -1408,6 +1569,7 @@ popover_end :: proc(app: ^App, is_open: bool) {
 DEFAULT_DROPDOWN_STYLE :: Style {
 	width         = Fixed{200},
 	height        = Fit(true),
+	max_width     = ViewPercent{90},
 	padding       = [4]f32{8, 12, 8, 12},
 	border_radius = [4]f32{6, 6, 6, 6},
 	border        = [4]f32{1, 1, 1, 1},
@@ -1444,7 +1606,6 @@ dropdown :: proc(
 	anim_ctx := app.anim
 	changed := false
 	root_id := ID(id) if id != "" else ID(loc, salt)
-
 	display_text := label
 	if selected_idx^ >= 0 && selected_idx^ < len(options) {
 		display_text = options[selected_idx^]
@@ -1512,6 +1673,9 @@ DEFAULT_MODAL_STYLE :: Style {
 	bg_color      = Color{1, 1, 1, 1},
 	border_radius = [4]f32{8, 8, 8, 8},
 	padding       = [4]f32{24, 24, 24, 24},
+	max_width     = ViewPercent{90},
+	max_height    = ViewPercent{90},
+	overflow_y    = .SCROLL,
 	width         = Fixed{400},
 	height        = Fit(true),
 	gap           = 16,
@@ -1554,10 +1718,10 @@ modal_begin :: proc(
 	element_open(app, Element{_box = {id = content_id}, style = final_modal}, loc)
 
 	// --- NEW: ANIMATE IN ON FIRST RENDER ---
-	@(static) prev_open: map[Box_ID]bool
-	if root_id not_in prev_open do prev_open[root_id] = false
-	just_opened := is_open^ && !prev_open[root_id]
-	prev_open[root_id] = is_open^
+	if component_modal_open == nil do component_modal_open = make(map[Box_ID]bool)
+	if root_id not_in component_modal_open do component_modal_open[root_id] = false
+	just_opened := is_open^ && !component_modal_open[root_id]
+	component_modal_open[root_id] = is_open^
 
 	if just_opened {
 		from(ui_ctx, anim_ctx, backdrop_id, {opacity = 0.0, duration = 0.25})
@@ -1649,10 +1813,12 @@ context_menu_begin :: proc(
 	element_open(app, Element{_box = {id = content_id}, style = final_style}, loc)
 
 	// --- NEW: ANIMATE IN ON FIRST RENDER ---
-	@(static) prev_open: map[Box_ID]bool
-	if root_id not_in prev_open do prev_open[root_id] = false
-	just_opened := is_open^ && !prev_open[root_id]
-	prev_open[root_id] = is_open^
+	if component_context_menu_open == nil {
+		component_context_menu_open = make(map[Box_ID]bool)
+	}
+	if root_id not_in component_context_menu_open do component_context_menu_open[root_id] = false
+	just_opened := is_open^ && !component_context_menu_open[root_id]
+	component_context_menu_open[root_id] = is_open^
 
 	if just_opened {
 		from(
@@ -1720,13 +1886,19 @@ switch_toggle :: proc(
 	track_id := ID(root_id, "track")
 	thumb_id := ID(root_id, "thumb")
 	text_id := ID(root_id, "text")
+	is_disabled := wrapper_style.disabled.? or_else false
 
 	register(
 		ev_ctx,
 		root_id,
-		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
+		Event_Callbacks {
+			focusable       = true,
+			disabled        = is_disabled,
+			activate_on_key = true,
+			cursor          = .HAND,
+		},
 	)
-	if ev_ctx.clicked_this_frame[root_id] or_else false do state^ = !state^
+	if !is_disabled && (ev_ctx.clicked_this_frame[root_id] or_else false) do state^ = !state^
 
 	is_hovered := is_tree_hovered(app, root_id)
 
@@ -1755,6 +1927,9 @@ switch_toggle :: proc(
 	element_close(app)
 
 	// --- NEW: FIRE ANIMATION TWEENS ON TOGGLE ---
+	if switch_toggle_prev_state == nil {
+		switch_toggle_prev_state = make(map[Box_ID]bool)
+	}
 	if root_id not_in switch_toggle_prev_state do switch_toggle_prev_state[root_id] = state^
 	just_toggled := switch_toggle_prev_state[root_id] != state^
 	switch_toggle_prev_state[root_id] = state^
@@ -1778,7 +1953,7 @@ switch_toggle :: proc(
 		)
 	}
 
-	return ev_ctx.clicked_this_frame[root_id] or_else false
+	return (ev_ctx.clicked_this_frame[root_id] or_else false) && !is_disabled
 }
 
 // --- MULTI-SELECT ---
@@ -1811,6 +1986,14 @@ multi_select :: proc(
 	anim_ctx := app.anim
 	changed := false
 	root_id := ID(id) if id != "" else ID(loc, salt)
+	if len(selected_states) < len(options) {
+		fmt.printfln(
+			"MULTI-SELECT ERROR: %d options require at least %d selection states",
+			len(options),
+			len(options),
+		)
+		return false
+	}
 
 	selected_count := 0
 	for s in selected_states do if s do selected_count += 1
@@ -1872,7 +2055,7 @@ combobox :: proc(
 	changed := false
 	root_id := ID(id) if id != "" else ID(loc, salt)
 
-	input_salt := fmt.tprintf("%s_input", salt)
+	input_salt := fmt.tprintf("%d_input", root_id)
 	input_id := ID(loc, input_salt)
 
 	final_wrapper := merge_styles(DEFAULT_TEXT_INPUT_WRAPPER_STYLE, wrapper_style)
@@ -1929,8 +2112,9 @@ combobox :: proc(
 					clear(buffer)
 					for c in opt do append(buffer, u8(c))
 
-					ev_ctx.text_cursors[input_id] = len(buffer^)
-					ev_ctx.text_selection[input_id] = len(buffer^)
+					buffer_len := utf8_rune_count(string(buffer^[:]))
+					ev_ctx.text_cursors[input_id] = buffer_len
+					ev_ctx.text_selection[input_id] = buffer_len
 				}
 			}
 		}
@@ -1968,7 +2152,7 @@ progress_bar :: proc(
 	root_id := ID(id) if id != "" else ID(loc, salt)
 	fill_id := ID(root_id, "fill")
 
-	percent := clamp((value - min_val) / (max_val - min_val), 0.0, 1.0)
+	percent := max_val != min_val ? clamp((value - min_val) / (max_val - min_val), 0.0, 1.0) : 0.0
 
 	final_wrapper := merge_styles(DEFAULT_PROGRESS_WRAPPER_STYLE, wrapper_style)
 	element_open(app, Element{_box = {id = root_id}, style = final_wrapper}, loc)
@@ -2300,6 +2484,9 @@ accordion_begin :: proc(
 	element_close(app)
 
 	// --- NEW: FIRE ANIMATION TWEENS ON EXPAND ---
+	if accordion_prev_expanded == nil {
+		accordion_prev_expanded = make(map[Box_ID]bool)
+	}
 	if root_id not_in accordion_prev_expanded do accordion_prev_expanded[root_id] = is_expanded^
 	just_expanded := is_expanded^ && !accordion_prev_expanded[root_id]
 	accordion_prev_expanded[root_id] = is_expanded^
@@ -2393,6 +2580,25 @@ table :: proc(
 	ui_ctx := app.ui
 	ev_ctx := app.ev
 	root_id := ID(id) if id != "" else ID(loc, salt)
+	if len(col_widths) < len(headers) {
+		fmt.printfln(
+			"TABLE ERROR: %d headers require at least %d column widths",
+			len(headers),
+			len(headers),
+		)
+		return
+	}
+	for row, row_idx in rows {
+		if len(row) > len(col_widths) {
+			fmt.printfln(
+				"TABLE ERROR: row %d has %d cells but only %d column widths were provided",
+				row_idx,
+				len(row),
+				len(col_widths),
+			)
+			return
+		}
+	}
 	header_id := ID(root_id, "header")
 	body_id := ID(root_id, "body")
 
@@ -2525,9 +2731,11 @@ Page_Proc :: proc(app: ^App, app_state: rawptr)
 
 // The state needed to track transitions
 Router_State :: struct {
-	current_idx:      int,
-	target_idx:       int,
-	is_transitioning: bool,
+	current_idx:                int,
+	target_idx:                 int,
+	is_transitioning:           bool,
+	last_invalid_request:       int,
+	has_logged_invalid_request: bool,
 }
 
 // The Animated Router Component
@@ -2559,10 +2767,49 @@ router_view :: proc(
 	// MUST OPEN ELEMENT FIRST! (So the animation engine can find its ID)
 	element_open(app, Element{_box = {id = root_id}, style = final_wrapper}, loc)
 
+	valid_requested_idx := requested_idx
+	if len(pages) == 0 || requested_idx < 0 || requested_idx >= len(pages) {
+		if !router_state.has_logged_invalid_request ||
+		   router_state.last_invalid_request != requested_idx {
+			fmt.println(
+				fmt.tprintf(
+					"router_view: requested page index %d is invalid for %d pages",
+					requested_idx,
+					len(pages),
+				),
+			)
+			router_state.last_invalid_request = requested_idx
+			router_state.has_logged_invalid_request = true
+		}
+		valid_requested_idx = router_state.current_idx
+		if valid_requested_idx < 0 || valid_requested_idx >= len(pages) {
+			valid_requested_idx = 0
+		}
+	} else {
+		router_state.has_logged_invalid_request = false
+	}
+
+	if len(pages) == 0 {
+		router_state.current_idx = 0
+		router_state.target_idx = 0
+		router_state.is_transitioning = false
+		element_close(app)
+		return
+	}
+	if router_state.current_idx < 0 || router_state.current_idx >= len(pages) {
+		router_state.current_idx = valid_requested_idx
+		router_state.target_idx = valid_requested_idx
+		router_state.is_transitioning = false
+	}
+	if router_state.target_idx < 0 || router_state.target_idx >= len(pages) {
+		router_state.target_idx = valid_requested_idx
+		router_state.is_transitioning = false
+	}
+
 	// Trigger the "Out" animation
-	if requested_idx != router_state.target_idx && !router_state.is_transitioning {
+	if valid_requested_idx != router_state.target_idx && !router_state.is_transitioning {
 		router_state.is_transitioning = true
-		router_state.target_idx = requested_idx
+		router_state.target_idx = valid_requested_idx
 		to(
 			ui_ctx,
 			anim_ctx,
@@ -2588,9 +2835,7 @@ router_view :: proc(
 	}
 
 	// Execute the isolated page procedure
-	if router_state.current_idx >= 0 && router_state.current_idx < len(pages) {
-		pages[router_state.current_idx](app, app_state) // PASSED `app` DIRECTLY
-	}
+	pages[router_state.current_idx](app, app_state)
 
 	element_close(app)
 }
@@ -2599,13 +2844,13 @@ router_view :: proc(
 DEFAULT_CAROUSEL_WRAPPER :: Style {
 	direction   = .COLUMN,
 	align_items = .CENTER,
-	width       = Fit(true),
+	width       = Percent{100},
 	height      = Fit(true),
 	position    = .RELATIVE,
 }
 DEFAULT_CAROUSEL_VIEWPORT :: Style {
-	width         = Fixed{600},
-	height        = Fixed{400},
+	width         = Percent{100},
+	height        = ViewPercent{45},
 	overflow_x    = .HIDDEN,
 	overflow_y    = .HIDDEN,
 	border_radius = [4]f32{12, 12, 12, 12},
@@ -2632,24 +2877,28 @@ carousel_textures :: proc(
 
 	if len(images) == 0 do return
 
-	current_idx^ = current_idx^ % len(images)
-	if current_idx^ < 0 do current_idx^ += len(images)
-
 	root_id := ID(loc, salt)
-	@(static) last_tick: map[Box_ID]u32
+	if auto_play && component_carousel_last_tick == nil {
+		component_carousel_last_tick = make(map[Box_ID]u32)
+	}
 	if auto_play {
-		if root_id not_in last_tick do last_tick[root_id] = sdl.GetTicks()
+		if root_id not_in component_carousel_last_tick {
+			component_carousel_last_tick[root_id] = sdl.GetTicks()
+		}
 
 		if !is_tree_hovered(app, root_id) {
 			current_tick := sdl.GetTicks()
-			if current_tick - last_tick[root_id] > auto_play_interval {
+			if current_tick - component_carousel_last_tick[root_id] > auto_play_interval {
 				current_idx^ += 1
-				last_tick[root_id] = current_tick
+				component_carousel_last_tick[root_id] = current_tick
 			}
 		} else {
-			last_tick[root_id] = sdl.GetTicks()
+			component_carousel_last_tick[root_id] = sdl.GetTicks()
 		}
 	}
+	current_idx^ = current_idx^ % len(images)
+	if current_idx^ < 0 do current_idx^ += len(images)
+
 	track_id := ID(root_id, "track")
 	viewport_id := ID(root_id, "viewport")
 	arrows_id := ID(root_id, "arrows")
@@ -2663,8 +2912,8 @@ carousel_textures :: proc(
 	element_open(app, Element{_box = {id = viewport_id}, style = final_viewport})
 
 	// Use the prior layout measurement for responsive viewports after the first frame.
-	vp_width: f32 = 600.0
-	vp_height: f32 = 400.0
+	vp_width: f32 = max(f32(app.window_w)-48.0, 1.0)
+	vp_height: f32 = max(f32(app.window_h)*0.45, 180.0)
 	if w_union, ok := final_viewport.width.?; ok {
 		switch w in w_union {
 		case Fixed:
@@ -2681,7 +2930,11 @@ carousel_textures :: proc(
 		switch h in h_union {
 		case Fixed:
 			vp_height = h.value
-		case Percent, ViewPercent, Grow, Shrink, Fit:
+		case ViewPercent:
+			if previous, exists := ui_ctx.layout.prev_all_boxes[viewport_id]; exists {
+				vp_height = previous.computed_height
+			}
+		case Percent, Grow, Shrink, Fit:
 			if previous, exists := ui_ctx.layout.prev_all_boxes[viewport_id]; exists {
 				vp_height = previous.computed_height
 			}
@@ -2704,18 +2957,17 @@ carousel_textures :: proc(
 		},
 	)
 
-	@(static) map_init: bool
-	@(static) prev_idx: map[Box_ID]int
-	if !map_init {
-		prev_idx = make(map[Box_ID]int)
-		map_init = true
+	if component_carousel_prev_idx == nil {
+		component_carousel_prev_idx = make(map[Box_ID]int)
 	}
 
-	if track_id not_in prev_idx do prev_idx[track_id] = current_idx^
+	if track_id not_in component_carousel_prev_idx {
+		component_carousel_prev_idx[track_id] = current_idx^
+	}
 
-	if prev_idx[track_id] != current_idx^ {
-		old_x := -f32(prev_idx[track_id]) * vp_width
-		prev_idx[track_id] = current_idx^
+	if component_carousel_prev_idx[track_id] != current_idx^ {
+		old_x := -f32(component_carousel_prev_idx[track_id]) * vp_width
+		component_carousel_prev_idx[track_id] = current_idx^
 		from(ui_ctx, anim_ctx, track_id, {x = old_x, duration = 0.4, ease = ease_out_exp})
 	}
 
@@ -2733,14 +2985,16 @@ carousel_textures :: proc(
 	is_hovered := is_tree_hovered(app, root_id)
 	arrows_state := get_state(anim_ctx, arrows_id)
 
-	@(static) prev_hover: map[Box_ID]bool
-	if arrows_id not_in prev_hover {
-		prev_hover[arrows_id] = is_hovered
+	if component_carousel_prev_hover == nil {
+		component_carousel_prev_hover = make(map[Box_ID]bool)
+	}
+	if arrows_id not_in component_carousel_prev_hover {
+		component_carousel_prev_hover[arrows_id] = is_hovered
 		arrows_state.opacity = is_hovered ? 1.0 : 0.0
 	}
 
-	if prev_hover[arrows_id] != is_hovered {
-		prev_hover[arrows_id] = is_hovered
+	if component_carousel_prev_hover[arrows_id] != is_hovered {
+		component_carousel_prev_hover[arrows_id] = is_hovered
 		to(ui_ctx, anim_ctx, arrows_id, {opacity = is_hovered ? 1.0 : 0.0, duration = 0.2})
 	}
 
@@ -2776,12 +3030,12 @@ carousel_textures :: proc(
 
 		if image_button(app, left_arrow, user_style = final_arrow_style, salt = "prev") {
 			current_idx^ -= 1
-			if auto_play do last_tick[root_id] = sdl.GetTicks()
+			if auto_play do component_carousel_last_tick[root_id] = sdl.GetTicks()
 		}
 
 		if image_button(app, right_arrow, user_style = final_arrow_style, salt = "next") {
 			current_idx^ += 1
-			if auto_play do last_tick[root_id] = sdl.GetTicks()
+			if auto_play do component_carousel_last_tick[root_id] = sdl.GetTicks()
 		}
 
 		element_close(app) // Arrows
@@ -2827,10 +3081,14 @@ carousel_textures :: proc(
 			current_idx^ = i
 		}
 
-		@(static) prev_dot_active: map[Box_ID]bool
-		if dot_id not_in prev_dot_active do prev_dot_active[dot_id] = is_active
-		if prev_dot_active[dot_id] != is_active {
-			prev_dot_active[dot_id] = is_active
+		if component_carousel_prev_dot_active == nil {
+			component_carousel_prev_dot_active = make(map[Box_ID]bool)
+		}
+		if dot_id not_in component_carousel_prev_dot_active {
+			component_carousel_prev_dot_active[dot_id] = is_active
+		}
+		if component_carousel_prev_dot_active[dot_id] != is_active {
+			component_carousel_prev_dot_active[dot_id] = is_active
 			to(
 				ui_ctx,
 				anim_ctx,
@@ -2966,15 +3224,21 @@ color_picker :: proc(
 	swatch_id := ID(root_id, "swatch")
 
 	// Stateful HSV Tracking (Prevents losing Hue when Value is 0 / Black)
-	@(static) hsv_states: map[Box_ID][3]f32
-	if root_id not_in hsv_states do hsv_states[root_id] = rgb_to_hsv(color[0], color[1], color[2])
+	if component_color_hsv == nil do component_color_hsv = make(map[Box_ID][3]f32)
+	if root_id not_in component_color_hsv {
+		component_color_hsv[root_id] = rgb_to_hsv(color[0], color[1], color[2])
+	}
 
 	// Detect if color changed externally and sync our internal HSV map
-	curr_rgb := hsv_to_rgb(hsv_states[root_id][0], hsv_states[root_id][1], hsv_states[root_id][2])
+	curr_rgb := hsv_to_rgb(
+		component_color_hsv[root_id][0],
+		component_color_hsv[root_id][1],
+		component_color_hsv[root_id][2],
+	)
 	if math.abs(color[0] - curr_rgb[0]) > 0.01 ||
 	   math.abs(color[1] - curr_rgb[1]) > 0.01 ||
 	   math.abs(color[2] - curr_rgb[2]) > 0.01 {
-		hsv_states[root_id] = rgb_to_hsv(color[0], color[1], color[2])
+		component_color_hsv[root_id] = rgb_to_hsv(color[0], color[1], color[2])
 	}
 
 	final_wrapper := merge_styles(DEFAULT_COLOR_PICKER_WRAPPER, wrapper_style)
@@ -3009,9 +3273,9 @@ color_picker :: proc(
 			h, s, v, a: f32,
 		}
 		rs := new(Render_State, frame_allocator(ui_ctx.layout))
-		rs.h = hsv_states[root_id][0]
-		rs.s = hsv_states[root_id][1]
-		rs.v = hsv_states[root_id][2]
+		rs.h = component_color_hsv[root_id][0]
+		rs.s = component_color_hsv[root_id][1]
+		rs.v = component_color_hsv[root_id][2]
 		rs.a = color[3]
 
 		// --- SV 2D GRADIENT AREA ---
@@ -3021,14 +3285,12 @@ color_picker :: proc(
 
 		if ev_ctx.pressed_id == sv_id {
 			if prev, ok := ui_ctx.layout.prev_all_boxes[sv_id]; ok {
-				mx, my: i32
-				sdl.GetMouseState(&mx, &my)
-				lx := clamp(f32(mx) - prev.x, 0.0, prev.computed_width)
-				ly := clamp(f32(my) - prev.y, 0.0, prev.computed_height)
+				lx := clamp(ev_ctx.pointer_x - prev.x, 0.0, prev.computed_width)
+				ly := clamp(ev_ctx.pointer_y - prev.y, 0.0, prev.computed_height)
 
-				st := &hsv_states[root_id]
-				st[1] = lx / prev.computed_width
-				st[2] = 1.0 - (ly / prev.computed_height)
+				st := &component_color_hsv[root_id]
+				st[1] = prev.computed_width > 0 ? lx / prev.computed_width : 0.0
+				st[2] = prev.computed_height > 0 ? 1.0 - (ly / prev.computed_height) : 0.0
 
 				rgb := hsv_to_rgb(st[0], st[1], st[2])
 				color[0], color[1], color[2] = rgb[0], rgb[1], rgb[2]
@@ -3081,12 +3343,10 @@ color_picker :: proc(
 
 		if ev_ctx.pressed_id == hue_id {
 			if prev, ok := ui_ctx.layout.prev_all_boxes[hue_id]; ok {
-				mx, my: i32
-				sdl.GetMouseState(&mx, &my)
-				lx := clamp(f32(mx) - prev.x, 0.0, prev.computed_width)
+				lx := clamp(ev_ctx.pointer_x - prev.x, 0.0, prev.computed_width)
 
-				st := &hsv_states[root_id]
-				st[0] = (lx / prev.computed_width) * 360.0
+				st := &component_color_hsv[root_id]
+				st[0] = (prev.computed_width > 0 ? lx / prev.computed_width : 0.0) * 360.0
 
 				rgb := hsv_to_rgb(st[0], st[1], st[2])
 				color[0], color[1], color[2] = rgb[0], rgb[1], rgb[2]
@@ -3128,10 +3388,8 @@ color_picker :: proc(
 
 		if ev_ctx.pressed_id == alpha_id {
 			if prev, ok := ui_ctx.layout.prev_all_boxes[alpha_id]; ok {
-				mx, my: i32
-				sdl.GetMouseState(&mx, &my)
-				lx := clamp(f32(mx) - prev.x, 0.0, prev.computed_width)
-				color[3] = lx / prev.computed_width
+				lx := clamp(ev_ctx.pointer_x - prev.x, 0.0, prev.computed_width)
+				color[3] = prev.computed_width > 0 ? lx / prev.computed_width : 0.0
 				rs.a = color[3]
 				changed = true
 			}
@@ -3179,6 +3437,7 @@ color_picker :: proc(
 DEFAULT_DATE_PICKER_WRAPPER :: Style {
 	width         = Fixed{200},
 	height        = Fit(true),
+	max_width     = ViewPercent{90},
 	padding       = [4]f32{8, 12, 8, 12},
 	border_radius = [4]f32{6, 6, 6, 6},
 	border        = [4]f32{1, 1, 1, 1},
@@ -3228,10 +3487,12 @@ date_picker :: proc(
 	root_id := ID(loc, salt)
 
 	// Local view state to navigate months without altering the selected date
-	@(static) views: map[Box_ID][2]int
-	if root_id not_in views {
-		views[root_id] = {date^[0], date^[1]}
-		if views[root_id][0] == 0 do views[root_id] = {2026, 1}
+	if component_date_views == nil {
+		component_date_views = make(map[Box_ID][2]int)
+	}
+	if root_id not_in component_date_views {
+		component_date_views[root_id] = {date^[0], date^[1]}
+		if component_date_views[root_id][0] == 0 do component_date_views[root_id] = {2026, 1}
 	}
 
 	display_text := fmt.tprintf("%d-%02d-%02d", date^[0], date^[1], date^[2])
@@ -3240,7 +3501,7 @@ date_picker :: proc(
 	final_wrapper := merge_styles(DEFAULT_DATE_PICKER_WRAPPER, wrapper_style)
 	if button(app, display_text, user_style = final_wrapper, id = root_id) {
 		is_open^ = !is_open^
-		if is_open^ && date^[0] != 0 do views[root_id] = {date^[0], date^[1]}
+		if is_open^ && date^[0] != 0 do component_date_views[root_id] = {date^[0], date^[1]}
 	}
 
 	if popover_begin(
@@ -3253,7 +3514,7 @@ date_picker :: proc(
 		defer popover_end(app, true)
 
 		// Take a pointer to the map value to allow direct mutation
-		v := &views[root_id]
+		v := &component_date_views[root_id]
 
 		// Header
 		element_open(
@@ -3746,8 +4007,10 @@ _render_debug_node :: proc(
 	row_id := ID(box.id, "debug_row")
 	has_children := len(box.children) > 0
 
-	@(static) expanded_nodes: map[Box_ID]bool
-	if box.id not_in expanded_nodes do expanded_nodes[box.id] = false
+	if component_debug_expanded == nil {
+		component_debug_expanded = make(map[Box_ID]bool)
+	}
+	if box.id not_in component_debug_expanded do component_debug_expanded[box.id] = false
 
 	is_hovered := is_tree_hovered(app, row_id)
 	if is_hovered do hovered_target^ = box.id
@@ -3758,7 +4021,7 @@ _render_debug_node :: proc(
 		Event_Callbacks{focusable = true, activate_on_key = true, cursor = .HAND},
 	)
 	if ev_ctx.clicked_this_frame[row_id] or_else false {
-		expanded_nodes[box.id] = !expanded_nodes[box.id]
+		component_debug_expanded[box.id] = !component_debug_expanded[box.id]
 		clicked_target^ = box.id
 	}
 
@@ -3786,7 +4049,7 @@ _render_debug_node :: proc(
 		},
 	)
 
-	prefix := has_children ? (expanded_nodes[box.id] ? "v " : "> ") : "- "
+	prefix := has_children ? (component_debug_expanded[box.id] ? "v " : "> ") : "- "
 	t_color := has_children ? Color{0.9, 0.9, 0.9, 1} : Color{0.5, 0.7, 1.0, 1}
 
 	text(
@@ -3816,7 +4079,7 @@ _render_debug_node :: proc(
 
 	element_close(app)
 
-	if has_children && expanded_nodes[box.id] {
+	if has_children && component_debug_expanded[box.id] {
 		for child in box.children {
 			_render_debug_node(app, child, depth + 1, hovered_target, clicked_target, pinned_id)
 		}
@@ -4173,8 +4436,9 @@ calc_textarea_cursor_idx :: proc(
 				for i in start_idx ..< end_idx {
 					word_bytes := len(words[i])
 
-					for char_idx in 0 ..= word_bytes {
-						sub_str := words[i][:char_idx]
+					char_byte_idx := 0
+					for {
+						sub_str := words[i][:char_byte_idx]
 						w: i32 = 0
 						if len(sub_str) > 0 do ttf.SizeUTF8(font, fmt.ctprintf("%s", sub_str), &w, nil)
 
@@ -4182,8 +4446,13 @@ calc_textarea_cursor_idx :: proc(
 						dist := math.abs(char_x - target_x)
 						if dist < best_dist {
 							best_dist = dist
-							best_idx = byte_tracker + char_idx
+							best_idx = byte_tracker + char_byte_idx
 						}
+
+						if char_byte_idx >= word_bytes do break
+						_, rune_width := utf8.decode_rune(words[i][char_byte_idx:])
+						if rune_width <= 0 do break
+						char_byte_idx += rune_width
 					}
 
 					w: i32 = 0
@@ -4303,9 +4572,7 @@ textarea :: proc(
 		if prev_outer, ok := ui_ctx.layout.prev_all_boxes[root_id]; ok {
 			mx, my := ev_ctx.click_x, ev_ctx.click_y
 			if !was_clicked {
-				mouse_x, mouse_y: i32
-				sdl.GetMouseState(&mouse_x, &mouse_y)
-				mx, my = f32(mouse_x), f32(mouse_y)
+				mx, my = ev_ctx.pointer_x, ev_ctx.pointer_y
 			}
 
 			// Convert global mouse coordinates to local scrolled space
@@ -4347,8 +4614,8 @@ textarea :: proc(
 	if is_focused do final_wrapper.border_color = focused_border_color
 
 	if is_focused && buffer.anchor != buffer.gap_start {
-		final_text.selection_start = buffer.anchor
-		final_text.selection_end = buffer.gap_start
+		final_text.selection_start = utf8_rune_count(display_text[:buffer.anchor])
+		final_text.selection_end = utf8_rune_count(display_text[:buffer.gap_start])
 		final_text.selection_color = Color{0.2, 0.5, 0.9, 0.4}
 	}
 
