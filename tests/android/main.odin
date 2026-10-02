@@ -18,7 +18,12 @@ main :: proc() {
 
 	for !app.quit {
 		ui.app_begin_frame(app)
-		ui.text(app, "Odin UI Android package smoke test")
+		ui.text(
+			app,
+			"Android permissions",
+			user_style = {font_size = 28, text_color = ui.hex_rgb(0xF4F1E9)},
+		)
+		ui.text(app, "This screen is packaged with permissions from the project permissions file.")
 		ui.app_end_frame(app)
 	}
 }

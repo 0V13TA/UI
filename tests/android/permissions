@@ -1,0 +1,4 @@
+# Permissions used by the Android smoke-test app.
+INTERNET
+ACCESS_NETWORK_STATE
+VIBRATE

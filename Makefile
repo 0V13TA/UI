@@ -128,7 +128,7 @@ android-native: sdl2-sources
 android-apk: android-native
 	test -x "$(ANDROID_JAVA_HOME)/bin/java" || { echo "Set ANDROID_JAVA_HOME to an installed JDK 17 or 21; Gradle 8.7 cannot run with Java 27." >&2; exit 1; }
 	"$(ANDROID_JAVA_HOME)/bin/java" -version 2>&1 | grep -Eq 'version "(17|21)([."]|$$)' || { echo "ANDROID_JAVA_HOME must point to JDK 17 or 21; Gradle 8.7 cannot run with Java 27." >&2; exit 1; }
-	JAVA_HOME="$(ANDROID_JAVA_HOME)" PATH="$(ANDROID_JAVA_HOME)/bin:$$PATH" ANDROID_HOME="$(ANDROID_SDK_ROOT)" ANDROID_SDK_ROOT="$(ANDROID_SDK_ROOT)" SDL_ANDROID_HOME="$(UI_DIR)/SDL/android-project" SDL_ANDROID_APP="$(UI_DIR)/android" SDL_ANDROID_FFMPEG="$(ANDROID_FFMPEG)" SDL_ANDROID_NDK="$(ANDROID_NDK)" "$(UI_DIR)/SDL/android-project/gradlew" -p "$(UI_DIR)/android" assembleDebug -PuiAssetsDir="$(APP_ASSETS_DIR)" -PuiAssetDir="$(APP_ASSET_DIR)"
+	JAVA_HOME="$(ANDROID_JAVA_HOME)" PATH="$(ANDROID_JAVA_HOME)/bin:$$PATH" ANDROID_HOME="$(ANDROID_SDK_ROOT)" ANDROID_SDK_ROOT="$(ANDROID_SDK_ROOT)" SDL_ANDROID_HOME="$(UI_DIR)/SDL/android-project" SDL_ANDROID_APP="$(UI_DIR)/android" SDL_ANDROID_FFMPEG="$(ANDROID_FFMPEG)" SDL_ANDROID_NDK="$(ANDROID_NDK)" "$(UI_DIR)/SDL/android-project/gradlew" -p "$(UI_DIR)/android" assembleDebug -PuiAssetsDir="$(APP_ASSETS_DIR)" -PuiAssetDir="$(APP_ASSET_DIR)" -PuiProjectRoot="$(APP_ROOT)"
 
 android-install: android-apk
 	adb install -r "$(UI_DIR)/android/app/build/outputs/apk/debug/app-debug.apk"

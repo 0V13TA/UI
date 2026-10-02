@@ -44,6 +44,29 @@ same value to the application and build:
 make -C UI android-apk APP_ROOT=.. APP_ASSETS_DIR=../resources APP_ASSET_DIR=resources
 ```
 
+Declare additional Android permissions in a UTF-8 `permissions` file at the
+root of `APP_ROOT`, with one permission per line. Blank lines and lines
+beginning with `#` are ignored. Short platform permission names are expanded
+to `android.permission.*`; fully qualified custom permission names are kept as
+written. Duplicate or malformed entries stop the build with the file and line
+number in the error.
+
+```text
+# Required for network access
+INTERNET
+ACCESS_NETWORK_STATE
+VIBRATE
+```
+
+The Gradle build regenerates the manifest from the SDL template and this file,
+so changes are picked up on the next Android build. No generated manifest
+editing is needed.
+
+The included smoke app has an example configuration at
+`tests/android/permissions`. To begin with the Android SDK 34 permission list,
+copy `tests/android/permissions.template` to your project's `permissions` file
+and uncomment only the permissions the application needs.
+
 Application assets are staged under the selected packaged path. Images, fonts,
 and videos load through SDL `RWops`, so Android's asset manager is used
 internally rather than expecting files in the library or application working

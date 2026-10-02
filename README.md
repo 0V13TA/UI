@@ -111,6 +111,23 @@ make -C UI android-apk APP_ROOT=.. APP_ASSETS_DIR=../assets
 The consumer's Android entry source must export `odin_app_start` for SDL's
 native activity to invoke its `main` procedure. `APP_ASSET_DIR` defaults to
 `assets`; override it when the app uses a different virtual asset path.
+Declare Android permissions in a `permissions` file in `APP_ROOT`, one name per
+line; blank lines and `#` comments are ignored. For example:
+
+```text
+INTERNET
+ACCESS_NETWORK_STATE
+```
+
+The included Android smoke app declares its required permissions in
+[`tests/android/permissions`](tests/android/permissions). To start a project
+configuration from the available Android SDK 34 permissions, copy
+[`tests/android/permissions.template`](tests/android/permissions.template) to
+your project's `permissions` file and uncomment only the permissions your app
+needs.
+
+The Android build validates the entries and regenerates the manifest whenever
+the file changes. See [android/README.md](android/README.md) for details.
 Android builds require the Android SDK/NDK and a supported JDK; see
 [android/README.md](android/README.md).
 

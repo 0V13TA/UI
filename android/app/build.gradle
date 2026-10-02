@@ -5,6 +5,11 @@ plugins {
 def appAssetsDir = providers.gradleProperty("uiAssetsDir")
     .orElse(rootProject.file("../../assets").absolutePath)
 def appAssetDir = providers.gradleProperty("uiAssetDir").orElse("assets")
+def appProjectRoot = providers.gradleProperty("uiProjectRoot")
+    .orElse(rootProject.file("../tests/android").absolutePath)
+def androidManifestTemplate = file("../../SDL/android-project/app/src/main/AndroidManifest.xml")
+def appPermissionsFile = file("${appProjectRoot.get()}/permissions")
+def generatedManifest = layout.buildDirectory.file("generated/projectManifest/AndroidManifest.xml")
 
 def syncProjectAssets = tasks.register("syncProjectAssets", Sync) {
     def sourceAssets = file(appAssetsDir.get())
@@ -14,8 +19,82 @@ def syncProjectAssets = tasks.register("syncProjectAssets", Sync) {
     into(layout.buildDirectory.dir("generated/projectAssets/${appAssetDir.get()}"))
 }
 
+def generateProjectManifest = tasks.register("generateProjectManifest") {
+    inputs.file(androidManifestTemplate)
+    inputs.files(appPermissionsFile)
+    outputs.file(generatedManifest)
+
+    doLast {
+        def template = androidManifestTemplate.getText("UTF-8")
+        def permissions = []
+        def permissionLines = [:]
+
+        if (appPermissionsFile.exists()) {
+            appPermissionsFile.eachLine("UTF-8") { line, lineNumber ->
+                def entry = line.trim()
+                if (!entry || entry.startsWith("#")) {
+                    return
+                }
+
+                if (!(entry ==~ /[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*/)) {
+                    throw new GradleException(
+                        "Invalid Android permission in ${appPermissionsFile}:${lineNumber}: " +
+                        "'${entry}'. Use one permission name per line, such as INTERNET or " +
+                        "com.example.permission.CUSTOM."
+                    )
+                }
+
+                def permission = (entry.contains(".") ? entry : "android.permission.${entry}").toString()
+                if (permissionLines.containsKey(permission)) {
+                    throw new GradleException(
+                        "Duplicate Android permission '${entry}' in ${appPermissionsFile}:" +
+                        "${lineNumber}; it was already declared on line ${permissionLines[permission]}."
+                    )
+                }
+
+                permissionLines[permission] = lineNumber
+                permissions << permission
+            }
+        }
+
+        def declaredPermissions = [] as Set
+        def permissionTag = ~/<uses-permission[^>]*android:name="([^"]+)"[^>]*>/
+        def permissionMatcher = permissionTag.matcher(template)
+        while (permissionMatcher.find()) {
+            declaredPermissions << permissionMatcher.group(1)
+        }
+        def additions = permissions.findAll { !declaredPermissions.contains(it) }
+            .collect { "    <uses-permission android:name=\"${it}\" />" }
+            .join("\n")
+
+        def manifestTag = ~/<manifest\b[^>]*>/
+        def matcher = manifestTag.matcher(template)
+        if (!matcher.find()) {
+            throw new GradleException(
+                "Expected exactly one <manifest> root element in ${androidManifestTemplate}."
+            )
+        }
+        def insertionPoint = matcher.start() + matcher.group().length()
+        if (matcher.find()) {
+            throw new GradleException(
+                "Expected exactly one <manifest> root element in ${androidManifestTemplate}."
+            )
+        }
+
+        if (additions) {
+            template = template.substring(0, insertionPoint) + "\n" + additions +
+                template.substring(insertionPoint)
+        }
+
+        def output = generatedManifest.get().asFile
+        output.parentFile.mkdirs()
+        output.setText(template, "UTF-8")
+    }
+}
+
 tasks.named("preBuild").configure {
     dependsOn(syncProjectAssets)
+    dependsOn(generateProjectManifest)
 }
 
 android {
@@ -36,7 +115,7 @@ android {
 
     sourceSets {
         main {
-            manifest.srcFile "../../SDL/android-project/app/src/main/AndroidManifest.xml"
+            manifest.srcFile generatedManifest
             java.srcDirs = ["../../SDL/android-project/app/src/main/java"]
             res.srcDirs = ["../../SDL/android-project/app/src/main/res"]
             assets.srcDirs = [layout.buildDirectory.dir("generated/projectAssets")]
